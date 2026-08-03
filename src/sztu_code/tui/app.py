@@ -529,6 +529,7 @@ class RunBlock(Widget):
         self._run_id = run_id
         self._goal = goal
 
+    # 生成 run 块标题行
     def compose(self) -> ComposeResult:
         yield Static(
             f"[dim]run[/dim]  [cyan]{self._run_id[:8]}[/cyan]  "
@@ -576,11 +577,10 @@ class TrustScreen(Screen[str]):
             "",
             "[bold #F1F3F5]Quick safety check:[/bold #F1F3F5] "
             "Is this a project you created or one you trust?",
-            "[dim](Like your own code, a well-known open source project, or work from your team).",
+            "[dim](Like your own code, a well-known open source project, or work from your team).[/dim]",
             "[dim]If not, take a moment to review what's in this folder first.[/dim]",
             "",
-            "[#F1F3F5]SztuCode'll be able to [bold]read, edit, and execute[/bold] "
-            "files here.[/#F1F3F5]",
+            "[#F1F3F5]SztuCode will be able to [bold]read, edit, and execute[/bold] "
             "",
             "[dim]Security guide — review the folder contents before trusting[/dim]",
             "",
