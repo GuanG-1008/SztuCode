@@ -1,77 +1,89 @@
 # SztuCode
 
-> 一个本地运行、事件驱动的 AI 编程 Agent。它不只封装模型 API，而是实现了从会话、工具调用、权限审批到上下文管理和可观测性的完整运行时。
+> 本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-2F855A)](LICENSE)
 
-SztuCode 面向本地代码仓库工作：用户从 TUI、桌面工作台或 CLI 发起任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限，并通过 JSON-RPC 事件流持续反馈执行状态。
+SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 CLI 提交任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。
 
-项目适合用于：
-
-- 学习 AI 编程 Agent 的完整工程链路；
-- 构建可审计、可扩展的本地 Agent 运行时；
-- 研究工具权限、上下文压缩、Skills、Subagents 与 MCP 集成；
-- 在真实仓库中体验多轮对话、文件修改和 Git 变更审阅。
+它既是一个持续完善的本地 AI 编程工具，也是一个用于学习 Agent 工程、软件协作与可信 AI Coding 的开放项目。
 
 > [!IMPORTANT]
-> SztuCode 目前处于快速开发阶段，接口和桌面界面仍可能调整。请勿在不了解权限模式的情况下，让 Agent 操作包含重要未提交内容的仓库。
+> 项目目前处于 `0.x` 快速开发阶段，接口和界面仍可能变化。请在独立分支和可恢复的工作区中使用 Agent，并谨慎启用 `auto` 权限模式。
+
+> [!NOTE]
+> SztuCode 由社区成员发起和维护，不代表任何学校、学院或社团的官方立场。未经授权，项目不使用相关组织的官方名称、标识或背书。
+
+## 为什么是 SztuCode
+
+项目不止封装模型 API，而是实现 AI Coding Agent 的完整工程链路：
+
+```text
+用户目标
+  → 项目与会话上下文
+  → Agent 规划和模型推理
+  → 工具调用与权限审批
+  → 文件修改、测试和结果回填
+  → Diff 审阅、Trace 与会话恢复
+```
+
+当前适合用于：
+
+- 学习 Agent Loop、工具调用、上下文治理和多智能体协作；
+- 构建本地优先、可观察、可扩展的 Coding Agent；
+- 研究项目级代码理解、权限安全、RAG 与执行轨迹评测；
+- 通过 Issue、Pull Request、Review 和 Release 参与真实开源协作。
 
 ## 核心能力
 
-| 能力 | 说明 |
+| 能力 | 当前实现 |
 | --- | --- |
-| Agent Loop | 基于 ReAct 的多步推理、工具调用、结果回填与终止控制 |
-| 多种客户端 | Textual TUI、Tauri + Vue 桌面工作台，以及用于调试和自动化的 CLI |
-| 双协议模型接入 | 支持 Anthropic API 与 OpenAI-compatible API，可连接兼容服务商 |
-| 工作区工具 | 文件读取、目录浏览、搜索、写入、精确编辑与受控 Shell 执行 |
-| 权限系统 | 标准审批、计划模式、允许编辑和自动执行四种运行模式 |
-| 会话与记忆 | 持久化会话、分层记忆、历史恢复和跨轮上下文 |
-| 上下文治理 | token 水位统计、工具结果截断、自动或手动压缩 |
+| Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制 |
+| 多种客户端 | Textual TUI、Tauri 2 + Vue 3 桌面工作台，以及调试用 CLI |
+| 模型接入 | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商 |
+| 工作区工具 | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行 |
+| 权限系统 | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式 |
+| 会话与记忆 | 持久化会话、分层上下文、Notes、历史恢复和上下文压缩 |
 | 扩展机制 | Skills、Subagents 与 MCP 外部工具统一接入 |
-| 可观测性 | IPC、EventBus、LLM 三层 trace，支持筛选、跟踪和回放 |
-| 变更审阅 | 桌面端展示任务产生的文件变化，支持 Diff 审阅、接受与回退 |
+| 可观测性 | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放 |
+| 变更审阅 | 桌面端展示文件变化和 Diff，支持接受、暂存与回退 |
+| Agent 评测 | 轨迹分析和 SWE-bench 适配器，持续建设自动化评测基线 |
+
+项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和完整多智能体工作流仍在路线图中，不将设计目标描述为已完成能力。
 
 ## 系统架构
 
-SztuCode 使用 daemon 与客户端分离的双进程架构。Agent 任务不会因为某个客户端退出而丢失，多个客户端也可以共享同一套会话和事件状态。
+SztuCode 使用 daemon 与客户端分离的架构。长任务不依赖某个界面窗口的生命周期，不同客户端共享一致的会话、权限和执行状态。
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Clients                                                      │
-│  Tauri Desktop          Textual TUI          CLI             │
-└───────────────┬──────────────────┬───────────────┬───────────┘
-                └──────────────────┼───────────────┘
-                                   │ TCP / NDJSON
-                                   │ JSON-RPC 2.0
-┌──────────────────────────────────▼───────────────────────────┐
-│ sztu-code daemon                                             │
-│                                                              │
-│ Session → Agent Runner → Agent Loop → LLM Provider           │
-│                         │                                    │
-│                         ├─ Tool Registry → Permission Manager│
-│                         ├─ Skills / Subagents / MCP           │
-│                         └─ Memory / Compaction                │
-│                                                              │
-│ EventBus → IPC events → clients                              │
-│ Trace    → IPC / Event / LLM records                         │
-└──────────────────────────────────────────────────────────────┘
+Tauri Desktop ─┐
+Textual TUI ───┼─ TCP / NDJSON / JSON-RPC 2.0 ─ sztu-code daemon
+CLI ───────────┘                                  │
+                                                  ├─ Workspace / Session
+                                                  ├─ Agent Runner / Loop
+                                                  ├─ LLM Provider
+                                                  ├─ Tools / Permissions
+                                                  ├─ Skills / Subagents / MCP
+                                                  ├─ Memory / Compaction
+                                                  └─ EventBus / Trace
 ```
 
-默认监听地址为 `127.0.0.1:7437`。所有 IPC 消息都使用 Pydantic v2 模型定义，协议详情见 [Wire Protocol](docs/reference/wire-protocol.md)。
+默认监听 `127.0.0.1:7437`。IPC 命令和事件使用 Pydantic v2 模型定义，详情见 [架构说明](docs/reference/architecture.md)和自动生成的 [Wire Protocol](docs/reference/wire-protocol.md)。架构取舍记录在 [ADR](docs/adr/README.md) 中。
 
 ## 快速开始
 
 ### 环境要求
 
-- Python `3.12.x`
-- [uv](https://docs.astral.sh/uv/)
-- 一个 Anthropic 或 OpenAI-compatible API 凭据
-- 可选：Node.js 20+ 与 Rust，用于开发桌面工作台
+- Git；
+- Python `3.12.x`；
+- [uv](https://docs.astral.sh/uv/)；
+- Anthropic 或 OpenAI-compatible API 凭据；
+- 可选：Node.js 20+、Rust 和 Tauri 平台依赖，用于桌面端开发。
 
-### 1. 安装依赖
+### 安装
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
@@ -79,35 +91,36 @@ cd SztuCode
 uv sync
 ```
 
-### 2. 配置模型
-
-复制环境变量模板：
+复制配置模板：
 
 ```bash
 cp .env.example .env
 ```
 
-Anthropic 示例：
+Windows PowerShell：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+在 `.env` 中选择 Provider，并填写服务商实际提供的模型 ID 和凭据：
 
 ```dotenv
+# Anthropic
 SZTU_LLM_PROVIDER=anthropic
 SZTU_LLM_DEFAULT_MODEL=<your-provider-model-id>
 ANTHROPIC_API_KEY=<your-api-key>
-# ANTHROPIC_BASE_URL=https://api.anthropic.com
+
+# 或 OpenAI-compatible
+# SZTU_LLM_PROVIDER=openai
+# SZTU_LLM_DEFAULT_MODEL=<your-provider-model-id>
+# OPENAI_API_KEY=<your-api-key>
+# OPENAI_BASE_URL=https://api.example.com
 ```
 
-OpenAI-compatible 示例：
+不要提交 `.env`。完整字段和优先级见[配置参考](docs/getting-started/configuration.md)。
 
-```dotenv
-SZTU_LLM_PROVIDER=openai
-SZTU_LLM_DEFAULT_MODEL=<your-provider-model-id>
-OPENAI_API_KEY=<your-api-key>
-OPENAI_BASE_URL=https://api.example.com
-```
-
-不要提交 `.env`。SztuCode 不会替你选择默认模型，`SZTU_LLM_DEFAULT_MODEL` 必须使用服务商实际提供的模型 ID。
-
-### 3. 启动 TUI
+### 启动 TUI
 
 推荐直接在目标项目目录启动：
 
@@ -115,15 +128,15 @@ OPENAI_BASE_URL=https://api.example.com
 uv run sztucode /path/to/your/project
 ```
 
-`sztucode` 会在需要时自动拉起 daemon。首次打开目录时需要确认信任；也可以显式选择：
+首次打开目录时需要确认信任。常用选项：
 
 ```bash
-uv run sztucode . --trust       # 信任当前目录
-uv run sztucode . --read-only   # 以只读模式打开
+uv run sztucode . --trust
+uv run sztucode . --read-only
 uv run sztucode . --replay RUN_ID
 ```
 
-如果希望分别管理进程：
+也可以分别启动 daemon 和 TUI：
 
 ```bash
 # 终端 1
@@ -133,33 +146,23 @@ uv run sztu-code
 uv run sztu-tui
 ```
 
-### 4. 使用 CLI
-
-CLI 主要用于连通性检查、脚本调用和调试：
+CLI 主要用于连通性检查和调试：
 
 ```bash
 uv run sztu ping
 uv run sztu run --goal "分析当前项目并修复测试失败"
 uv run sztu chat
-uv run sztu core status
 uv run sztu trace --follow
 ```
 
-查看所有命令：
-
-```bash
-uv run sztu --help
-uv run sztucode --help
-```
+更完整的安装说明见[安装与启动](docs/getting-started/installation.md)。
 
 ## 桌面工作台
 
-`desktop/` 是基于 Tauri 2 + Vue 3 的图形客户端，提供项目与会话管理、实时执行时间线、权限审批、文件浏览、代码预览和 Git 变更审阅。
-
-桌面端目前需要单独启动 Python daemon：
+`desktop/` 是基于 Tauri 2、Vue 3 和 TypeScript 的图形客户端，提供项目与会话管理、执行时间线、权限审批、文件浏览、代码预览和 Git 变更审阅。
 
 ```bash
-# 终端 1：项目根目录
+# 终端 1：仓库根目录
 uv run sztu-code
 
 # 终端 2
@@ -168,7 +171,7 @@ npm install
 npm run tauri dev
 ```
 
-桌面端构建与验证：
+桌面端验证：
 
 ```bash
 cd desktop
@@ -179,80 +182,7 @@ cd src-tauri
 cargo check
 ```
 
-## 配置
-
-配置按以下优先级合并，后者覆盖前者：
-
-```text
-内置默认值
-  → ~/.sztu/config.toml
-  → .sztu/config.toml
-  → ~/.sztu/client-settings.json
-  → .env
-  → 系统环境变量
-```
-
-如果设置 `SZTU_CONFIG`，则使用指定 TOML 文件替代默认的两个 TOML 路径。桌面设置文件用于保存 Provider、模型、端点、凭据和权限模式，请注意它是本机明文配置。
-
-常用环境变量：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `SZTU_HOST` | `127.0.0.1` | daemon 监听地址 |
-| `SZTU_PORT` | `7437` | daemon 监听端口 |
-| `SZTU_LOG_LEVEL` | `INFO` | 日志级别 |
-| `SZTU_LOG_FILE` | `~/.sztu/logs/core.log` | daemon 日志路径 |
-| `SZTU_LOG_FORMAT` | `text` | `text` 或 `json` |
-| `SZTU_LLM_PROVIDER` | `anthropic` | `anthropic` 或 `openai` |
-| `SZTU_LLM_DEFAULT_MODEL` | 无 | 服务商模型 ID，必须配置 |
-| `SZTU_LLM_CONTEXT_WINDOW` | 自动 | 显式指定上下文窗口大小 |
-| `SZTU_MAX_STEPS` | `20` | 单次 Agent 运行最大步数 |
-| `SZTU_PERMISSION_MODE` | `normal` | `normal`、`plan`、`accept_edits` 或 `auto` |
-| `SZTU_COMPACT_THRESHOLD` | `0` | 自动压缩阈值；`0` 表示关闭 |
-| `SZTU_TRACE_ENABLED` | `true` | 是否记录系统 trace |
-| `SZTU_TRACE_FILE` | `~/.sztu/traces/daemon.jsonl` | trace 文件路径 |
-
-完整模板见 [.env.example](.env.example)，详细说明见 [配置参考](docs/getting-started/configuration.md)。
-
-TOML 示例：
-
-```toml
-[core]
-host = "127.0.0.1"
-port = 7437
-
-[logging]
-level = "INFO"
-file = "~/.sztu/logs/core.log"
-format = "text"
-
-[agent]
-max_steps = 20
-
-[llm]
-provider = "anthropic"
-default_model = "<your-provider-model-id>"
-
-[permission]
-mode = "normal"
-timeout_s = 60
-
-[compaction]
-auto_threshold = 0.85
-tool_result_limit = 8000
-tool_result_keep = 4000
-```
-
-## 权限模式
-
-| 模式 | 行为 |
-| --- | --- |
-| `normal` | 按工具风险和持久化策略请求审批 |
-| `plan` | 面向分析与规划，限制产生修改的操作 |
-| `accept_edits` | 自动接受受控文件编辑，其他高风险操作仍需审批 |
-| `auto` | 尽可能自动执行；只应在可信且可恢复的工作区使用 |
-
-无论使用哪种模式，都建议先提交或备份重要修改，并在独立分支上运行 Agent。
+平台依赖和已知限制见 [Desktop README](desktop/README.md) 与[开发环境](docs/development/development.md)。
 
 ## 项目结构
 
@@ -261,106 +191,96 @@ SztuCode/
 ├─ src/sztu_code/
 │  ├─ core/          # daemon、Agent Loop、协议、工具、权限与扩展系统
 │  ├─ tui/           # Textual 终端界面
-│  ├─ cli/           # 命令行客户端
-│  └─ desktop/       # 兼容桌面入口
+│  └─ cli/           # 命令行客户端
 ├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
 ├─ tests/            # 单元测试与集成测试
-├─ eval/             # 轨迹分析与 SWE-bench 评估工具
-├─ scripts/          # 协议文档等工程脚本
-├─ docs/             # 使用、贡献、架构、运维与参考文档
-└─ scripts/          # 协议生成等工程脚本
+├─ eval/             # 轨迹分析、报告和 SWE-bench 适配
+├─ scripts/          # 协议生成等工程脚本
+└─ docs/             # 使用、开发、架构、运维、评测和历史文档
 ```
 
-核心模块：
-
-| 路径 | 职责 |
-| --- | --- |
-| `core/bus/` | JSON-RPC envelope、命令和事件模型 |
-| `core/transport/` | TCP NDJSON 服务端、客户端和事件广播 |
-| `core/loop.py` | Agent 主循环与工具调用编排 |
-| `core/llm/` | Anthropic / OpenAI Provider 抽象 |
-| `core/tools/` | 工具注册、参数校验、调用与错误分类 |
-| `core/permissions/` | 权限策略、审批状态和拒绝追踪 |
-| `core/session/` | 会话模型、存储与恢复 |
-| `core/compact/` | 上下文预算和压缩 |
-| `core/skills/` | Skills 发现与加载 |
-| `core/subagent/` | 子 Agent 注册与执行 |
-| `core/mcp/` | MCP 客户端、服务端与工具适配 |
-| `core/trace/` | IPC、事件和 LLM 调用链追踪 |
+完整模块边界和运行链路见[架构说明](docs/reference/architecture.md)。
 
 ## 开发与验证
 
-安装开发依赖后运行：
+Python 基础检查：
 
 ```bash
-uv sync
-
 uv run ruff check src tests scripts
 uv run mypy src
 uv run pytest tests/unit -v
 uv run pytest tests/integration -v
-uv run pytest tests/ -v
-```
-
-协议模型发生变化时，必须重新生成并检查文档：
-
-```bash
-uv run python scripts/gen_protocol_doc.py
 uv run python scripts/gen_protocol_doc.py --check
 ```
 
-也可以使用 Makefile 中的组合命令：
+修改协议模型时，先运行 `uv run python scripts/gen_protocol_doc.py` 更新生成文档。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
 
-```bash
-make lint
-make test
-make integration-test
-make docs
-make verify-s0
-```
+## 路线图
 
-## 扩展 SztuCode
+项目按可验证能力逐步推进：
 
-- **新增协议命令或事件**：在 `core/bus/commands.py` 或 `core/bus/events.py` 添加模型，扩展联合类型，并重新生成 `docs/reference/wire-protocol.md`。
-- **新增内置工具**：实现 `core/tools/` 的工具接口，声明参数模型和权限等级，再注册到 Tool Registry。
-- **新增 Skill**：提供包含 front matter 的 `SKILL.md`，由 Skill Loader 自动发现并注入运行上下文。
-- **接入 MCP**：在 TOML 的 `[[mcp.servers]]` 中配置 `stdio` 或 `tcp` 服务。
-- **新增模型后端**：实现 `core/llm/` 的 Provider 接口，保持上层消息和工具调用语义一致。
+| 阶段 | 目标 |
+| --- | --- |
+| Contributor Ready | 新成员能理解项目、运行检查并提交第一个聚焦 PR |
+| v0.1 | 稳定本地任务闭环、自动化评测基线和更可靠的权限边界 |
+| v0.2 | 项目级语义索引、分层上下文、统一 LSP 和多语言评测 |
+| v0.3 | 领域 RAG、安全扫描闭环和角色化多智能体协作 |
+| v1.0 | 稳定升级路径、发行流程、安全响应和兼容性政策 |
 
-相关文档：
+详细版本门槛、研究轨道和明确非目标见[项目路线图](docs/ROADMAP.md)。当前研究与工程任务可在 [GitHub Issues](https://github.com/rojim666/SztuCode/issues) 查看。
 
-- [文档中心](docs/README.md)
-- [贡献指南](docs/CONTRIBUTING.md)
-- [架构说明](docs/reference/architecture.md)
-- [IPC 协议](docs/reference/wire-protocol.md)
-- [测试指南](docs/development/testing.md)
-- [评估指南](docs/guides/evaluation.md)
-- [运维手册](docs/operations/runbook.md)
+## 参与贡献
 
-## 安全说明
+欢迎学生、开发者和研究者通过代码、测试、文档、设计、评测和问题分析参与。新贡献者可以从 [`good first issue`](https://github.com/rojim666/SztuCode/labels/good%20first%20issue) 开始，需要社区协作的任务会标注 [`help wanted`](https://github.com/rojim666/SztuCode/labels/help%20wanted)。
 
-- Agent 可以读取、修改和执行工作区中的内容，请仅信任你了解的目录。
-- API Key 应保存在 `.env`、系统环境变量或本机客户端设置中，不要提交到 Git。
-- `auto` 模式会减少交互式确认，应配合 Git 分支、备份和最小权限环境使用。
-- Trace 可能包含提示词、模型响应和工具结果；共享日志前请先检查敏感信息。
-
-## 贡献
-
-欢迎通过 Issue 和 Pull Request 提交问题、设计建议和实现改进。提交代码前请确保：
-
-1. 变更范围清晰，并包含与风险相匹配的测试；
-2. `ruff`、`mypy` 和相关 `pytest` 用例通过；
-3. 协议模型变化已同步更新 `docs/reference/wire-protocol.md`；
-4. 不提交 `.env`、API Key、运行日志和本地评估产物。
-
-详细流程与项目治理：
+开始前请阅读：
 
 - [贡献指南](CONTRIBUTING.md)
 - [社区行为准则](CODE_OF_CONDUCT.md)
-- [项目路线图](docs/ROADMAP.md)
 - [安全政策](SECURITY.md)
 - [文档中心](docs/README.md)
 
+安全漏洞、权限绕过和凭据泄漏请使用 [Private Vulnerability Reporting](https://github.com/rojim666/SztuCode/security/advisories/new)，不要创建公开 Issue。
+
+## Contributors
+
+感谢所有参与代码、测试、文档和工程建设的贡献者。以下名单依据仓库可验证的 Git 历史整理，本地同邮箱别名已合并；完整记录以 [GitHub Contributors](https://github.com/rojim666/SztuCode/graphs/contributors) 为准。
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/rojim666">
+        <img src="https://github.com/rojim666.png?size=100" width="80" alt="rojim666" /><br />
+        <sub><b>rojim666</b></sub>
+      </a><br />
+      <sub>发起人与维护者</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/charon2121">
+        <img src="https://github.com/charon2121.png?size=100" width="80" alt="charon2121" /><br />
+        <sub><b>charon2121</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/szzk">
+        <img src="https://github.com/szzk.png?size=100" width="80" alt="szzk" /><br />
+        <sub><b>szzk</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/SztuCode-Contributor">
+        <img src="https://github.com/SztuCode-Contributor.png?size=100" width="80" alt="SztuCode-Contributor" /><br />
+        <sub><b>SztuCode-Contributor</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+  </tr>
+</table>
+
+贡献以公开 Issue、Commit、Pull Request、Review 和 Release 为准。参与项目不自动等同于核心成员身份；持续贡献者可以逐步承担模块 Review 和维护职责。
+
 ## License
 
-本项目使用 [MIT License](LICENSE)。
+SztuCode 使用 [MIT License](LICENSE)。
