@@ -1,0 +1,11 @@
+# Default ownership
+* @rojim666
+
+# Security- and contract-sensitive areas
+/src/sztu_code/core/permissions/ @rojim666
+/src/sztu_code/core/tools/ @rojim666
+/src/sztu_code/core/bus/ @rojim666
+/src/sztu_code/core/transport/ @rojim666
+/scripts/gen_protocol_doc.py @rojim666
+/docs/SECURITY.md @rojim666
+/SECURITY.md @rojim666

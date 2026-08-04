@@ -19,3 +19,6 @@ uv.lock
 workspace/
 !src/sztu_code/core/workspace/
 !src/sztu_code/core/workspace/*.py
+
+# SWE-bench 会在此克隆第三方仓库，仅提交评测结果，不提交临时工作区
+eval/reports/swebench-workspace/

@@ -124,24 +124,20 @@ def clone_repo(instance: SWEbenchInstance, workspace: Path) -> Path:
 
     if repo_dir.exists():
         shutil.rmtree(repo_dir, ignore_errors=True)
-    # 若首次未删干净（如 .git 残留），重试；仍失败则抛出明确错误
-    if repo_dir.exists() and any(repo_dir.iterdir()):
-        shutil.rmtree(repo_dir)
 
     repo_url = f"https://github.com/{instance.repo}.git"
     logger.info(f"  Cloning {instance.repo} @ {instance.base_commit[:8]}...")
 
-    # 浅拷贝元数据 + 按需拉取 blob，显著加快大仓库克隆；checkout 需要的提交历史仍会拉取
     subprocess.run(
-        ["git", "clone", "--quiet", "--filter=blob:none", "--single-branch", repo_url, str(repo_dir)],
+        ["git", "clone", "--quiet", repo_url, str(repo_dir)],
         check=True,
-        timeout=600,
+        timeout=180,
     )
     subprocess.run(
         ["git", "checkout", "--quiet", instance.base_commit],
         cwd=repo_dir,
         check=True,
-        timeout=60,
+        timeout=30,
     )
     return repo_dir
 
@@ -220,7 +216,7 @@ async def run_instance_via_rpc(
         ws_result = await client.send_command("workspace.open", {
             "path": str(repo_dir.resolve())
         })
-        workspace_id = ws_result.get("workspace", {}).get("workspace_id", "")
+        workspace_id = ws_result.get("workspace_id", "")
         logger.info(f"  Workspace: {workspace_id}")
 
         # 3. 订阅事件
@@ -313,27 +309,8 @@ async def run_instance_via_rpc(
 
 # ──────────────────── 数据集加载 ────────────────────
 
-def _find_local_parquet(dataset_name: str, split: str) -> Path | None:
-    """定位本地 SWE-bench parquet（含常见别名），不存在返回 None"""
-    candidates = [
-        Path(f"data/{dataset_name.replace('/', '_')}_{split}.parquet"),
-        Path(f"data/swebench_{dataset_name.split('/')[-1].replace('SWE-bench_', '').lower()}_{split}.parquet"),
-    ]
-    for path in candidates:
-        if path.exists():
-            return path
-    return None
-
-
 def load_dataset(dataset_name: str, split: str = "test") -> list[dict]:
-    """加载 SWE-bench 数据集：优先本地 parquet → HuggingFace → 本地 JSON"""
-    parquet_path = _find_local_parquet(dataset_name, split)
-    if parquet_path is not None:
-        import pyarrow.parquet as pq
-
-        table = pq.read_table(parquet_path)
-        logger.info(f"从本地 parquet 加载 {table.num_rows} 行: {parquet_path}")
-        return table.to_pylist()
+    """加载 SWE-bench 数据集"""
     try:
         from datasets import load_dataset as hf_load
         ds = hf_load(dataset_name, split=split)
@@ -441,7 +418,6 @@ def main():
     )
     parser.add_argument("--split", default="test", help="数据集 split")
     parser.add_argument("--max-instances", type=int, default=None, help="最多运行多少个实例")
-    parser.add_argument("--instance-ids", default="", help="逗号分隔的 instance_id 列表，只运行这些")
     parser.add_argument(
         "--workspace", default="eval/reports/swebench-workspace",
         help="工作目录（存放克隆的仓库）"
@@ -475,10 +451,6 @@ def main():
     instances = load_dataset(args.dataset, args.split)
     logger.info(f"Loaded {len(instances)} instances")
 
-    if args.instance_ids:
-        wanted = {item.strip() for item in args.instance_ids.split(",") if item.strip()}
-        instances = [inst for inst in instances if inst["instance_id"] in wanted]
-        logger.info(f"Filtered to {len(instances)} requested instances")
     if args.max_instances:
         instances = instances[:args.max_instances]
         logger.info(f"Limited to {len(instances)} instances")
