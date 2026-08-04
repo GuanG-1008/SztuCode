@@ -1,6 +1,6 @@
 # SztuCode Desktop Workbench
 
-这是 SztuCode 的现代图形客户端：Tauri 2 负责原生窗口、系统目录选择与受控 TCP 桥；React 负责任务时间线、会话历史、工作区、审批与变更审阅。
+这是 SztuCode 的现代图形客户端：Tauri 2 负责原生窗口、系统目录选择与受控 TCP 桥；Vue 3 负责任务时间线、会话历史、工作区、审批与变更审阅。
 
 ## 开发
 
@@ -26,4 +26,4 @@ cd src-tauri
 cargo check
 ```
 
-旧的 Tkinter `sztu-desktop` 保留为兼容入口；新功能应优先加入此目录的 Tauri + React 客户端与共享 IPC 协议。
+旧的 Tkinter `sztu-desktop` 保留为兼容入口；新功能应优先加入此目录的 Tauri + Vue 3 客户端与共享 IPC 协议。

@@ -1,5 +1,8 @@
 # Claw-Code 工具系统架构文档
 
+> [!WARNING]
+> 本文记录外部项目 Claw-Code 的参考实现，不描述 SztuCode 当前行为。SztuCode 的现行架构与贡献约定见 [架构说明](../reference/architecture.md) 和 [贡献指南](../CONTRIBUTING.md)。
+
 > 用于复刻参考。覆盖权限模式定义、权限判断逻辑、工具注册/执行/分发全链路。
 
 ---

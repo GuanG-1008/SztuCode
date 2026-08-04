@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密安全漏洞报告
+    url: https://github.com/rojim666/SztuCode/security/advisories/new
+    about: 权限绕过、目录逃逸、命令注入或凭据泄漏请使用私密渠道。
+  - name: 文档中心
+    url: https://github.com/rojim666/SztuCode/tree/main/docs
+    about: 提交问题前先查看安装、配置和故障排查文档。
