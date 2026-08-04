@@ -20,10 +20,10 @@ uv run pytest tests/ -v               # all
 # Single test
 uv run pytest tests/unit/test_envelope.py::test_request_roundtrip -v
 
-# Regenerate WIRE_PROTOCOL.md after changing bus models
+# Regenerate docs/reference/wire-protocol.md after changing bus models
 uv run python scripts/gen_protocol_doc.py
 
-# Verify WIRE_PROTOCOL.md is in sync (used in CI equivalent)
+# Verify docs/reference/wire-protocol.md is in sync (used in CI equivalent)
 uv run python scripts/gen_protocol_doc.py --check
 
 # Run daemon manually
@@ -56,7 +56,7 @@ All IPC messages are typed pydantic v2 models with a **discriminated union on th
 - `commands.py` — `Command` union; currently only `PingCommand` + `PongResult`
 - `events.py` — `Event` union; currently only `CoreStartedEvent`
 
-`WIRE_PROTOCOL.md` is **generated** from these models by `scripts/gen_protocol_doc.py`. Always regenerate and commit it after changing bus models.
+`docs/reference/wire-protocol.md` is **generated** from these models by `scripts/gen_protocol_doc.py`. Always regenerate and commit it after changing bus models.
 
 ### Transport layer (`src/sztu_code/core/transport/`)
 
@@ -104,9 +104,9 @@ async def test_publish_reaches_subscriber() -> None:
 
 两行注释缺一不可。功能行让读者 5 秒内判断测试意图；设计行让读者理解测试背后的决策，而非只看到操作步骤。
 
-### Design docs (outside the repo)
+### Project documentation
 
-The planning documents live in `../docs/` (sibling of this repo, not committed here):
-- `agent_development_plan.md` — staged development roadmap S0–S8
-- `s0_implementation_plan.md` — detailed S0 decisions and rationale
-- `agent_functional_outline.md` — full feature catalogue
+Current user, contributor, architecture, testing, and operations documentation lives in
+`docs/`; start with `docs/README.md`. Historical proposals are kept under `docs/archive/`
+and must not be treated as current behavior. Significant new architecture decisions should
+use the ADR process in `docs/adr/README.md`.

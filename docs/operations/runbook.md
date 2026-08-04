@@ -1,0 +1,136 @@
+# 运维与故障排查
+
+[返回文档中心](../README.md)
+
+## 启动与检查
+
+前台启动 daemon：
+
+```bash
+uv run sztu-code
+```
+
+默认监听 `127.0.0.1:7437`。验证连通性：
+
+```bash
+uv run sztu ping
+uv run sztu core status
+```
+
+由 CLI 管理后台进程：
+
+```bash
+uv run sztu core start
+uv run sztu core status
+uv run sztu core stop
+```
+
+前台进程使用 `Ctrl+C` 优雅退出。开发时优先使用项目提供的 `core stop`，不要依赖只适用于某个操作系统的进程查找命令。
+
+## 配置检查
+
+配置优先级和完整字段见 [配置参考](../getting-started/configuration.md)。排查时重点确认：
+
+- daemon 与客户端的 `SZTU_HOST` / `SZTU_PORT` 一致；
+- `SZTU_LLM_PROVIDER`、模型 ID、Base URL 和 API Key 属于同一服务商；
+- `.env` 未被另一个系统环境变量覆盖；
+- 项目 `.sztu/config.toml` 和全局配置没有冲突；
+- 桌面端是否写入了 `~/.sztu/client-settings.json`。
+
+临时改用其他端口：
+
+```powershell
+$env:SZTU_PORT = "8000"
+uv run sztu-code
+```
+
+```bash
+SZTU_PORT=8000 uv run sztu-code
+```
+
+## 日志与 Trace
+
+默认位置：
+
+```text
+~/.sztu/logs/core.log
+~/.sztu/logs/tui.log
+~/.sztu/traces/daemon.jsonl
+```
+
+实时查看系统 Trace：
+
+```bash
+uv run sztu trace --follow
+uv run sztu trace RUN_ID --layer llm
+uv run sztu trace RUN_ID --raw
+```
+
+Trace 可能包含提示词、模型响应和工具参数。共享前按 [安全政策](../SECURITY.md) 脱敏。
+
+## 本地数据与备份
+
+执行升级、迁移或大规模历史操作前，建议备份：
+
+```text
+~/.sztu/config.toml
+~/.sztu/client-settings.json
+~/.sztu/policy.toml
+~/.sztu/sessions/
+~/.sztu/workspaces.json
+```
+
+工作区代码应通过 Git 分支或其他备份机制保护。SztuCode 的会话数据不能替代源代码备份。
+
+## 常见问题
+
+### `core already running`
+
+指定地址已有服务。先执行：
+
+```bash
+uv run sztu core status
+```
+
+如果是 SztuCode daemon，复用或停止它；如果是其他程序，修改 `SZTU_PORT`。
+
+### `core not running` 或客户端持续重连
+
+```bash
+uv run sztu-code
+```
+
+检查 daemon 终端输出和 `~/.sztu/logs/core.log`。确认防火墙没有阻止 loopback TCP，并核对客户端端口。
+
+### Provider 未就绪
+
+确认模型 ID 不为空、凭据有效、Base URL 可访问，并检查 Provider 与 API 协议是否匹配。OpenAI-compatible 服务必须设置 `SZTU_LLM_PROVIDER=openai`。
+
+### 权限请求没有继续执行
+
+确认客户端仍连接、审批未超时，且响应针对当前 `tool_use_id`。检查是否有多个客户端同时展示同一请求，以及 `~/.sztu/policy.toml` 是否包含意外规则。
+
+### 桌面端无法连接
+
+桌面端目前不会自动拉起 Python daemon。先在仓库根目录运行 `uv run sztu-code`，再启动 `npm run tauri dev`。同时确认 `desktop/src-tauri/tauri.conf.json` 的开发服务器配置正常。
+
+### 协议文档校验失败
+
+```bash
+uv run python scripts/gen_protocol_doc.py
+uv run python scripts/gen_protocol_doc.py --check
+```
+
+不要直接编辑生成文件；需要改变内容时修改 Pydantic 模型或生成器。
+
+## 恢复与升级
+
+- 升级前记录当前 commit，并备份 `.sztu` 用户数据。
+- 拉取代码后运行 `uv sync`，桌面端依赖变化时运行 `npm install`。
+- 配置解析失败时，不要直接删除配置；先复制备份并按错误字段修正。
+- 会话或工作区数据异常时，保留原始文件用于复现，不要在未备份时批量清理。
+- 仓库公共分支发生历史重写后，协作者应重新 fetch，并根据自己的未推送提交选择 rebase、cherry-pick 或重新克隆；不要盲目 hard reset 有本地工作的目录。
+
+## 报告问题
+
+普通故障按 [贡献指南](../CONTRIBUTING.md) 提交 Issue，并附带脱敏的版本、环境和复现步骤。权限绕过、目录逃逸、命令注入或凭据泄漏按 [安全政策](../SECURITY.md) 私下报告。

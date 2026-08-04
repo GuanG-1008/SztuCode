@@ -1,0 +1,47 @@
+name: Feature request
+description: 提出有明确用户价值和验收标准的改进
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 用户问题
+      description: 描述当前无法顺利完成的任务，不要只描述想要的控件或实现。
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: 当前替代方式
+      description: 目前如何绕过，以及为什么不足。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 说明行为、范围和可能影响的客户端或协议。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 使用可验证的列表描述完成条件。
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: 风险与非目标
+      description: 特别说明权限、兼容性、迁移、性能和明确不做的内容。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已查看项目路线图和现有 Issue。
+          required: true
+        - label: 这不是安全漏洞报告。
+          required: true

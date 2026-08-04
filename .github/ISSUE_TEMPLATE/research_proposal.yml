@@ -1,0 +1,71 @@
+name: 研究与评测提案
+description: 提出可验证的 Agent、模型、RAG、多智能体或评测实验
+title: "[Research]: "
+labels:
+  - type/research
+body:
+  - type: markdown
+    attributes:
+      value: |
+        研究提案必须能够通过数据或实验被支持或否定。只有通过固定回归集和安全审查的结果才会进入默认产品路径。
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 研究问题
+      description: 用一句可检验的话描述希望回答的问题。
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: 假设与依据
+      description: 说明预期结果、理论或工程依据，以及主要不确定性。
+    validations:
+      required: true
+
+  - type: textarea
+    id: baseline
+    attributes:
+      label: 基线与数据集
+      description: 说明对照方案、任务来源、样本规模、数据许可和污染风险。
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: 指标与成功条件
+      description: 同时考虑任务质量、稳定性、安全、成本和延迟。
+      placeholder: |
+        - 主要指标：
+        - 回归门槛：
+        - 资源预算：
+        - 停止条件：
+    validations:
+      required: true
+
+  - type: textarea
+    id: method
+    attributes:
+      label: 实验设计
+      description: 描述变量控制、重复次数、统计方法和可复现环境。
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: 风险与伦理
+      description: 说明隐私、安全、许可证、成本、数据污染和负面结果处理方式。
+    validations:
+      required: true
+
+  - type: textarea
+    id: outputs
+    attributes:
+      label: 预期产物
+      placeholder: 代码、数据集卡、实验配置、原始结果、分析报告、ADR 等。
+    validations:
+      required: true
