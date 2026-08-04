@@ -1,5 +1,8 @@
 # SztuCode 客户端 Codex 化优化方案
 
+> [!WARNING]
+> 这是桌面工作台落地前的历史方案，其中部分技术选型和现状描述已经过时。当前桌面端使用 Tauri 2 + Vue 3；现行架构见 [架构说明](../reference/architecture.md)。
+
 ## 1. 结论与目标
 
 SztuCode 已经具备 Agent 产品的核心能力：daemon 与客户端分离、会话持久化、工具调用与权限策略、实时事件流、上下文压缩、Skills、子 Agent 和 MCP。当前短板不在 Agent 内核，而在桌面端没有把这些能力组织成一个开发者可以长期使用的工作台。
@@ -174,7 +177,7 @@ UI 字体：Microsoft YaHei UI / Noto Sans SC
 
 ### P1：补齐产品协议
 
-以下命令/事件按 JSON-RPC/Pydantic 模型新增，修改后同步生成 `WIRE_PROTOCOL.md`：
+以下是当时计划新增的 JSON-RPC/Pydantic 命令与事件；现行协议请查阅 [Wire Protocol](../reference/wire-protocol.md)：
 
 | 类别 | 新命令 / 事件 | 目的 |
 | --- | --- | --- |
