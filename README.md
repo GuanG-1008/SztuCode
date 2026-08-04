@@ -269,13 +269,6 @@ uv run python scripts/gen_protocol_doc.py --check
       </a><br />
       <sub>Contributor</sub>
     </td>
-    <td align="center">
-      <a href="https://github.com/SztuCode-Contributor">
-        <img src="https://github.com/SztuCode-Contributor.png?size=100" width="80" alt="SztuCode-Contributor" /><br />
-        <sub><b>SztuCode-Contributor</b></sub>
-      </a><br />
-      <sub>Contributor</sub>
-    </td>
   </tr>
 </table>
 
