@@ -37,7 +37,7 @@ class NoteSaveTool(BaseTool):
         self._session_id = session_id
         self._run_id = run_id
 
-    # 将非空 content 追加到 session notes.md
+    # 将非空 content 追加到 session notes.md，返回 note_id 供后续更新
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         content = NoteSaveParams.model_validate(params).content.strip()
         if not content:
@@ -46,5 +46,5 @@ class NoteSaveTool(BaseTool):
                 is_error=True,
                 error_type="runtime_error",
             )
-        self._store.append_note(self._session_id, content, self._run_id)
-        return ToolResult(content="saved")
+        note_id = self._store.append_note(self._session_id, content, self._run_id)
+        return ToolResult(content=f"saved ({note_id})")

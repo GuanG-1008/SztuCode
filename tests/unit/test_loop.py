@@ -278,6 +278,8 @@ async def test_loop_auto_compacts_on_high_water_tool_use(tmp_path: Path) -> None
     ctx = _ctx(max_steps=5)
 
     await loop.run(ctx)
+    # Phase 3a: 异步压缩在后台执行，等待完成
+    await asyncio.sleep(0.1)
 
     assert ctx.compacted is True
     assert ctx.messages[0]["role"] == "user"
@@ -305,6 +307,8 @@ async def test_loop_auto_compacts_on_max_tokens(tmp_path: Path) -> None:
     ctx = _ctx(max_steps=5)
 
     await loop.run(ctx)
+    # Phase 3a: 等待异步压缩完成
+    await asyncio.sleep(0.1)
 
     assert ctx.compacted is True
     assert ctx.status == "success"

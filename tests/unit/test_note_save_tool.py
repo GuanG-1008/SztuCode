@@ -14,7 +14,7 @@ async def test_note_save_appends_note(tmp_path: Path) -> None:
 
     result = await tool.invoke({"content": "Python 3.12"})
 
-    assert result.content == "saved"
+    assert result.content.startswith("saved (note-")
     assert not result.is_error
     assert "Python 3.12" in store.read_notes("sess-1")
 

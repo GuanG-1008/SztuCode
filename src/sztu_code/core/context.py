@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sztu_code.core.compact.canvas import TaskCanvas
 
 
 @dataclass
@@ -24,6 +27,8 @@ class ExecutionContext:
     # 本 run 派生的后台 subagent run_id 集合，结束回合前等待其全部落定
     pending_background_run_ids: set[str] = field(default_factory=set)
     compacted: bool = False
+    # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，注入 system prompt
+    canvas: TaskCanvas | None = None
 
     # 初始化消息历史，优先使用 session 完整回放内容
     def __post_init__(self) -> None:
@@ -44,6 +49,17 @@ class ExecutionContext:
                 "\n\n## Session Notes\n"
                 + self.session_notes.strip()
                 + "\n\nRemember important durable facts by calling note_save."
+            )
+        # Phase 2: 注入 Mermaid 任务画布 — Agent 每一步都能看到当前任务拓扑
+        if self.canvas is not None:
+            mermaid = self.canvas.render_mermaid()
+            summary = self.canvas.recent_summary()
+            parts.append("\n\n## Task Canvas\n" + mermaid)
+            if summary:
+                parts.append("\n最近完成:\n" + summary)
+            parts.append(
+                "\n画布展示了当前任务的执行进度。节点状态: ✅=完成 🔵=进行中 "
+                "⏳=待执行 ❌=失败。使用 read_ref 可查看卸载的完整工具输出。"
             )
         return "".join(parts)
 

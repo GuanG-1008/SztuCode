@@ -64,6 +64,15 @@ class CompactionConfig:
 
 
 @dataclass
+class OffloadConfig:
+    enabled: bool = True  # 是否启用上下文卸载
+    min_chars: int = 2_000  # 触发卸载的最小字符数
+    min_lines: int = 50  # 触发卸载的最小行数
+    force_tools: list[str] = field(default_factory=lambda: ["bash", "grep", "glob"])
+    summary_max_chars: int = 300  # 摘要最大字符数
+
+
+@dataclass
 class McpServerConfig:
     name: str
     transport: str = "stdio"       # "stdio" | "tcp"
@@ -89,6 +98,7 @@ class SztuConfig:
     trace: TraceConfig = field(default_factory=TraceConfig)
     permission: PermissionConfig = field(default_factory=PermissionConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
+    offload: OffloadConfig = field(default_factory=OffloadConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
 
 
@@ -190,6 +200,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         "trace",
         "permission",
         "compaction",
+        "offload",
         "mcp",
     }
     if unknown:
@@ -346,6 +357,43 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     "Config error: compaction.tool_result_keep must be a positive integer"
                 )
             config.compaction.tool_result_keep = val
+
+    if "offload" in data:
+        off = data["offload"]
+        if not isinstance(off, dict):
+            raise SystemExit("Config error: [offload] must be a table")
+        unknown_off: set[str] = set(off.keys()) - {
+            "enabled", "min_chars", "min_lines", "force_tools", "summary_max_chars",
+        }
+        if unknown_off:
+            raise SystemExit(f"Unknown [offload] keys: {', '.join(sorted(unknown_off))}")
+        if "enabled" in off:
+            val = off["enabled"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: offload.enabled must be a boolean")
+            config.offload.enabled = val
+        if "min_chars" in off:
+            val = off["min_chars"]
+            if not isinstance(val, int) or val <= 0:
+                raise SystemExit("Config error: offload.min_chars must be a positive integer")
+            config.offload.min_chars = val
+        if "min_lines" in off:
+            val = off["min_lines"]
+            if not isinstance(val, int) or val <= 0:
+                raise SystemExit("Config error: offload.min_lines must be a positive integer")
+            config.offload.min_lines = val
+        if "force_tools" in off:
+            val = off["force_tools"]
+            if not isinstance(val, list) or not all(isinstance(t, str) for t in val):
+                raise SystemExit("Config error: offload.force_tools must be a list of strings")
+            config.offload.force_tools = val
+        if "summary_max_chars" in off:
+            val = off["summary_max_chars"]
+            if not isinstance(val, int) or val <= 0:
+                raise SystemExit(
+                    "Config error: offload.summary_max_chars must be a positive integer"
+                )
+            config.offload.summary_max_chars = val
 
     if "mcp" in data:
         mcp = data["mcp"]
@@ -548,4 +596,41 @@ def _apply_env(config: SztuConfig) -> None:
             raise SystemExit(
                 "Config error: SZTU_COMPACT_TOOL_KEEP must be an integer, "
                 f"got: {compact_tool_keep!r}"
+            )
+
+    # --- 上下文卸载环境变量 ---
+    offload_enabled = os.environ.get("SZTU_OFFLOAD_ENABLED")
+    if offload_enabled is not None:
+        config.offload.enabled = offload_enabled.lower() not in ("0", "false", "no")
+
+    offload_min_chars = os.environ.get("SZTU_OFFLOAD_MIN_CHARS")
+    if offload_min_chars is not None:
+        try:
+            offload_min_chars_val = int(offload_min_chars)
+            if offload_min_chars_val <= 0:
+                raise SystemExit(
+                    "Config error: SZTU_OFFLOAD_MIN_CHARS must be a positive integer, "
+                    f"got: {offload_min_chars!r}"
+                )
+            config.offload.min_chars = offload_min_chars_val
+        except ValueError:
+            raise SystemExit(
+                "Config error: SZTU_OFFLOAD_MIN_CHARS must be an integer, "
+                f"got: {offload_min_chars!r}"
+            )
+
+    offload_min_lines = os.environ.get("SZTU_OFFLOAD_MIN_LINES")
+    if offload_min_lines is not None:
+        try:
+            offload_min_lines_val = int(offload_min_lines)
+            if offload_min_lines_val <= 0:
+                raise SystemExit(
+                    "Config error: SZTU_OFFLOAD_MIN_LINES must be a positive integer, "
+                    f"got: {offload_min_lines!r}"
+                )
+            config.offload.min_lines = offload_min_lines_val
+        except ValueError:
+            raise SystemExit(
+                "Config error: SZTU_OFFLOAD_MIN_LINES must be an integer, "
+                f"got: {offload_min_lines!r}"
             )

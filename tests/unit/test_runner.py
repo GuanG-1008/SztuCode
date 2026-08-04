@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -343,6 +344,8 @@ async def test_auto_compact_writes_summary_to_thread(tmp_path: Path) -> None:
         session=session,
         store=store,
     )
+    # Phase 3a: 等待异步压缩完成（后台 Task 需要事件循环调度）
+    await asyncio.sleep(0.1)
 
     messages = store.read_messages("sess-1")
     assert messages[0]["role"] == "user"

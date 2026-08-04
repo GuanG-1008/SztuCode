@@ -14,7 +14,9 @@ from sztu_code.core.tools.invocation import invoke_tool
 from sztu_code.core.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from sztu_code.core.compact.canvas import TaskCanvas
     from sztu_code.core.compact.compactor import Compactor
+    from sztu_code.core.compact.offload import OffloadManager
     from sztu_code.core.permissions.denial_tracker import DenialTracker
     from sztu_code.core.permissions.manager import PermissionManager
     from sztu_code.core.subagent.registry import BackgroundTaskRegistry
@@ -28,7 +30,7 @@ def _now() -> str:
 
 class AgentLoop:
     # 初始化循环所需依赖：LLM provider、工具注册表、事件总线、
-    # 以及可选的权限管理器、拒绝追踪器、压缩器和 session ID
+    # 以及可选的权限管理器、拒绝追踪器、压缩器、卸载管理器和 session ID
     def __init__(
         self,
         provider: LLMProvider,
@@ -43,6 +45,7 @@ class AgentLoop:
         tool_result_keep: int = 4_000,
         session_id: str = "",
         task_registry: BackgroundTaskRegistry | None = None,
+        offload_manager: OffloadManager | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -55,9 +58,16 @@ class AgentLoop:
         self._tool_result_keep = tool_result_keep
         self._session_id = session_id
         self._task_registry = task_registry
+        self._offload_manager = offload_manager
 
     # 驱动 plan→act→observe 循环直到上下文终止；CancelledError 向上传播
     async def run(self, context: ExecutionContext) -> None:
+        # Phase 2: 初始化任务画布（若未由外部注入）
+        from sztu_code.core.compact.canvas import TaskCanvas
+        if context.canvas is None:
+            context.canvas = TaskCanvas()
+        canvas: TaskCanvas = context.canvas
+
         while not context.is_done():
             context.step += 1
             await self._bus.publish(
@@ -138,15 +148,47 @@ class AgentLoop:
 
             # [act] execute each requested tool; errors become tool results so loop continues
             added_estimate = 0
+            # 收集工具调用信息用于画布记录
+            canvas_tool_names: list[str] = []
+            canvas_summaries: list[str] = []
+            canvas_refs: list[str] = []
+            has_errors = False
             if response.stop_reason == "tool_use":
+                # Phase 2: 先创建 running 状态节点
+                if response.tool_calls:
+                    canvas.record_step(
+                        label=response.text.strip()[:80] if response.text else "",
+                        tool_names=[tc.name for tc in response.tool_calls],
+                        status="running",
+                    )
                 for tc in response.tool_calls:
+                    canvas_tool_names.append(tc.name)
                     result = await invoke_tool(
                         self._registry, tc, self._bus, context.run_id,
                         permission_manager=self._permission_manager,
                         session_id=self._session_id,
                     )
-                    added_estimate += max(1, len(str(result.content)) // 4)
-                    context.add_tool_result(tc.id, result.content, is_error=result.is_error)
+                    if result.is_error:
+                        has_errors = True
+                    # 上下文卸载：将超长工具结果写入外部 refs/*.md，上下文仅保留占位符
+                    # 参考 TencentDB Agent Memory Level 0-1 架构
+                    content = result.content
+                    if (
+                        self._offload_manager is not None
+                        and self._offload_manager.should_offload(tc.name, content)
+                    ):
+                        record = self._offload_manager.offload(
+                            tc.name, tc.id, content, context.run_id, result.is_error,
+                        )
+                        canvas_summaries.append(record.summary)
+                        canvas_refs.append(record.ref_path)
+                        content = self._offload_manager.placeholder(record)
+                    else:
+                        # 未卸载的工具结果：用内容首行作为摘要
+                        first_line = content.strip().split("\n")[0][:100] if content.strip() else ""
+                        canvas_summaries.append(first_line)
+                    added_estimate += max(1, len(content) // 4)
+                    context.add_tool_result(tc.id, content, is_error=result.is_error)
 
                     # [track] 追踪权限拒绝，触发熔断干预
                     if self._denial_tracker is not None:
@@ -154,6 +196,16 @@ class AgentLoop:
                             self._denial_tracker.record_denial(tc.name)
                         elif not result.is_error:
                             self._denial_tracker.record_success(tc.name)
+
+                # Phase 2: 更新画布节点 — running → done/failed，补齐摘要和 refs
+                if canvas_tool_names:
+                    canvas.finalize_last(
+                        label=response.text.strip() if response.text else "",
+                        status="failed" if has_errors else "done",
+                        summary="; ".join(canvas_summaries[:3]),
+                        refs=canvas_refs,
+                    )
+
             elif response.stop_reason == "max_tokens" and response.tool_calls:
                 # Output token limit hit mid-tool-call; input is incomplete.
                 # Add synthetic error results so the conversation stays balanced.
@@ -207,7 +259,8 @@ class AgentLoop:
                         / response.usage.input_tokens
                     )
                 if trigger_pct >= self._compact_threshold:
-                    await self._compactor.compact(context, self._provider)
+                    # Phase 3a: 异步压缩 — 不阻塞 Agent 继续处理下一步
+                    self._compactor.compact_async(context, self._provider)
 
             await self._bus.publish(
                 StepFinishedEvent(run_id=context.run_id, step=context.step, ts=_now())

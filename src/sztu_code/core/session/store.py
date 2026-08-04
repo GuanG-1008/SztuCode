@@ -190,16 +190,85 @@ class SessionStore:
                 bak.rename(path)
             raise
 
-    # 读取 notes.md 全文，文件不存在时返回空字符串
+    # 读取 notes.md 全文（仅活跃笔记），文件不存在时返回空字符串
+    # Phase 3b: 支持 supersedes 版本化 — 被替代的旧笔记自动隐藏
     def read_notes(self, sid: str) -> str:
         path = self.session_dir(sid) / "notes.md"
         if not path.exists():
             return ""
-        return path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8")
+        return _filter_active_notes(raw)
 
-    # 将一条主动笔记追加到 notes.md
-    def append_note(self, sid: str, content: str, run_id: str) -> None:
+    # 将一条主动笔记追加到 notes.md（带结构化元数据）
+    def append_note(self, sid: str, content: str, run_id: str) -> str:
+        note_id = f"note-{uuid.uuid4().hex[:12]}"
         path = self.session_dir(sid)
         path.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"---\n"
+            f"id: {note_id}\n"
+            f"status: active\n"
+            f"supersedes: \n"
+            f"superseded_by: \n"
+            f"ts: {_now()}\n"
+            f"run_id: {run_id}\n"
+            f"---\n"
+        )
         with (path / "notes.md").open("a", encoding="utf-8") as f:
-            f.write(f"## Note ({_now()}, {run_id})\n{content}\n\n")
+            f.write(header + content.strip() + "\n\n")
+        return note_id
+
+    # 更新一条已有笔记：旧笔记标记 archived，新笔记记录 supersedes 链
+    def update_note(self, sid: str, note_id: str, new_content: str, run_id: str) -> str | None:
+        path = self.session_dir(sid) / "notes.md"
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8")
+        if f"id: {note_id}" not in raw:
+            return None
+
+        # 将旧笔记标记为 archived + superseded_by
+        updated_raw = raw.replace(
+            f"id: {note_id}\nstatus: active",
+            f"id: {note_id}\nstatus: archived",
+        )
+        # 追加新笔记
+        new_id = f"note-{uuid.uuid4().hex[:12]}"
+        header = (
+            f"---\n"
+            f"id: {new_id}\n"
+            f"status: active\n"
+            f"supersedes: {note_id}\n"
+            f"superseded_by: \n"
+            f"ts: {_now()}\n"
+            f"run_id: {run_id}\n"
+            f"---\n"
+        )
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(updated_raw + header + new_content.strip() + "\n\n", encoding="utf-8")
+        tmp.replace(path)
+        return new_id
+
+
+# 从 notes.md 原文中提取仅 status=active 的笔记内容
+def _filter_active_notes(raw: str) -> str:
+    import re
+    raw = raw.strip()
+    # 不含 --- 标记的旧格式文件，原样返回（向后兼容）
+    if "---" not in raw:
+        return raw
+    # 匹配每个笔记块：---\n 元数据 \n---\n 内容
+    # 块之间由 \n\n---\n 分隔
+    pattern = re.compile(
+        r'^---\n(.*?)\n---\n(.*?)(?=\n\n---\n|\n*$)', re.DOTALL | re.MULTILINE
+    )
+    parts: list[str] = []
+    for match in pattern.finditer(raw):
+        header = match.group(1)
+        body = match.group(2).strip()
+        if 'status: active' in header:
+            # 提取 run_id 用于显示
+            run_match = re.search(r'run_id:\s*(\S+)', header)
+            run_info = f" ({run_match.group(1)})" if run_match else ""
+            parts.append(f"## Note{run_info}\n{body}")
+    return "\n\n".join(parts)
