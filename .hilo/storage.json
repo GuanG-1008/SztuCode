@@ -1,0 +1,21 @@
+{
+	"_version": 8,
+	"preferences": {
+		"loadUserMemory": true
+	},
+	"recentFiles": [],
+	"assetPanel": {
+		"typeFilters": [],
+		"dateFilter": {
+			"kind": "all"
+		},
+		"sortOrder": "desc"
+	},
+	"timelinePanel": {
+		"openTimelineIds": [],
+		"activeTimelineId": null
+	},
+	"lastUsedModelParams": {},
+	"pinnedSessionIds": [],
+	"hiddenSessionIds": []
+}
