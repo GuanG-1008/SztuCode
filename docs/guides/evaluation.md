@@ -25,9 +25,9 @@
 
 ---
 
-## 二、Layer 1：标准基准评测（行业对标）
+## 二、Layer 1：行业对标的标准基准评测
 
-### 2.1 SWE-bench —— 当前唯一权威的 Coding Agent 基准
+### 2.1 SWE-bench —— 当前唯一比较权威的 Coding Agent 基准
 
 SWE-bench 是目前业界公认的 coding agent 评测标准，核心机制：
 
