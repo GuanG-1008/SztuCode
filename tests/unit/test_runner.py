@@ -186,8 +186,8 @@ async def test_run_finished_event_published_on_success(tmp_path: Path) -> None:
     assert finished.status == "success"  # type: ignore[attr-defined]
 
 
-# 功能：验证步数耗尽时 run.finished 携带 failed 状态和正确的失败原因
-# 设计：LoopingProvider + max_steps=2 触发失败路径，确认 runner 在失败终止路径同样发布 finished 事件
+# 功能：验证步数耗尽时 run.finished 携带 interrupted 状态和正确的耗尽原因
+# 设计：LoopingProvider + max_steps=2 触发中断路径，确认 runner 在预算耗尽终止路径同样发布 finished 事件
 async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None:
     events = await _run(
         provider=_LoopingProvider(),
@@ -195,7 +195,7 @@ async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None
         tmp_path=tmp_path,
     )
     finished = next(e for e in events if e.type == "run.finished")  # type: ignore[attr-defined]
-    assert finished.status == "failed"  # type: ignore[attr-defined]
+    assert finished.status == "interrupted"  # type: ignore[attr-defined]
     assert finished.reason == "exceeded_max_steps"  # type: ignore[attr-defined]
 
 

@@ -35,6 +35,8 @@ const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_COLLAPSE_PULL = 48;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
+// 暂时隐藏"通用问答"入口；恢复时改为 true 即可（按钮模板在 sidebar-more-tools 中保留）
+const chatEntryVisible = false;
 const sidebarCollapsed = ref(window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT);
 let sidebarAutoCollapsed = sidebarCollapsed.value;
 const storedSidebarWidth = Number(localStorage.getItem("sztu.sidebarWidth"));
@@ -401,12 +403,16 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
     return;
   }
   if (type === "run.finished") {
+    const runStatus = String(event.status);
     for (const step of timeline.value.keys()) {
       setStep(step, (current) => current.runId === relatedRunId || !current.runId ? {
         ...current,
-        status: String(event.status) === "success" ? "done" : "failed",
+        status: runStatus === "success" ? "done" : "failed",
         finalText: current.finalText || current.tokens.join(""),
-        outcome: { status: String(event.status) === "success" ? "success" : "failed", reason: String(event.reason ?? "") || undefined },
+        outcome: {
+          status: runStatus === "interrupted" ? "interrupted" : (runStatus === "success" ? "success" : "failed"),
+          reason: String(event.reason ?? "") || undefined,
+        },
       } : current);
     }
     if (runId === activeRunId.value) activeRunId.value = null;
@@ -574,6 +580,10 @@ function handleReverted(runId: string) {
   }
   timeline.value = next;
   void refreshIndex(false);
+}
+// 中断任务的"继续执行"：向当前会话补发一条续跑消息，复用交接摘要作为上下文
+function handleContinue() {
+  void submitTask("继续", null);
 }
 // 进入代码变更审核页
 function handleReview(ctx: ReviewContext) {
@@ -898,7 +908,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
           <div>
             <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>技能</span></button>
             <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" /><span>浏览器连接</span></button>
-            <button :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
+            <button v-if="chatEntryVisible" :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
           </div>
         </div>
       </nav>
@@ -1028,7 +1038,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
               <div class="task-conversation">
                 <div class="task-stream">
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><div><b>从一个明确目标开始</b><p>SztuCode 会在当前项目中完成工作，并把验证结果、文件变更和可回滚记录留在这里。</p></div></div>
-                  <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" />
+                  <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />

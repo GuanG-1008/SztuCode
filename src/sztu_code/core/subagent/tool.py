@@ -115,6 +115,7 @@ class SpawnAgentTool(BaseTool):
         store: SessionStore | None = None,
         budget: BudgetConfig | None = None,
         wrap_up_on_max_steps: bool = True,
+        grace_step_on_max_steps: bool = True,
         stuck_max_failures: int = 3,
         stuck_max_total: int = 0,
     ) -> None:
@@ -133,6 +134,7 @@ class SpawnAgentTool(BaseTool):
         self._store = store
         self._budget = budget
         self._wrap_up_on_max_steps = wrap_up_on_max_steps
+        self._grace_step_on_max_steps = grace_step_on_max_steps
         self._stuck_max_failures = stuck_max_failures
         self._stuck_max_total = stuck_max_total
 
@@ -225,6 +227,7 @@ class SpawnAgentTool(BaseTool):
             session_id=self._session_id,
             task_registry=self._task_registry,
             wrap_up_on_max_steps=self._wrap_up_on_max_steps,
+            grace_step_on_max_steps=self._grace_step_on_max_steps,
             stuck_tracker=StuckLoopTracker(
                 max_failures=self._stuck_max_failures,
                 max_total=self._stuck_max_total,
@@ -372,6 +375,7 @@ class SpawnAgentTool(BaseTool):
                 store=self._store,
                 budget=self._budget,
                 wrap_up_on_max_steps=self._wrap_up_on_max_steps,
+                grace_step_on_max_steps=self._grace_step_on_max_steps,
                 stuck_max_failures=self._stuck_max_failures,
                 stuck_max_total=self._stuck_max_total,
             )

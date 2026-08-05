@@ -1,5 +1,5 @@
 export type TimelineStatus = "thinking" | "acting" | "observing" | "done" | "failed";
-export type RunOutcome = { status: "success" | "failed"; reason?: string };
+export type RunOutcome = { status: "success" | "failed" | "interrupted"; reason?: string };
 
 export type ToolCallEntry = {
   id: string;

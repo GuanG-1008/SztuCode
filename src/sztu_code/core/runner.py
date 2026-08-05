@@ -152,6 +152,7 @@ class AgentRunner:
                         store=store,
                         budget=self._config.budget,
                         wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                        grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
                         stuck_max_failures=self._config.agent.stuck_max_failures,
                         stuck_max_total=self._config.agent.stuck_max_total,
                     )
@@ -292,6 +293,7 @@ class AgentRunner:
                     task_registry=self._task_registry,
                     offload_manager=offload_manager,
                     wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                    grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
                     stuck_tracker=StuckLoopTracker(
                         max_failures=self._config.agent.stuck_max_failures,
                         max_total=self._config.agent.stuck_max_total,

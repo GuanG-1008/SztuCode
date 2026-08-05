@@ -16,8 +16,9 @@ _DEFAULT_LOG_FILE = "~/.sztu/logs/core.log"
 _DEFAULT_LOG_FORMAT = "text"
 _DEFAULT_CONFIG_PATH = "~/.sztu/config.toml"
 _DEFAULT_CLIENT_SETTINGS_PATH = "~/.sztu/client-settings.json"
-_DEFAULT_MAX_STEPS = 20
+_DEFAULT_MAX_STEPS = 0  # 0 = 不限步数（预算驱动，由 token/墙钟兜底）
 _DEFAULT_WRAP_UP_ON_MAX_STEPS = True
+_DEFAULT_GRACE_STEP_ON_MAX_STEPS = True
 _DEFAULT_STUCK_MAX_FAILURES = 3
 _DEFAULT_STUCK_MAX_TOTAL = 0
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
@@ -32,9 +33,11 @@ class LoggingConfig:
 
 @dataclass
 class AgentConfig:
-    max_steps: int = _DEFAULT_MAX_STEPS
+    max_steps: int = _DEFAULT_MAX_STEPS  # 0 = 不限步数；预算由 budget.max_tokens / max_wall_clock_s 兜底
     # max_steps 到达前给一次总结回合，避免裸失败
     wrap_up_on_max_steps: bool = _DEFAULT_WRAP_UP_ON_MAX_STEPS
+    # max_steps 边界且最后一步工具全部成功时，追加一步无工具结语回合让模型正常收尾
+    grace_step_on_max_steps: bool = _DEFAULT_GRACE_STEP_ON_MAX_STEPS
     # 同一操作连续失败达到该次数触发软干预；0=关闭
     stuck_max_failures: int = _DEFAULT_STUCK_MAX_FAILURES
     # 累计干预达到该次数硬停；0=永不硬停
@@ -298,20 +301,26 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         if not isinstance(agent, dict):
             raise SystemExit("Config error: [agent] must be a table")
         unknown_agent: set[str] = set(agent.keys()) - {
-            "max_steps", "wrap_up_on_max_steps", "stuck_max_failures", "stuck_max_total",
+            "max_steps", "wrap_up_on_max_steps", "grace_step_on_max_steps",
+            "stuck_max_failures", "stuck_max_total",
         }
         if unknown_agent:
             raise SystemExit(f"Unknown [agent] keys: {', '.join(sorted(unknown_agent))}")
         if "max_steps" in agent:
             val = agent["max_steps"]
-            if not isinstance(val, int) or val <= 0:
-                raise SystemExit("Config error: agent.max_steps must be a positive integer")
+            if not isinstance(val, int) or val < 0:
+                raise SystemExit("Config error: agent.max_steps must be a non-negative integer (0 = unlimited)")
             config.agent.max_steps = val
         if "wrap_up_on_max_steps" in agent:
             val = agent["wrap_up_on_max_steps"]
             if not isinstance(val, bool):
                 raise SystemExit("Config error: agent.wrap_up_on_max_steps must be a boolean")
             config.agent.wrap_up_on_max_steps = val
+        if "grace_step_on_max_steps" in agent:
+            val = agent["grace_step_on_max_steps"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: agent.grace_step_on_max_steps must be a boolean")
+            config.agent.grace_step_on_max_steps = val
         for _key in ("stuck_max_failures", "stuck_max_total"):
             if _key in agent:
                 val = agent[_key]
@@ -556,10 +565,10 @@ def _apply_env(config: SztuConfig) -> None:
     if max_steps_str is not None:
         try:
             val = int(max_steps_str)
-            if val <= 0:
+            if val < 0:
                 raise SystemExit(
-                    "Config error: SZTU_MAX_STEPS must be a positive integer,"
-                    f" got: {max_steps_str!r}"
+                    "Config error: SZTU_MAX_STEPS must be a non-negative integer "
+                    f"(0 = unlimited), got: {max_steps_str!r}"
                 )
             config.agent.max_steps = val
         except ValueError:
@@ -567,10 +576,13 @@ def _apply_env(config: SztuConfig) -> None:
                 f"Config error: SZTU_MAX_STEPS must be an integer, got: {max_steps_str!r}"
             )
 
-    # wrap-up / stuck-loop 环境变量
+    # wrap-up / 结语宽限步 / stuck-loop 环境变量
     wrap_up_str = os.environ.get("SZTU_WRAP_UP_ON_MAX_STEPS")
     if wrap_up_str is not None:
         config.agent.wrap_up_on_max_steps = wrap_up_str.lower() not in ("0", "false", "no")
+    grace_str = os.environ.get("SZTU_GRACE_STEP_ON_MAX_STEPS")
+    if grace_str is not None:
+        config.agent.grace_step_on_max_steps = grace_str.lower() not in ("0", "false", "no")
     for _env, _attr in (
         ("SZTU_STUCK_MAX_FAILURES", "stuck_max_failures"),
         ("SZTU_STUCK_MAX_TOTAL", "stuck_max_total"),

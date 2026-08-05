@@ -63,6 +63,7 @@ class AgentLoop:
         task_registry: BackgroundTaskRegistry | None = None,
         offload_manager: OffloadManager | None = None,
         wrap_up_on_max_steps: bool = True,
+        grace_step_on_max_steps: bool = True,
         stuck_tracker: StuckLoopTracker | None = None,
     ) -> None:
         self._provider = provider
@@ -78,6 +79,7 @@ class AgentLoop:
         self._task_registry = task_registry
         self._offload_manager = offload_manager
         self._wrap_up_on_max_steps = wrap_up_on_max_steps
+        self._grace_step_on_max_steps = grace_step_on_max_steps
         self._stuck_tracker = stuck_tracker
 
     # 驱动 plan→act→observe 循环直到上下文终止；CancelledError 向上传播
@@ -95,7 +97,7 @@ class AgentLoop:
 
             # [budget] 墙钟上限预检：超时直接终止，不再发起 LLM 调用
             if context.wall_clock_exceeded():
-                context.mark_failed("max_wall_clock_exceeded")
+                context.mark_interrupted("max_wall_clock_exceeded")
                 break
 
             context.step += 1
@@ -282,7 +284,8 @@ class AgentLoop:
             # 避免中间 tool_use 步骤过早清空 pending 导致最终摘要丢失
             pending_summaries: list[str] = []
             if context.pending_background_run_ids and (
-                response.stop_reason == "end_turn" or context.step >= context.max_steps
+                response.stop_reason == "end_turn"
+                or (context.max_steps > 0 and context.step >= context.max_steps)
             ):
                 pending_summaries = await self._wait_for_background(context)
 
@@ -293,20 +296,38 @@ class AgentLoop:
                     base += "\n\n" + "\n".join(pending_summaries)
                 context.result = base
                 context.mark_success()
-            elif context.step >= context.max_steps:
-                # 收尾回合：步数到限且预算未耗尽时给一次总结，避免裸失败
-                if self._wrap_up_on_max_steps and not context.token_budget_exhausted():
-                    summary = await self._wrap_up(context, pending_summaries)
-                    context.result = summary or (
-                        "\n".join(pending_summaries) if pending_summaries else ""
+            elif context.max_steps > 0 and context.step >= context.max_steps:
+                # 结语宽限步：最后一步工具全部成功时，追加一步无工具回合让模型正常收尾。
+                # 模型给出完成标记即记为 success；否则保留文本并按步数耗尽标记 interrupted
+                if (
+                    self._grace_step_on_max_steps
+                    and not context.token_budget_exhausted()
+                    and response.stop_reason == "tool_use"
+                    and not has_errors
+                ):
+                    concluded, conclusion_text = await self._conclude(
+                        context, pending_summaries
                     )
-                elif pending_summaries:
-                    context.result = "\n".join(pending_summaries)
-                context.mark_failed("exceeded_max_steps")
+                    if concluded:
+                        context.result = conclusion_text
+                        context.mark_success()
+                    else:
+                        context.result = conclusion_text or context.result
+                        context.mark_interrupted("exceeded_max_steps")
+                else:
+                    # 收尾回合：步数到限且预算未耗尽时给一次总结，避免裸失败
+                    if self._wrap_up_on_max_steps and not context.token_budget_exhausted():
+                        summary = await self._wrap_up(context, pending_summaries)
+                        context.result = summary or (
+                            "\n".join(pending_summaries) if pending_summaries else ""
+                        )
+                    elif pending_summaries:
+                        context.result = "\n".join(pending_summaries)
+                    context.mark_interrupted("exceeded_max_steps")
 
             # [budget] token 上限：run 仍需继续但累计已超限 → 直接终止（end_turn 成功优先）
             if not context.is_done() and context.token_budget_exhausted():
-                context.mark_failed("max_tokens_exceeded")
+                context.mark_interrupted("max_tokens_exceeded")
                 break
 
             # 工具结果追加完毕（messages 末尾为 user）后检查压缩，仅在 run 继续时触发
@@ -379,6 +400,63 @@ class AgentLoop:
             {"role": "assistant", "content": [{"type": "text", "text": summary}]}
         )
         return summary
+
+    # 结语宽限步：max_steps 边界且最后一步工具成功时，做一次无工具 LLM 调用，
+    # 让模型给出最终答复；返回 (是否明确完成, 最终文本)
+    async def _conclude(
+        self, context: ExecutionContext, pending_summaries: list[str]
+    ) -> tuple[bool, str]:
+        instruction = (
+            "The agent run has reached its step limit and must stop now. "
+            "Give your final answer. If the goal is fully achieved, start your "
+            "response with the exact marker [COMPLETE] and state the result. "
+            "If there is still work left, start with the exact marker [INCOMPLETE] "
+            "and list what remains. Do not call any tools."
+        )
+        if pending_summaries:
+            instruction += "\n\nBackground subagent results:\n" + "\n".join(pending_summaries)
+        context.messages.append({"role": "user", "content": instruction})
+        try:
+            response = await self._provider.chat(
+                messages=truncate_tool_results(
+                    context.messages,
+                    limit=self._tool_result_limit,
+                    keep=self._tool_result_keep,
+                ),
+                tool_schemas=[],
+                bus=self._bus,
+                run_id=context.run_id,
+                step=context.step,
+                system=context.system_prompt(
+                    context.base_system_prompt or _DEFAULT_SYSTEM_PROMPT
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "conclude LLM call failed run_id=%s step=%d",
+                context.run_id, context.step,
+            )
+            return (False, "")
+        if response.usage is not None:
+            context.total_input_tokens += response.usage.input_tokens
+            context.total_output_tokens += response.usage.output_tokens
+        text = (response.text or "").strip()
+        # 保持消息配对：无论有无文本都追加 assistant 消息
+        context.messages.append(
+            {"role": "assistant", "content": [{"type": "text", "text": text}]}
+        )
+        if response.stop_reason != "end_turn":
+            return (False, text)
+        lowered = text.lower()
+        if lowered.startswith("[incomplete]"):
+            return (False, text)
+        if lowered.startswith("[complete]"):
+            stripped = text[len("[COMPLETE]"):].strip()
+            return (True, stripped if stripped else text)
+        # 未按标记作答但正常 end_turn：与普通回合一致，信任为完成
+        return (True, text)
 
     # 等待本 run 派生的后台 subagent 全部结束，返回每条的结果摘要
     async def _wait_for_background(

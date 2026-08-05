@@ -145,18 +145,56 @@ def test_budget_toml_parsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert cfg.budget.max_wall_clock_s == 60
 
 
-# 功能：验证 [agent] 的收尾/卡死新键被解析
-# 设计：写含新键的 TOML，断言 wrap_up_on_max_steps/stuck_max_failures/stuck_max_total
+# 功能：验证 [agent] 的收尾/结语/卡死键被解析
+# 设计：写含新键的 TOML，断言 wrap_up/grace_step/stuck_max_failures/stuck_max_total
 def test_agent_budget_keys_toml_parsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     toml_path = tmp_path / "sztu.toml"
     toml_path.write_bytes(
-        b"[agent]\nwrap_up_on_max_steps = false\nstuck_max_failures = 5\nstuck_max_total = 2\n"
+        b"[agent]\nwrap_up_on_max_steps = false\n"
+        b"grace_step_on_max_steps = false\n"
+        b"stuck_max_failures = 5\nstuck_max_total = 2\n"
     )
     monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
     cfg = get_config()
     assert cfg.agent.wrap_up_on_max_steps is False
+    assert cfg.agent.grace_step_on_max_steps is False
     assert cfg.agent.stuck_max_failures == 5
     assert cfg.agent.stuck_max_total == 2
+
+
+# 功能：验证 SZTU_GRACE_STEP_ON_MAX_STEPS 环境变量可关闭结语宽限步
+# 设计：设 env=false，断言 get_config 读到 False；未设置时保持默认 True
+def test_grace_step_env_var_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SZTU_GRACE_STEP_ON_MAX_STEPS", "false")
+    cfg = get_config()
+    assert cfg.agent.grace_step_on_max_steps is False
+    monkeypatch.delenv("SZTU_GRACE_STEP_ON_MAX_STEPS")
+    cfg = get_config()
+    assert cfg.agent.grace_step_on_max_steps is True
+
+
+# 功能：验证 max_steps 默认值为 0（不限步数），TOML 显式写 0 也合法
+# 设计：无覆盖时默认 0；写 [agent] max_steps=0 不报错仍为 0（0 从"第 1 步即终止"改为"不限"）
+def test_max_steps_default_unlimited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SZTU_MAX_STEPS", raising=False)
+    cfg = get_config()
+    assert cfg.agent.max_steps == 0
+    toml_path = tmp_path / "sztu.toml"
+    toml_path.write_bytes(b"[agent]\nmax_steps = 0\n")
+    monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
+    cfg = get_config()
+    assert cfg.agent.max_steps == 0
+
+
+# 功能：验证 SZTU_MAX_STEPS 允许 0（不限），负数才报错
+# 设计：env=0 读到 0；env=-1 抛 SystemExit
+def test_max_steps_env_accepts_zero_rejects_negative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SZTU_MAX_STEPS", "0")
+    cfg = get_config()
+    assert cfg.agent.max_steps == 0
+    monkeypatch.setenv("SZTU_MAX_STEPS", "-1")
+    with pytest.raises(SystemExit):
+        get_config()
 
 
 # 功能：验证 SZTU_BUDGET_* 环境变量覆盖 budget 配置

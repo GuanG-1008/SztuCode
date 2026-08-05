@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-test("Chat portal exposes every tool page and its primary interactions", async ({ page }) => {
+// 通用问答入口暂时隐藏（App.vue chatEntryVisible=false），本测试依赖该入口进入 ChatPortal，
+// 恢复入口后删除 test.skip 即可
+test.skip("Chat portal exposes every tool page and its primary interactions", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
   await page.getByRole("button", { name: "更多", exact: true }).click();

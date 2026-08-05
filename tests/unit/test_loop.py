@@ -178,17 +178,35 @@ async def test_end_turn_marks_success() -> None:
     assert ctx.step == 1
 
 
-# 功能：验证达到 max_steps 时 loop 以 exceeded_max_steps 原因将 context 标记为 failed
-# 设计：设置 max_steps=2 + 无限 tool_use provider，同时验证 step 数量和失败原因，确认计数器与终止逻辑联动正确
-async def test_max_steps_marks_failed() -> None:
+# 功能：验证达到 max_steps 时 loop 以 exceeded_max_steps 原因将 context 标记为 interrupted
+# 设计：设置 max_steps=2 + 无限 tool_use provider，同时验证 step 数量和中断原因，确认计数器与终止逻辑联动正确
+async def test_max_steps_marks_interrupted() -> None:
     tc = _tc("unknown", {})
     provider = _MockProvider([LlmResponse(stop_reason="tool_use", tool_calls=[tc])] * 10)
     loop, _ = _make_loop(provider)
     ctx = _ctx(max_steps=2)
     await loop.run(ctx)
-    assert ctx.status == "failed"
+    assert ctx.status == "interrupted"
     assert ctx.reason == "exceeded_max_steps"
     assert ctx.step == 2
+
+
+# 功能：验证 max_steps=0 表示不限步数，run 一直走到 end_turn 才结束
+# 设计：max_steps=0 + 两步 tool_use 后 end_turn，断言 step 完整走完且 success
+#       （回归：此前 0 会被 step>=0 误判为第 1 步立即终止）
+async def test_max_steps_zero_means_unlimited() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="done"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=0)
+    loop = AgentLoop(provider, registry, EventBus(), wrap_up_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.status == "success"
+    assert ctx.step == 3
 
 
 # 功能：验证"调工具 → end_turn"的两步路径最终标记为 success
@@ -533,7 +551,7 @@ async def test_loop_background_already_done() -> None:
     assert "already done" in ctx.result
 
 
-# 功能：max_steps 触发失败时同样等待后台任务落定
+# 功能：max_steps 触发中断时同样等待后台任务落定
 # 设计：max_steps=1 + 阻塞后台任务，断言 loop 等后台结束才标记 exceeded_max_steps，摘要仍写入 result
 async def test_loop_max_steps_still_waits() -> None:
     gate = asyncio.Event()
@@ -558,7 +576,7 @@ async def test_loop_max_steps_still_waits() -> None:
 
     gate.set()
     await asyncio.wait_for(run_task, 2.0)
-    assert ctx.status == "failed"
+    assert ctx.status == "interrupted"
     assert ctx.reason == "exceeded_max_steps"
     assert "bg result" in ctx.result
 
@@ -577,9 +595,9 @@ async def test_loop_no_registry_no_wait() -> None:
 
 # ── token / 墙钟预算 ──────────────────────────────────────────────────────────
 
-# 功能：累计 token 超过 max_tokens 且 run 仍要继续时标记失败，不再发起额外 LLM 调用
-# 设计：provider 返回 tool_use（usage 超限），断言 reason=max_tokens_exceeded 且只调用 1 次 LLM
-async def test_token_budget_exceeds_marks_failed() -> None:
+# 功能：累计 token 超过 max_tokens 且 run 仍要继续时标记为 interrupted，不再发起额外 LLM 调用
+# 设计：provider 返回 tool_use（usage 超限），断言 status=interrupted、reason=max_tokens_exceeded 且只调用 1 次 LLM
+async def test_token_budget_exhaustion_marks_interrupted() -> None:
     tc = _tc("unknown", {})
     provider = _MockProvider([LlmResponse(
         stop_reason="tool_use", tool_calls=[tc], text="",
@@ -589,6 +607,7 @@ async def test_token_budget_exceeds_marks_failed() -> None:
     ctx.max_tokens = 50
     loop = AgentLoop(provider, ToolRegistry(), EventBus())
     await loop.run(ctx)
+    assert ctx.status == "interrupted"
     assert ctx.reason == "max_tokens_exceeded"
     assert ctx.step == 1
 
@@ -608,7 +627,7 @@ async def test_token_budget_end_turn_preserves_success() -> None:
 
 
 # 功能：墙钟超时后 run 立即终止且不发起任何 LLM 调用
-# 设计：started_at 设为 10 秒前、max_wall_clock_s=1，断言 step=0（未进入任何迭代）
+# 设计：started_at 设为 10 秒前、max_wall_clock_s=1，断言 status=interrupted、step=0（未进入任何迭代）
 async def test_wall_clock_exceeded_stops_without_llm_call() -> None:
     provider = _MockProvider([LlmResponse(stop_reason="end_turn", text="done")])
     ctx = _ctx()
@@ -616,6 +635,7 @@ async def test_wall_clock_exceeded_stops_without_llm_call() -> None:
     ctx.started_at = time.monotonic() - 10.0
     loop = AgentLoop(provider, ToolRegistry(), EventBus())
     await loop.run(ctx)
+    assert ctx.status == "interrupted"
     assert ctx.reason == "max_wall_clock_exceeded"
     assert ctx.step == 0
 
@@ -665,6 +685,99 @@ async def test_wrap_up_disabled_no_extra_call() -> None:
     ctx = _ctx(max_steps=2)
     loop = AgentLoop(provider, ToolRegistry(), EventBus(), wrap_up_on_max_steps=False)
     await loop.run(ctx)
+    assert ctx.reason == "exceeded_max_steps"
+
+
+# ── 结语宽限步 ────────────────────────────────────────────────────────────────
+
+# 功能：max_steps 边界最后一步工具成功时，结语回合给出 [COMPLETE] 则记为成功
+# 设计：max_steps=2 + 两步成功 echo + [COMPLETE] 结语，断言 status=success 且 result 去掉标记
+async def test_grace_step_completes_on_max_steps() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="[COMPLETE] all done"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "success"
+    assert ctx.reason is None
+    assert ctx.result == "all done"
+    assert ctx.step == 2
+
+
+# 功能：结语回合给出 [INCOMPLETE] 时标记为中断（可续跑），并保留剩余工作描述
+# 设计：最后一步工具成功 + [INCOMPLETE] 结语，断言 status=interrupted 且 result 含说明
+async def test_grace_step_incomplete_marks_interrupted() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="[INCOMPLETE] need one more step"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+    assert "need one more step" in ctx.result
+
+
+# 功能：最后一步工具失败时跳过结语宽限步，即使后续响应是完成标记
+# 设计：max_steps=2 + 两步失败工具 + [COMPLETE] 响应，断言仍为 interrupted，
+#       证明 has_errors 阻止了宽限步（若误触发会消费第三个响应并成功）
+async def test_grace_step_skipped_on_tool_error() -> None:
+    tc = _tc("fail", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="end_turn", text="[COMPLETE] done"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_FailTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus(), wrap_up_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+
+
+# 功能：关闭结语宽限步时回退到原收尾回合路径，不因工具成功而升级为 success
+# 设计：grace_step_on_max_steps=False + 成功工具，断言走收尾总结并标记 interrupted
+async def test_grace_step_disabled_falls_back_to_wrap_up() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="progress summary"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus(), grace_step_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+    assert "progress summary" in ctx.result
+
+
+# 功能：结语回合未以 end_turn 结束（输出截断）时不视为完成
+# 设计：结语返回 max_tokens，断言标记 interrupted 且保留截断文本
+async def test_grace_step_non_end_turn_marks_interrupted() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="max_tokens", text="partial"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
     assert ctx.reason == "exceeded_max_steps"
 
 

@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import {
   Activity, Check, CheckCircle2, ChevronDown, CircleAlert, FileDiff,
-  LoaderCircle, ShieldAlert, TestTube2,
+  LoaderCircle, PauseCircle, Play, ShieldAlert, TestTube2,
 } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
 import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
@@ -17,9 +17,10 @@ defineEmits<{
   decide: [toolUseId: string, decision: PermissionDecision];
   reverted: [runId: string];
   review: [ctx: { workspaceId: string; runId: string; paths: string[] }];
+  continue: [runId?: string];
 }>();
 
-type TurnState = "running" | "waiting" | "verified" | "unverified" | "failed";
+type TurnState = "running" | "waiting" | "verified" | "unverified" | "failed" | "interrupted";
 type TurnView = {
   key: string | number;
   runId?: string;
@@ -92,10 +93,16 @@ function actionLabel(call: ToolCallEntry): string {
 function failureLabel(reason?: string): string {
   if (!reason) return "执行失败，详情见工作记录";
   if (reason === "cancelled") return "任务已取消";
-  if (reason === "exceeded_max_steps") return "已达到最大步骤数";
   if (reason === "llm_error") return "模型调用失败";
   if (reason === "permission_denied") return "操作被权限策略拦截";
   return `执行失败：${reason}`;
+}
+
+// 中断（预算/上限耗尽）状态文案：区别于失败，明确告知可续跑
+function interruptedLabel(reason?: string): string {
+  if (reason === "max_tokens_exceeded") return "Token 预算用尽，可继续";
+  if (reason === "max_wall_clock_exceeded") return "墙钟预算用尽，可继续";
+  return "步数预算用尽，可继续";
 }
 
 // 将 ISO 时间戳格式化为可读的本地时间，空值返回空串
@@ -108,6 +115,8 @@ function formatTime(iso?: string): string {
 
 function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, calls: ToolCallEntry[], text: string) {
   if (pending) return { state: "waiting" as const, label: "等待你的授权" };
+  const interruptedOutcome = [...steps].reverse().find((step) => step.outcome?.status === "interrupted")?.outcome;
+  if (interruptedOutcome) return { state: "interrupted" as const, label: interruptedLabel(interruptedOutcome.reason), reason: interruptedOutcome.reason };
   const failedOutcome = [...steps].reverse().find((step) => step.outcome?.status === "failed")?.outcome;
   if (failedOutcome) return { state: "failed" as const, label: failureLabel(failedOutcome.reason), reason: failedOutcome.reason };
   const runningCall = [...calls].reverse().find((call) => call.status === "running" || call.status === "awaiting_permission");
@@ -189,6 +198,7 @@ const turns = computed<TurnView[]>(() => {
         <span class="assistant-avatar" :class="turn.state" aria-label="SztuCode">
           <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="15" />
           <ShieldAlert v-else-if="turn.state === 'waiting'" :size="15" />
+          <PauseCircle v-else-if="turn.state === 'interrupted'" :size="15" />
           <CircleAlert v-else-if="turn.state === 'failed'" :size="15" />
           <Check v-else :size="15" />
         </span>
@@ -234,6 +244,10 @@ const turns = computed<TurnView[]>(() => {
               <ThinkingPanel v-if="turn.thinkingText" :text="turn.thinkingText" :completed="turn.state !== 'running'" />
             </div>
           </details>
+
+          <button v-if="turn.state === 'interrupted'" class="continue-button" type="button" @click="$emit('continue', turn.runId)">
+            <Play :size="14" />继续执行
+          </button>
         </div>
       </div>
     </article>

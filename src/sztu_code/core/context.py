@@ -20,7 +20,7 @@ class ExecutionContext:
     base_system_prompt: str = ""  # 分层基础提示词（runner 构建），空则回退默认
     messages: list[dict[str, Any]] = field(default_factory=list)
     step: int = 0
-    status: str = "running"  # "running" | "success" | "failed"
+    status: str = "running"  # "running" | "success" | "failed" | "interrupted"
     reason: str | None = None
     result: str = ""
     # skill 或 subagent 角色可覆盖默认 system prompt
@@ -109,6 +109,11 @@ class ExecutionContext:
     # 将 run 标记为失败并记录原因
     def mark_failed(self, reason: str) -> None:
         self.status = "failed"
+        self.reason = reason
+
+    # 将 run 标记为中断（预算/上限耗尽但可续跑），区别于真正的失败
+    def mark_interrupted(self, reason: str) -> None:
+        self.status = "interrupted"
         self.reason = reason
 
     # 返回累计 token 总数（input + output）

@@ -86,8 +86,9 @@ file = "~/.sztu/logs/core.log"
 format = "text"
 
 [agent]
-max_steps = 20
+max_steps = 0          # 0 = 不限步数（预算驱动）；到达上限时标 interrupted 而非 failed，可续跑
 wrap_up_on_max_steps = true
+grace_step_on_max_steps = true
 stuck_max_failures = 3
 stuck_max_total = 0
 

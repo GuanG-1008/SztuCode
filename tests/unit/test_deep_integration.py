@@ -143,12 +143,17 @@ class TestStepLimit:
         ])
         registry = ToolRegistry()
         registry.register(_EchoTool())
-        # 关闭收尾回合：本测试隔离验证 max_steps 语义，避免收尾多一次调用干扰计数
-        loop = AgentLoop(provider, registry, EventBus(), wrap_up_on_max_steps=False)
+        # 关闭收尾回合与结语宽限步：本测试隔离验证 max_steps 语义，
+        # 避免收尾/结语各多一次调用干扰计数
+        loop = AgentLoop(
+            provider, registry, EventBus(),
+            wrap_up_on_max_steps=False,
+            grace_step_on_max_steps=False,
+        )
         ctx = _ctx(max_steps=1)
         await loop.run(ctx)
         assert ctx.step == 1
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         assert provider.call_count == 1
 
@@ -234,7 +239,7 @@ class TestStepLimit:
         loop = AgentLoop(provider, ToolRegistry(), EventBus(), wrap_up_on_max_steps=False)
         ctx = _ctx(max_steps=3)
         await loop.run(ctx)
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         assert provider.call_count == 3
 
@@ -669,7 +674,7 @@ class TestStepLimitWithPermissions:
         ctx = _ctx(max_steps=3)
         await loop.run(ctx)
 
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         assert ctx.step == 3
         # 3 步全部被拒
@@ -697,7 +702,7 @@ class TestStepLimitWithPermissions:
         ctx = _ctx(max_steps=5)
         await loop.run(ctx)
 
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         # call_count 应等于 max_steps（注入不额外消耗 API 调用）
         # 注入消息是直接 append 到 messages，不通过 LLM

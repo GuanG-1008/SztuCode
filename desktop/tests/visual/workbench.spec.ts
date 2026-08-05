@@ -185,7 +185,8 @@ test("new task, keyboard shortcut, and more tools remain interactive", async ({ 
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("button", { name: "浏览器连接", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "通用问答", exact: true })).toBeVisible();
+  // 通用问答入口暂时隐藏（App.vue chatEntryVisible=false），恢复后改回 toBeVisible
+  await expect(page.getByRole("button", { name: "通用问答", exact: true })).not.toBeVisible();
   await expect(page).toHaveScreenshot("sidebar-more-tools-1280.png", { fullPage: true });
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await expect(page.getByRole("button", { name: "浏览器连接", exact: true })).toBeHidden();
