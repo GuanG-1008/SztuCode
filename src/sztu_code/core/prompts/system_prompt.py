@@ -77,7 +77,17 @@ TOOL_GUIDE = (
     "the exact same failing call."
 )
 
-_STATIC_SECTIONS = (INTRO, SYSTEM_RULES, DOING_TASKS, ACTIONS, TOOL_GUIDE)
+WORK_PROTOCOL = (
+    "# Work protocol\n"
+    " - The environment is provisioned: install/update commands are blocked and will fail. "
+    "Never attempt pip/npm/apt/brew/conda/ensurepip.\n"
+    " - Finish by verifying: if a test or command can confirm your work, run it. Stop as "
+    "soon as the stated completion criterion is met — do not keep refining.\n"
+    " - Prefer a small, focused fix. If an approach fails a few times, re-plan instead of "
+    "retrying the same call with different wording."
+)
+
+_STATIC_SECTIONS = (INTRO, SYSTEM_RULES, DOING_TASKS, ACTIONS, TOOL_GUIDE, WORK_PROTOCOL)
 
 
 # 在指定目录执行 git 命令，失败或非 git 目录返回空字符串

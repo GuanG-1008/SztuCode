@@ -92,3 +92,23 @@ def test_preprocess_windows_commands() -> None:
     assert _preprocess_command(r"grep '\d+' file") == r"grep '\d+' file"
     # cd 不带 /d 不受影响
     assert _preprocess_command("cd src && ls") == "cd src && ls"
+
+
+# 功能：验证安装/更新依赖命令被 bash 工具直接拦截不执行
+# 设计：pip/npm/apt/ensurepip 等命令应返回 is_error 且内容含 blocked，不触发子进程
+async def test_install_commands_blocked() -> None:
+    from sztu_code.core.tools.builtin.bash import _BLOCKED_INSTALL_RE, BashTool
+
+    assert _BLOCKED_INSTALL_RE.search("pip install requests")
+    assert _BLOCKED_INSTALL_RE.search("python -m pip install -e .")
+    assert _BLOCKED_INSTALL_RE.search("npm install")
+    assert _BLOCKED_INSTALL_RE.search("apt-get update && apt-get install curl")
+    assert _BLOCKED_INSTALL_RE.search("ensurepip")
+    assert _BLOCKED_INSTALL_RE.search("conda install numpy")
+    assert not _BLOCKED_INSTALL_RE.search("git status")
+    assert not _BLOCKED_INSTALL_RE.search("pytest tests/foo.py")
+    assert not _BLOCKED_INSTALL_RE.search("echo hello world")
+
+    result = await BashTool().invoke({"command": "pip install requests"})
+    assert result.is_error
+    assert "blocked" in result.content.lower()

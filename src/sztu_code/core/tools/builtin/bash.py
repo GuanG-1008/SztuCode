@@ -41,6 +41,25 @@ _DANGEROUS_PATH_PATTERNS: list[str] = [
 ]
 _DANGEROUS_RE: list[re.Pattern[str]] = [re.compile(p) for p in _DANGEROUS_PATH_PATTERNS]
 
+# 环境安装命令——直接拦截：环境已就绪，安装必然失败且烧掉大量步骤
+_BLOCKED_INSTALL_RE = re.compile(
+    r"(^|;|&&|\|\|)\s*(?:"
+    r"python(\d|3)?\s+-m\s+pip\s+install|"
+    r"pip(\d|3)?\s+install|"
+    r"uv\s+pip\s+install|"
+    r"pipenv\s+install|"
+    r"poetry\s+install|"
+    r"npm\s+(?:install|i|add)\b|"
+    r"yarn\s+(?:install|add)\b|"
+    r"pnpm\s+(?:install|add)\b|"
+    r"apt(-get)?\s+(?:install|update)|"
+    r"brew\s+install|"
+    r"conda\s+install|"
+    r"python(\d|3)?\s+-m\s+ensurepip|"
+    r"ensurepip"
+    r")(?=\s|$)"
+)
+
 
 def _extract_cmd_name(command: str) -> str:
     """提取命令的第一个单词（去除路径前缀和引号）"""
@@ -114,6 +133,18 @@ class BashTool(BaseTool):
         p = BashParams.model_validate(params)
         command = _preprocess_command(p.command)
         timeout = p.timeout
+
+        # 安装/更新依赖命令直接拦截，不执行：环境已就绪，安装必然失败并浪费步骤
+        if _BLOCKED_INSTALL_RE.search(command):
+            return ToolResult(
+                content=(
+                    "[blocked] Installing/updating packages is not allowed in this "
+                    "environment — dependencies are already provisioned. Do not run "
+                    "install/update commands; use the existing packages directly."
+                ),
+                is_error=True,
+                error_type="runtime_error",
+            )
 
         try:
             proc = await asyncio.create_subprocess_shell(
