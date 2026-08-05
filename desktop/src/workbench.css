@@ -17,7 +17,8 @@
   width: 100%;
   max-width: none;
   margin: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .task-conversation > .kimi-composer {

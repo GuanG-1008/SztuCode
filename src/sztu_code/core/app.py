@@ -141,18 +141,6 @@ from sztu_code.core.workspace.manager import Workspace
 
 logger = logging.getLogger(__name__)
 
-_CAMPUS_DEEPSEEK_PROFILE: dict[str, Any] = {
-    "id": "builtin-campus-deepseek-v4-pro",
-    "name": "DeepSeek V4 Pro(校园网)",
-    "vendor": "深圳技术大学",
-    "provider": "openai",
-    "model": "deepseek-v4-pro",
-    "base_url": "https://apiai.sztu.edu.cn/v1",
-    "api_key": "",
-    "api_key_env": "SZTU_CAMPUS_DEEPSEEK_API_KEY",
-    "builtin": True,
-}
-
 # opencode Zen 免费模型（免 key，OpenAI 兼容端点）内置 profile
 _OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
 _OPENCODE_ZEN_FREE_MODELS: list[str] = [
@@ -708,12 +696,9 @@ class CoreApp:
                     "api_key": self._config.llm.api_key,
                 }
             ]
-        # 过滤掉所有内置 profile（校园网 + opencode Zen），再统一追加，保证定义唯一
-        builtin_ids = {_CAMPUS_DEEPSEEK_PROFILE["id"]} | {
-            p["id"] for p in _OPENCODE_ZEN_PROFILES
-        }
+        # 过滤掉所有内置 profile，再统一追加，保证定义唯一
+        builtin_ids = {p["id"] for p in _OPENCODE_ZEN_PROFILES}
         profiles = [item for item in profiles if item.get("id") not in builtin_ids]
-        profiles.append(dict(_CAMPUS_DEEPSEEK_PROFILE))
         profiles.extend(dict(p) for p in _OPENCODE_ZEN_PROFILES)
         return profiles, active_id
 

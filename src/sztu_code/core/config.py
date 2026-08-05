@@ -17,6 +17,9 @@ _DEFAULT_LOG_FORMAT = "text"
 _DEFAULT_CONFIG_PATH = "~/.sztu/config.toml"
 _DEFAULT_CLIENT_SETTINGS_PATH = "~/.sztu/client-settings.json"
 _DEFAULT_MAX_STEPS = 20
+_DEFAULT_WRAP_UP_ON_MAX_STEPS = True
+_DEFAULT_STUCK_MAX_FAILURES = 3
+_DEFAULT_STUCK_MAX_TOTAL = 0
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
 
 
@@ -30,6 +33,20 @@ class LoggingConfig:
 @dataclass
 class AgentConfig:
     max_steps: int = _DEFAULT_MAX_STEPS
+    # max_steps 到达前给一次总结回合，避免裸失败
+    wrap_up_on_max_steps: bool = _DEFAULT_WRAP_UP_ON_MAX_STEPS
+    # 同一操作连续失败达到该次数触发软干预；0=关闭
+    stuck_max_failures: int = _DEFAULT_STUCK_MAX_FAILURES
+    # 累计干预达到该次数硬停；0=永不硬停
+    stuck_max_total: int = _DEFAULT_STUCK_MAX_TOTAL
+
+
+@dataclass
+class BudgetConfig:
+    # 本 run 累计 input+output tokens 上限；0=不限
+    max_tokens: int = 0
+    # 本 run 累计墙钟秒数上限；0=不限
+    max_wall_clock_s: int = 0
 
 
 @dataclass
@@ -101,6 +118,7 @@ class SztuConfig:
     permission: PermissionConfig = field(default_factory=PermissionConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     offload: OffloadConfig = field(default_factory=OffloadConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
 
 
@@ -172,6 +190,9 @@ def _apply_client_settings(config: SztuConfig) -> None:
         config.llm.api_key = value["api_key"]
     if isinstance(value.get("api_key_env"), str):
         config.llm.api_key_env = value["api_key_env"]
+    # 免 key 标志持久化：重启后仍能正确识别 Zen 等免 key 端点，避免泄漏环境里的通用 key
+    if isinstance(value.get("keyless"), bool):
+        config.llm.keyless = value["keyless"]
 
 
 def load_model_profiles() -> tuple[list[dict[str, Any]], str]:
@@ -204,6 +225,7 @@ def save_client_settings(
             "base_url": config.llm.base_url,
             "api_key": config.llm.api_key,
             "api_key_env": config.llm.api_key_env,
+            "keyless": config.llm.keyless,
         }
     )
     if models is not None:
@@ -233,6 +255,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         "permission",
         "compaction",
         "offload",
+        "budget",
         "mcp",
     }
     if unknown:
@@ -274,7 +297,9 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         agent = data["agent"]
         if not isinstance(agent, dict):
             raise SystemExit("Config error: [agent] must be a table")
-        unknown_agent: set[str] = set(agent.keys()) - {"max_steps"}
+        unknown_agent: set[str] = set(agent.keys()) - {
+            "max_steps", "wrap_up_on_max_steps", "stuck_max_failures", "stuck_max_total",
+        }
         if unknown_agent:
             raise SystemExit(f"Unknown [agent] keys: {', '.join(sorted(unknown_agent))}")
         if "max_steps" in agent:
@@ -282,6 +307,31 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, int) or val <= 0:
                 raise SystemExit("Config error: agent.max_steps must be a positive integer")
             config.agent.max_steps = val
+        if "wrap_up_on_max_steps" in agent:
+            val = agent["wrap_up_on_max_steps"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: agent.wrap_up_on_max_steps must be a boolean")
+            config.agent.wrap_up_on_max_steps = val
+        for _key in ("stuck_max_failures", "stuck_max_total"):
+            if _key in agent:
+                val = agent[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(f"Config error: agent.{_key} must be a non-negative integer")
+                setattr(config.agent, _key, val)
+
+    if "budget" in data:
+        budget = data["budget"]
+        if not isinstance(budget, dict):
+            raise SystemExit("Config error: [budget] must be a table")
+        unknown_budget: set[str] = set(budget.keys()) - {"max_tokens", "max_wall_clock_s"}
+        if unknown_budget:
+            raise SystemExit(f"Unknown [budget] keys: {', '.join(sorted(unknown_budget))}")
+        for _key in ("max_tokens", "max_wall_clock_s"):
+            if _key in budget:
+                val = budget[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(f"Config error: budget.{_key} must be a non-negative integer")
+                setattr(config.budget, _key, val)
 
     if "llm" in data:
         llm = data["llm"]
@@ -517,6 +567,28 @@ def _apply_env(config: SztuConfig) -> None:
                 f"Config error: SZTU_MAX_STEPS must be an integer, got: {max_steps_str!r}"
             )
 
+    # wrap-up / stuck-loop 环境变量
+    wrap_up_str = os.environ.get("SZTU_WRAP_UP_ON_MAX_STEPS")
+    if wrap_up_str is not None:
+        config.agent.wrap_up_on_max_steps = wrap_up_str.lower() not in ("0", "false", "no")
+    for _env, _attr in (
+        ("SZTU_STUCK_MAX_FAILURES", "stuck_max_failures"),
+        ("SZTU_STUCK_MAX_TOTAL", "stuck_max_total"),
+    ):
+        _str = os.environ.get(_env)
+        if _str is not None:
+            try:
+                val = int(_str)
+                if val < 0:
+                    raise SystemExit(
+                        f"Config error: {_env} must be a non-negative integer, got: {_str!r}"
+                    )
+                setattr(config.agent, _attr, val)
+            except ValueError:
+                raise SystemExit(
+                    f"Config error: {_env} must be an integer, got: {_str!r}"
+                )
+
     llm_provider = os.environ.get("SZTU_LLM_PROVIDER")
     if llm_provider is not None:
         if llm_provider not in ("anthropic", "openai"):
@@ -666,3 +738,22 @@ def _apply_env(config: SztuConfig) -> None:
                 "Config error: SZTU_OFFLOAD_MIN_LINES must be an integer, "
                 f"got: {offload_min_lines!r}"
             )
+
+    # --- 运行预算环境变量 ---
+    for _env, _attr in (
+        ("SZTU_BUDGET_MAX_TOKENS", "max_tokens"),
+        ("SZTU_BUDGET_MAX_WALL_CLOCK_S", "max_wall_clock_s"),
+    ):
+        _str = os.environ.get(_env)
+        if _str is not None:
+            try:
+                val = int(_str)
+                if val < 0:
+                    raise SystemExit(
+                        f"Config error: {_env} must be a non-negative integer, got: {_str!r}"
+                    )
+                setattr(config.budget, _attr, val)
+            except ValueError:
+                raise SystemExit(
+                    f"Config error: {_env} must be an integer, got: {_str!r}"
+                )

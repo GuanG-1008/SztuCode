@@ -24,6 +24,9 @@ class RunFinishedEvent(BaseModel):
     status: str  # "success" | "failed"
     reason: str | None = None  # "exceeded_max_steps" | "cancelled" | "llm_error" | ...
     steps: int
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    elapsed_s: float = 0.0
     ts: str
 
 
@@ -205,6 +208,16 @@ class DenialInterventionEvent(BaseModel):
     ts: str
 
 
+class StuckLoopEvent(BaseModel):
+    type: Literal["stuck.loop"] = "stuck.loop"
+    run_id: str
+    signature: str  # 触发干预/硬停的工具签名（tool_name:key）
+    consecutive_count: int
+    total_interventions: int
+    message: str  # 注入给 LLM 的干预消息
+    ts: str
+
+
 class PermissionModeChangedEvent(BaseModel):
     type: Literal["permission.mode_changed"] = "permission.mode_changed"
     old_mode: str
@@ -291,6 +304,7 @@ Event = Annotated[
     | ContextCompactingEvent
     | ContextCompactedEvent
     | DenialInterventionEvent
+    | StuckLoopEvent
     | PermissionRequestedEvent
     | PermissionGrantedEvent
     | PermissionDeniedEvent

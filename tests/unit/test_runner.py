@@ -240,10 +240,12 @@ async def test_extra_handlers_receive_events(tmp_path: Path) -> None:
 
 
 # 功能：验证 config.agent.max_steps 被正确传递给 AgentLoop，控制 LLM 调用次数上限
-# 设计：用 LoopingProvider 的调用次数反推 max_steps 是否生效，不依赖内部状态检查，从行为角度验证配置传递
+# 设计：用 LoopingProvider 的调用次数反推 max_steps 是否生效；关闭收尾回合，避免其多一次调用干扰步数计数
 async def test_config_max_steps_passed_to_loop(tmp_path: Path) -> None:
     provider = _LoopingProvider()
-    await _run(provider=provider, config=_config(max_steps=3), tmp_path=tmp_path)
+    config = _config(max_steps=3)
+    config.agent.wrap_up_on_max_steps = False
+    await _run(provider=provider, config=config, tmp_path=tmp_path)
     assert provider._call == 3
 
 

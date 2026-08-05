@@ -21,3 +21,5 @@ allowed_tools = [
     "task_list",
     "task_get",
 ]
+# 只读探索，步数需求小
+max_steps = 10

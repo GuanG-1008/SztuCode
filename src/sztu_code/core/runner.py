@@ -24,6 +24,7 @@ from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.runs import RUNS_DIR, new_run_id
 from sztu_code.core.session.model import Session
 from sztu_code.core.session.store import SessionStore
+from sztu_code.core.stuck_tracker import StuckLoopTracker
 from sztu_code.core.subagent.registry import BackgroundTaskRegistry
 from sztu_code.core.subagent.tool import AgentResultTool, SpawnAgentTool
 from sztu_code.core.task.manager import TaskManager
@@ -149,6 +150,10 @@ class AgentRunner:
                         parent_context=parent_context,
                         session=session,
                         store=store,
+                        budget=self._config.budget,
+                        wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                        stuck_max_failures=self._config.agent.stuck_max_failures,
+                        stuck_max_total=self._config.agent.stuck_max_total,
                     )
                 )
             if _ok("agent_result"):
@@ -216,6 +221,8 @@ class AgentRunner:
             project_context=project_ctx,
             base_system_prompt=base_prompt,
             system_prompt_override=system_prompt_override,
+            max_tokens=self._config.budget.max_tokens,
+            max_wall_clock_s=self._config.budget.max_wall_clock_s,
         )
         prefill_len = len(history)
         compactor = None  # 在 try 块外初始化，避免 UnboundLocalError
@@ -284,6 +291,11 @@ class AgentRunner:
                     session_id=session_id_str,
                     task_registry=self._task_registry,
                     offload_manager=offload_manager,
+                    wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                    stuck_tracker=StuckLoopTracker(
+                        max_failures=self._config.agent.stuck_max_failures,
+                        max_total=self._config.agent.stuck_max_total,
+                    ),
                 )
                 await loop.run(context)
             except asyncio.CancelledError:
@@ -314,6 +326,9 @@ class AgentRunner:
                     status=context.status,
                     reason=context.reason,
                     steps=context.step,
+                    total_input_tokens=context.total_input_tokens,
+                    total_output_tokens=context.total_output_tokens,
+                    elapsed_s=context.elapsed_s(),
                     ts=_now(),
                 )
             )

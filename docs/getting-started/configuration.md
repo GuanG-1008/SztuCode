@@ -37,16 +37,6 @@ OPENAI_API_KEY=<your-api-key>
 OPENAI_BASE_URL=https://api.example.com
 ```
 
-### DeepSeek V4 Pro（校园网）
-
-桌面端模型选择器内置 `DeepSeek V4 Pro(校园网)`。在本机 `.env` 中配置：
-
-```dotenv
-SZTU_CAMPUS_DEEPSEEK_API_KEY=<your-campus-api-key>
-```
-
-该选项固定使用 `deepseek-v4-pro` 和 `https://apiai.sztu.edu.cn/v1`，仅在校园网或已连接学校 VPN 时可用。
-
 opencode Zen 免费模型（**免 key**，OpenAI 兼容端点 `https://opencode.ai/zen/v1`）：
 
 ```dotenv
@@ -97,6 +87,13 @@ format = "text"
 
 [agent]
 max_steps = 20
+wrap_up_on_max_steps = true
+stuck_max_failures = 3
+stuck_max_total = 0
+
+[budget]
+max_tokens = 0
+max_wall_clock_s = 0
 
 [llm]
 provider = "anthropic"

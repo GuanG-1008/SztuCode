@@ -24,3 +24,5 @@ allowed_tools = [
 ]
 # 纵深防御：即便幻觉调用写/执行工具，也在权限层被拒绝
 permission_mode = "plan"
+# 规划任务步数适中
+max_steps = 15

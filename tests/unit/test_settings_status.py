@@ -134,35 +134,30 @@ async def test_model_profiles_save_select_and_delete_without_exposing_keys(
     assert first_id in [item.id for item in deleted.models]
 
 
-# 功能：验证校园 DeepSeek 内置模型出现在列表中并读取专用环境变量凭证
+# 功能：验证 opencode Zen 内置免 key 模型出现在列表中且无需凭证即可就绪
 # 设计：使用临时客户端配置隔离用户状态，选择内置项后检查模型、端点和就绪状态
-async def test_campus_deepseek_builtin_profile_uses_environment_key(
+async def test_zen_builtin_profile_keyless(
     tmp_path, monkeypatch,
 ) -> None:
     monkeypatch.setenv("SZTU_CLIENT_SETTINGS", str(tmp_path / "client-settings.json"))
-    monkeypatch.setenv("SZTU_CAMPUS_DEEPSEEK_API_KEY", "campus-secret")
     app = _configured_app()
 
     listed = await app._model_profile_list_handler({})
-    campus = next(item for item in listed.models if item.id == "builtin-campus-deepseek-v4-pro")
-    assert campus.name == "DeepSeek V4 Pro(校园网)"
-    assert campus.model == "deepseek-v4-pro"
-    assert campus.base_url == "https://apiai.sztu.edu.cn/v1"
-    assert campus.has_api_key is True
-    assert campus.builtin is True
+    zen = next(
+        item for item in listed.models
+        if item.id == "builtin-opencode-zen-deepseek-v4-flash-free"
+    )
+    assert zen.model == "deepseek-v4-flash-free"
+    assert zen.base_url == "https://opencode.ai/zen/v1"
+    assert zen.has_api_key is True  # 免 key 端点视为可用
+    assert zen.builtin is True
 
-    selected = await app._model_profile_select_handler({"model_id": campus.id})
+    selected = await app._model_profile_select_handler({"model_id": zen.id})
     status = await app._provider_status_handler({})
     assert selected.settings.provider == "openai"
-    assert selected.settings.model == "deepseek-v4-pro"
-    assert selected.settings.base_url == "https://apiai.sztu.edu.cn/v1"
+    assert selected.settings.model == "deepseek-v4-flash-free"
+    assert selected.settings.base_url == "https://opencode.ai/zen/v1"
     assert status.ready_for_next_run is True
-    assert "campus-secret" not in str(selected.model_dump())
 
     with pytest.raises(HandlerError):
-        await app._model_profile_delete_handler({"model_id": campus.id})
-
-    monkeypatch.delenv("SZTU_CAMPUS_DEEPSEEK_API_KEY")
-    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-secret")
-    missing_campus_key = await app._provider_status_handler({})
-    assert missing_campus_key.ready_for_next_run is False
+        await app._model_profile_delete_handler({"model_id": zen.id})

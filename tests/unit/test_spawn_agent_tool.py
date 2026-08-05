@@ -375,3 +375,67 @@ async def test_foreground_child_waits_for_grandchild(tmp_path: Path) -> None:
     assert not result.is_error
     assert "grandchild done" in result.content
     assert "[subagent" in result.content
+
+
+# 功能：角色 profile 的 max_steps 覆盖子 agent 的步数上限
+# 设计：monkeypatch _profile_loader.load 返回 max_steps=2 的 profile，捕获 child context 断言
+async def test_profile_max_steps_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sztu_code.core.agents.loader import AgentProfile
+
+    captured: list[ExecutionContext] = []
+
+    async def fake_run(self: Any, context: ExecutionContext) -> None:
+        captured.append(context)
+        context.mark_success()
+
+    monkeypatch.setattr("sztu_code.core.subagent.tool.AgentLoop.run", fake_run)
+    monkeypatch.setattr(
+        "sztu_code.core.subagent.tool._profile_loader.load",
+        lambda name: AgentProfile(name=name, description="", system_prompt="", max_steps=2),
+    )
+    tool, _, _ = _make_tool(tmp_path)
+    await tool.invoke({"description": "任务", "prompt": "干活"})
+    assert captured[0].max_steps == 2
+
+
+# 功能：budget 配置透传到子 agent context
+# 设计：构造 SpawnAgentTool 时传 budget，捕获 child context 断言 max_tokens/max_wall_clock_s
+async def test_budget_fields_propagate_to_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sztu_code.core.config import BudgetConfig
+
+    captured: list[ExecutionContext] = []
+
+    async def fake_run(self: Any, context: ExecutionContext) -> None:
+        captured.append(context)
+        context.mark_success()
+
+    monkeypatch.setattr("sztu_code.core.subagent.tool.AgentLoop.run", fake_run)
+    tool, _, _ = _make_tool(tmp_path)
+    tool._budget = BudgetConfig(max_tokens=500, max_wall_clock_s=30)
+    await tool.invoke({"description": "任务", "prompt": "干活"})
+    assert captured[0].max_tokens == 500
+    assert captured[0].max_wall_clock_s == 30
+
+
+# 功能：嵌套 spawn 继承解析后的 child_max_steps，而非父传入的固定值
+# 设计：profile max_steps=2、父 max_steps=5，spy SpawnAgentTool.__init__ 断言嵌套传 2
+async def test_nested_spawn_inherits_resolved_max_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sztu_code.core.agents.loader import AgentProfile
+
+    captured_steps: list[Any] = []
+    orig_init = SpawnAgentTool.__init__
+
+    def spy_init(self: SpawnAgentTool, *args: Any, **kwargs: Any) -> None:
+        captured_steps.append(kwargs.get("max_steps"))
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr("sztu_code.core.subagent.tool.SpawnAgentTool.__init__", spy_init)
+    monkeypatch.setattr(
+        "sztu_code.core.subagent.tool._profile_loader.load",
+        lambda name: AgentProfile(name=name, description="", system_prompt="", max_steps=2),
+    )
+    tool, _, _ = _make_tool(tmp_path)
+    await tool.invoke({"description": "任务", "prompt": "干活"})
+    assert 2 in captured_steps  # 嵌套 spawn 的 max_steps 用解析后的 child_max_steps

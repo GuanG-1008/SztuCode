@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +30,12 @@ class ExecutionContext:
     compacted: bool = False
     # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，注入 system prompt
     canvas: TaskCanvas | None = None
+    # ---- agent run 预算 ----
+    max_tokens: int = 0           # 累计 input+output tokens 上限；0=不限
+    max_wall_clock_s: int = 0     # 累计墙钟秒数上限；0=不限
+    total_input_tokens: int = 0   # 已累计 input tokens（每步 LLM 调用后累加）
+    total_output_tokens: int = 0  # 已累计 output tokens
+    started_at: float = 0.0       # run 开始墙钟（time.monotonic()），loop 惰性初始化
 
     # 初始化消息历史，优先使用 session 完整回放内容
     def __post_init__(self) -> None:
@@ -103,3 +110,23 @@ class ExecutionContext:
     def mark_failed(self, reason: str) -> None:
         self.status = "failed"
         self.reason = reason
+
+    # 返回累计 token 总数（input + output）
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+    # 返回 token 预算是否已耗尽；max_tokens=0 视为不限
+    def token_budget_exhausted(self) -> bool:
+        return self.max_tokens > 0 and self.total_tokens() >= self.max_tokens
+
+    # 返回 run 已运行的墙钟秒数；started_at 未初始化时返回 0
+    def elapsed_s(self) -> float:
+        return time.monotonic() - self.started_at if self.started_at > 0 else 0.0
+
+    # 返回墙钟预算是否已超时；max_wall_clock_s=0 视为不限
+    def wall_clock_exceeded(self) -> bool:
+        return (
+            self.max_wall_clock_s > 0
+            and self.started_at > 0
+            and self.elapsed_s() >= self.max_wall_clock_s
+        )
