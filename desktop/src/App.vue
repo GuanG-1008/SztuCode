@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   AlertTriangle, Archive, ArrowLeft, BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
-  Globe2, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
+  Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
+import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
+import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
 import DiffReview from "./components/Diff/DiffReview.vue";
@@ -28,10 +30,19 @@ type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
 type RuntimeEvent = Record<string, unknown>;
 const FULL_SIDEBAR_MIN_WIDTH = 952;
 const FULL_SIDEBAR_MIN_HEIGHT = 640;
+const SIDEBAR_MIN_WIDTH = 224;
+const SIDEBAR_MAX_WIDTH = 360;
+const SIDEBAR_COLLAPSE_PULL = 48;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
 const sidebarCollapsed = ref(window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT);
 let sidebarAutoCollapsed = sidebarCollapsed.value;
+const storedSidebarWidth = Number(localStorage.getItem("sztu.sidebarWidth"));
+const sidebarWidth = ref(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, storedSidebarWidth || 268)));
+const sidebarResizing = ref(false);
+const sidebarCollapseArmed = ref(false);
+const sidebarPull = ref(0);
+let stopSidebarDragListeners: (() => void) | undefined;
 const connected = ref(false);
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
@@ -84,6 +95,7 @@ const ccswitchLoading = ref(false);
 const ccswitchApplying = ref<string | null>(null);
 const ccswitchError = ref("");
 const ccswitchProviders = ref<CcswitchProvider[]>([]);
+const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
 const activeWorkspace = computed(() => workspaces.value.find((item) => item.workspace_id === active.value?.workspace_id) ?? workspace.value);
@@ -687,8 +699,11 @@ async function confirmFullAccess() {
   await applyPermissionMode("auto");
   if (!permissionSettingsError.value) permissionConfirmOpen.value = false;
 }
-async function chooseModel(event: Event) { const model = (event.target as HTMLInputElement).value.trim(); if (!model) return; const result = await setRuntimeSettings({ model }); if (result) runtimeSettings.value = result; }
-async function chooseProvider(event: Event) { const provider = (event.target as HTMLSelectElement).value as RuntimeSettings["provider"]; const result = await setRuntimeSettings({ provider }); if (result) runtimeSettings.value = result; }
+function handleModelConfigUpdated(settings: RuntimeSettings, status: ProviderStatus | null) {
+  runtimeSettings.value = settings;
+  providerStatus.value = status;
+}
+function openModelManager() { modelManagerOpen.value = true; }
 // 加载本机 cc-switch 中可导入的供应商列表并展开面板
 async function loadCcswitchProviders() {
   ccswitchLoading.value = true;
@@ -724,6 +739,56 @@ async function closeWindow() { await getCurrentWindow().close(); }
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
   sidebarAutoCollapsed = false;
+}
+// 拖动边界调整导航宽度，越过最小宽度后的折叠阈值才收起导航
+function startSidebarDrag(event: PointerEvent) {
+  if (sidebarCollapsed.value || event.button !== 0) return;
+  event.preventDefault();
+  stopSidebarDragListeners?.();
+  const startX = event.clientX;
+  const startWidth = sidebarWidth.value;
+  sidebarResizing.value = true;
+  sidebarAutoCollapsed = false;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  const onMove = (moveEvent: PointerEvent) => {
+    const rawWidth = startWidth + moveEvent.clientX - startX;
+    const overPull = Math.max(0, SIDEBAR_MIN_WIDTH - rawWidth);
+    sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, rawWidth));
+    sidebarPull.value = -Math.min(14, overPull * .28);
+    sidebarCollapseArmed.value = overPull >= SIDEBAR_COLLAPSE_PULL;
+  };
+  const finish = () => {
+    stopSidebarDragListeners?.();
+    sidebarResizing.value = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (sidebarCollapseArmed.value) sidebarCollapsed.value = true;
+    else localStorage.setItem("sztu.sidebarWidth", String(Math.round(sidebarWidth.value)));
+    sidebarCollapseArmed.value = false;
+    sidebarPull.value = 0;
+  };
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", finish, { once: true });
+  document.addEventListener("pointercancel", finish, { once: true });
+  stopSidebarDragListeners = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", finish);
+    document.removeEventListener("pointercancel", finish);
+    stopSidebarDragListeners = undefined;
+  };
+}
+// 支持键盘在限定范围内调整导航宽度
+function resizeSidebarWithKeyboard(event: KeyboardEvent) {
+  let nextWidth = sidebarWidth.value;
+  if (event.key === "ArrowLeft") nextWidth -= 16;
+  else if (event.key === "ArrowRight") nextWidth += 16;
+  else if (event.key === "Home") nextWidth = SIDEBAR_MIN_WIDTH;
+  else if (event.key === "End") nextWidth = SIDEBAR_MAX_WIDTH;
+  else return;
+  event.preventDefault();
+  sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth));
+  localStorage.setItem("sztu.sidebarWidth", String(sidebarWidth.value));
 }
 function handleWindowResize() {
   const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
@@ -763,6 +828,9 @@ onMounted(() => {
   void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
 });
 onBeforeUnmount(() => {
+  stopSidebarDragListeners?.();
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
   if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
   window.removeEventListener("keydown", handleGlobalShortcut);
@@ -776,7 +844,11 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 </script>
 
 <template>
-  <div class="kimi-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+  <div
+    class="kimi-shell"
+    :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-collapse-armed': sidebarCollapseArmed }"
+    :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
+  >
     <header class="kimi-titlebar">
       <div class="nav-toggle-wrap">
         <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
@@ -912,6 +984,20 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       </footer>
       </aside>
     </div>
+    <div
+      class="sidebar-resizer"
+      role="separator"
+      aria-label="调整导航宽度"
+      aria-controls="primary-navigation"
+      aria-orientation="vertical"
+      :aria-valuemin="SIDEBAR_MIN_WIDTH"
+      :aria-valuemax="SIDEBAR_MAX_WIDTH"
+      :aria-valuenow="Math.round(sidebarWidth)"
+      tabindex="0"
+      title="拖动调整导航宽度"
+      @pointerdown="startSidebarDrag"
+      @keydown="resizeSidebarWithKeyboard"
+    ><span><GripVertical :size="13" :stroke-width="1.8" /></span></div>
 
     <main class="kimi-main" :class="{ 'chat-main': page === 'chat' }">
       <template v-if="page === 'work'">
@@ -942,7 +1028,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
             </section>
@@ -955,6 +1041,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 :attachments="attachedFiles"
                 :workspace-name="activeWorkspace.name"
                 :workspace-path="activeWorkspace.path"
+                :obscured="modelManagerOpen || permissionConfirmOpen"
                 @close="setInspectorOpen(false)"
               />
             </template>
@@ -983,7 +1070,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   </div>
                 </div>
                 <span />
-                <span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span>
+                <ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" />
                 <button class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
               </div>
               <div class="launcher-project-control">
@@ -1035,8 +1122,10 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 
       <section v-else-if="page === 'webbridge'" class="simple-page"><header><div><h1>浏览器连接</h1><p>连接浏览器，让 Agent 在授权范围内协助网页操作</p></div></header><div class="bridge-card"><Globe2 :size="24" /><div><h2>连接状态</h2><p>当前未连接。此功能需要浏览器扩展与本地服务支持。</p></div><span class="status-pill">未连接</span></div></section>
 
-      <section v-else class="settings-screen"><header class="settings-top"><button title="返回工作区" aria-label="返回工作区" @click="openPage('work')"><ArrowLeft :size="19" /></button><h1>设置</h1></header><div class="settings-layout"><aside><span>SztuCode</span><button class="active">SztuCode Work</button></aside><main><section><span class="settings-section-label">系统设置</span><div class="setting-group"><label><div><b>开机自启动</b><p>登录系统时自动启动 SztuCode。</p></div><input :checked="autostart" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleAutostart" /></label><label><div><b>系统通知</b><p>允许 SztuCode 发送任务结果与重要提醒。</p></div><input v-model="notifications" type="checkbox" /></label><label><div><b>保持电脑唤醒</b><p>任务运行期间阻止电脑进入睡眠。</p></div><input :checked="stayAwake" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleStayAwake" /></label><p v-if="nativeSettingsError" class="native-settings-error">{{ nativeSettingsError }}</p></div></section><section><span class="settings-section-label">模型与审批</span><div class="setting-group"><label class="stack"><b>Provider</b><select :value="runtimeSettings?.provider" @change="chooseProvider"><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option></select></label><label class="stack"><b>模型</b><input :value="runtimeSettings?.model" placeholder="模型名称" @change="chooseModel" /></label><label class="stack"><b>权限模式</b><select :value="runtimeSettings?.permission_mode" @change="choosePermissionMode(($event.target as HTMLSelectElement).value as RuntimeSettings['permission_mode'])"><option value="normal">标准审批</option><option value="plan">计划模式</option><option value="accept_edits">允许编辑</option><option value="auto">全部允许</option></select></label></div></section><section><span class="settings-section-label">模型管理</span><div class="setting-group ccswitch-mgr"><div class="ccswitch-current-row"><div><b>当前模型</b><p>{{ runtimeSettings?.model || '未配置模型' }}<template v-if="runtimeSettings?.base_url"><br />{{ runtimeSettings.base_url }}</template></p></div><button type="button" class="ccswitch-import-btn" :disabled="ccswitchLoading" @click="ccswitchOpen ? (ccswitchOpen = false) : loadCcswitchProviders()">{{ ccswitchLoading ? '加载中…' : (ccswitchOpen ? '收起' : '从 cc-switch 导入') }}</button></div><div v-if="ccswitchOpen" class="ccswitch-list"><div v-for="item in ccswitchProviders" :key="item.id" class="ccswitch-card"><span class="ccswitch-card__dot" :class="{ has: item.has_api_key }" /><div class="ccswitch-card__info"><b>{{ item.name }}<em v-if="item.is_current">当前</em></b><span>{{ item.base_url }}</span><small>{{ item.model }}</small></div><button type="button" :disabled="ccswitchApplying === item.id" @click="useCcswitchProvider(item.id)">{{ ccswitchApplying === item.id ? '应用中…' : '使用此配置' }}</button></div><p v-if="!ccswitchProviders.length && !ccswitchLoading" class="ccswitch-empty">本机未发现可导入的 cc-switch 供应商，请确认已安装 CC Switch</p></div><p v-if="ccswitchError" class="native-settings-error">{{ ccswitchError }}</p></div></section><section><span class="settings-section-label">WebBridge</span><div class="setting-group"><label><div><b>允许网站所有操作</b><p>允许 Agent 在浏览器中执行已授权的网页动作。</p></div><input v-model="webBridgeAllowed" type="checkbox" disabled /></label><label><div><b>浏览器连接</b><p>显示 SztuCode 与本地浏览器扩展的连接状态。</p></div><em>未连接</em></label></div></section></main></div></section>
+      <section v-else class="settings-screen"><header class="settings-top"><button title="返回工作区" aria-label="返回工作区" @click="openPage('work')"><ArrowLeft :size="19" /></button><h1>设置</h1></header><div class="settings-layout"><aside><span>SztuCode</span><button class="active">SztuCode Work</button></aside><main><section><span class="settings-section-label">系统设置</span><div class="setting-group"><label><div><b>开机自启动</b><p>登录系统时自动启动 SztuCode。</p></div><input :checked="autostart" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleAutostart" /></label><label><div><b>系统通知</b><p>允许 SztuCode 发送任务结果与重要提醒。</p></div><input v-model="notifications" type="checkbox" /></label><label><div><b>保持电脑唤醒</b><p>任务运行期间阻止电脑进入睡眠。</p></div><input :checked="stayAwake" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleStayAwake" /></label><p v-if="nativeSettingsError" class="native-settings-error">{{ nativeSettingsError }}</p></div></section><section><span class="settings-section-label">任务审批</span><div class="setting-group"><label class="stack"><b>权限模式</b><select :value="runtimeSettings?.permission_mode" @change="choosePermissionMode(($event.target as HTMLSelectElement).value as RuntimeSettings['permission_mode'])"><option value="normal">标准审批</option><option value="plan">计划模式</option><option value="accept_edits">允许编辑</option><option value="auto">全部允许</option></select></label></div></section><section><span class="settings-section-label">模型管理</span><div class="setting-group ccswitch-mgr"><div class="ccswitch-current-row"><div><b>当前模型</b><p>{{ runtimeSettings?.model || '未配置模型' }}<template v-if="runtimeSettings?.base_url"><br />{{ runtimeSettings.base_url }}</template></p></div><div class="model-management-actions"><button type="button" class="ccswitch-import-btn primary" @click="openModelManager"><Plus :size="14" />添加和管理模型</button><button type="button" class="ccswitch-import-btn" :disabled="ccswitchLoading" @click="ccswitchOpen ? (ccswitchOpen = false) : loadCcswitchProviders()">{{ ccswitchLoading ? '加载中…' : (ccswitchOpen ? '收起' : '从 cc-switch 导入') }}</button></div></div><div v-if="ccswitchOpen" class="ccswitch-list"><div v-for="item in ccswitchProviders" :key="item.id" class="ccswitch-card"><span class="ccswitch-card__dot" :class="{ has: item.has_api_key }" /><div class="ccswitch-card__info"><b>{{ item.name }}<em v-if="item.is_current">当前</em></b><span>{{ item.base_url }}</span><small>{{ item.model }}</small></div><button type="button" :disabled="ccswitchApplying === item.id" @click="useCcswitchProvider(item.id)">{{ ccswitchApplying === item.id ? '应用中…' : '使用此配置' }}</button></div><p v-if="!ccswitchProviders.length && !ccswitchLoading" class="ccswitch-empty">本机未发现可导入的 cc-switch 供应商，请确认已安装 CC Switch</p></div><p v-if="ccswitchError" class="native-settings-error">{{ ccswitchError }}</p></div></section><section><span class="settings-section-label">WebBridge</span><div class="setting-group"><label><div><b>允许网站所有操作</b><p>允许 Agent 在浏览器中执行已授权的网页动作。</p></div><input v-model="webBridgeAllowed" type="checkbox" disabled /></label><label><div><b>浏览器连接</b><p>显示 SztuCode 与本地浏览器扩展的连接状态。</p></div><em>未连接</em></label></div></section></main></div></section>
     </main>
+
+    <div v-if="modelManagerOpen" class="model-manager-backdrop"><ModelManager @close="modelManagerOpen = false" @updated="handleModelConfigUpdated" /></div>
 
     <div v-if="permissionConfirmOpen" class="permission-confirm-backdrop" role="presentation" @mousedown.self="permissionConfirmOpen = false">
       <section class="permission-confirm" role="alertdialog" aria-modal="true" aria-labelledby="permission-confirm-title" aria-describedby="permission-confirm-description">

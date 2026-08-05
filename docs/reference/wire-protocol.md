@@ -496,6 +496,8 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | `type` | `string` | no |
 | `provider` | `string | null` | no |
 | `model` | `string | null` | no |
+| `base_url` | `string | null` | no |
+| `api_key` | `string | null` | no |
 | `permission_mode` | `string | null` | no |
 
 ```json
@@ -536,6 +538,33 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       ],
       "default": null,
       "title": "Model"
+    },
+    "base_url": {
+      "anyOf": [
+        {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Base Url"
+    },
+    "api_key": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Api Key"
     },
     "permission_mode": {
       "anyOf": [
@@ -635,6 +664,8 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
         "enum": [
           "provider",
           "model",
+          "base_url",
+          "api_key",
           "permission_mode"
         ],
         "type": "string"

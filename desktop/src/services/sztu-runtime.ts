@@ -19,7 +19,10 @@ export type Session = {
   archived: boolean; pinned: boolean; workspace_id: string | null; latest_run_id?: string | null;
 };
 export type RuntimeSettings = { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
+export type RuntimeSettingsUpdate = Partial<RuntimeSettings> & { api_key?: string };
 export type ProviderStatus = { api_key_configured: boolean; ready_for_next_run: boolean; skills: Array<{ name: string; description: string }>; mcp_servers: Array<{ name: string; status: string; tool_count?: number }> };
+export type ModelProfile = { id: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; has_api_key: boolean; is_current: boolean; builtin: boolean };
+export type ModelProfileInput = { id?: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; api_key?: string };
 
 const client = new IpcClient();
 let subscribed = false;
@@ -215,7 +218,7 @@ export async function getRuntimeSettings(): Promise<RuntimeSettings | null> {
   return (result.settings as RuntimeSettings | undefined) ?? null;
 }
 
-export async function setRuntimeSettings(update: Partial<RuntimeSettings>): Promise<RuntimeSettings | null> {
+export async function setRuntimeSettings(update: RuntimeSettingsUpdate): Promise<RuntimeSettings | null> {
   const result = await client.request("settings.update", update);
   return (result.settings as RuntimeSettings | undefined) ?? null;
 }
@@ -238,6 +241,24 @@ export async function listCcswitchProviders(): Promise<CcswitchProvider[]> {
 export async function applyCcswitchProvider(providerId: string): Promise<RuntimeSettings | null> {
   const result = await client.request("provider.ccswitch_apply", { provider_id: providerId });
   return (result.settings as RuntimeSettings | undefined) ?? null;
+}
+
+export async function listModelProfiles(): Promise<ModelProfile[]> {
+  const result = await client.request("provider.model_list");
+  return (result.models as ModelProfile[] | undefined) ?? [];
+}
+
+export async function saveModelProfile(input: ModelProfileInput): Promise<{ settings: RuntimeSettings; models: ModelProfile[] }> {
+  return await client.request("provider.model_save", input) as { settings: RuntimeSettings; models: ModelProfile[] };
+}
+
+export async function selectModelProfile(modelId: string): Promise<{ settings: RuntimeSettings; models: ModelProfile[] }> {
+  return await client.request("provider.model_select", { model_id: modelId }) as { settings: RuntimeSettings; models: ModelProfile[] };
+}
+
+export async function deleteModelProfile(modelId: string): Promise<ModelProfile[]> {
+  const result = await client.request("provider.model_delete", { model_id: modelId });
+  return (result.models as ModelProfile[] | undefined) ?? [];
 }
 
 export async function respondPermission(toolUseId: string, decision: "allow_once" | "always_allow" | "deny_once" | "always_deny"): Promise<void> {

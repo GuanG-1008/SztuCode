@@ -37,6 +37,27 @@ OPENAI_API_KEY=<your-api-key>
 OPENAI_BASE_URL=https://api.example.com
 ```
 
+### DeepSeek V4 Pro（校园网）
+
+桌面端模型选择器内置 `DeepSeek V4 Pro(校园网)`。在本机 `.env` 中配置：
+
+```dotenv
+SZTU_CAMPUS_DEEPSEEK_API_KEY=<your-campus-api-key>
+```
+
+该选项固定使用 `deepseek-v4-pro` 和 `https://apiai.sztu.edu.cn/v1`，仅在校园网或已连接学校 VPN 时可用。
+
+opencode Zen 免费模型（**免 key**，OpenAI 兼容端点 `https://opencode.ai/zen/v1`）：
+
+```dotenv
+SZTU_LLM_PROVIDER=openai
+SZTU_LLM_DEFAULT_MODEL=deepseek-v4-flash-free
+OPENAI_BASE_URL=https://opencode.ai/zen/v1
+# 免 key：不要设置 OPENAI_API_KEY
+```
+
+可选免费模型（实测可用）：`deepseek-v4-flash-free`、`ling-3.0-flash-free`、`nemotron-3-ultra-free`、`north-mini-code-free`、`longcat-2.0-free`、`mimo-v2.5-free`、`laguna-s-2.1-free`。端点直接可达（无需代理），支持流式与工具调用；注意有速率限制，适合个人日常使用。
+
 SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必须与实际服务商一致。
 
 ## 环境变量

@@ -41,6 +41,8 @@ class LlmConfig:
     context_window: int = 0  # 0 = use provider's model-aware default
     base_url: str = ""  # 自定义端点，空表示使用官方默认地址
     api_key: str = ""  # 导入的凭证，优先于 .env 注入 provider 环境
+    api_key_env: str = ""  # 内置模型使用的凭证变量名，避免把密钥写入模型配置
+    keyless: bool = False  # 免 key 端点（如 opencode Zen 免费模型），跳过凭证校验
 
 
 @dataclass
@@ -140,16 +142,19 @@ def _client_settings_path() -> Path:
     ).expanduser()
 
 
-def _apply_client_settings(config: SztuConfig) -> None:
+def _read_client_settings() -> dict[str, Any]:
     path = _client_settings_path()
     if not path.exists():
-        return
+        return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
-        return
-    if not isinstance(value, dict):
-        return
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _apply_client_settings(config: SztuConfig) -> None:
+    value = _read_client_settings()
     provider = value.get("provider")
     model = value.get("model")
     permission_mode = value.get("permission_mode")
@@ -165,22 +170,49 @@ def _apply_client_settings(config: SztuConfig) -> None:
         config.llm.base_url = value["base_url"]
     if isinstance(value.get("api_key"), str):
         config.llm.api_key = value["api_key"]
+    if isinstance(value.get("api_key_env"), str):
+        config.llm.api_key_env = value["api_key_env"]
 
 
-def save_client_settings(config: SztuConfig) -> Path:
+def load_model_profiles() -> tuple[list[dict[str, Any]], str]:
+    value = _read_client_settings()
+    profiles = value.get("models")
+    return (
+        [item for item in profiles if isinstance(item, dict)]
+        if isinstance(profiles, list)
+        else [],
+        str(value.get("active_model_id", "") or ""),
+    )
+
+
+def save_client_settings(
+    config: SztuConfig,
+    *,
+    models: list[dict[str, Any]] | None = None,
+    active_model_id: str | None = None,
+) -> Path:
     """持久化桌面可编辑字段；base_url/api_key 为导入的本地凭证（与 cc-switch 同级明文存储）"""
     path = _client_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
+    value = _read_client_settings()
+    value.update(
+        {
+            "provider": config.llm.provider,
+            "model": config.llm.default_model,
+            "permission_mode": config.permission.mode,
+            "base_url": config.llm.base_url,
+            "api_key": config.llm.api_key,
+            "api_key_env": config.llm.api_key_env,
+        }
+    )
+    if models is not None:
+        value["models"] = models
+    if active_model_id is not None:
+        value["active_model_id"] = active_model_id
     temporary.write_text(
         json.dumps(
-            {
-                "provider": config.llm.provider,
-                "model": config.llm.default_model,
-                "permission_mode": config.permission.mode,
-                "base_url": config.llm.base_url,
-                "api_key": config.llm.api_key,
-            },
+            value,
             ensure_ascii=False,
             indent=2,
         ) + "\n",

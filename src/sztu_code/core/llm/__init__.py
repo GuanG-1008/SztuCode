@@ -16,9 +16,15 @@ if TYPE_CHECKING:
 def _apply_endpoint_env(prefix: str, llm: object) -> None:
     base_url = getattr(llm, "base_url", "") or ""
     api_key = getattr(llm, "api_key", "") or ""
+    api_key_env = getattr(llm, "api_key_env", "") or ""
+    if not api_key and api_key_env:
+        api_key = os.environ.get(api_key_env, "")
     if base_url:
         os.environ[prefix + "BASE_URL"] = base_url
-    if api_key:
+    if getattr(llm, "keyless", False):
+        # 免 key 端点（如 opencode Zen）：清空环境里遗留的通用 key，避免误发被拒
+        os.environ[prefix + "API_KEY"] = ""
+    elif api_key:
         os.environ[prefix + "API_KEY"] = api_key
 
 

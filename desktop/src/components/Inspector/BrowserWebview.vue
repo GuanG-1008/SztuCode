@@ -8,6 +8,7 @@ const props = defineProps<{
   tabId: number;
   url: string;
   reloadKey: number;
+  visible: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -27,13 +28,23 @@ function webviewLabel() {
 }
 
 async function positionWebview(instance = webview) {
-  if (!nativeRuntime || !instance || !host.value) return;
+  if (!nativeRuntime || !instance || !host.value || !props.visible) return;
   const rect = host.value.getBoundingClientRect();
   if (rect.width < 1 || rect.height < 1) return;
   await Promise.all([
     instance.setPosition({ type: "Logical", x: rect.left, y: rect.top }),
     instance.setSize({ type: "Logical", width: rect.width, height: rect.height }),
   ]);
+}
+
+async function syncVisibility(instance = webview) {
+  if (!nativeRuntime || !instance) return;
+  if (!props.visible) {
+    await instance.hide();
+    return;
+  }
+  await positionWebview(instance);
+  await instance.show();
 }
 
 async function closeWebview() {
@@ -57,19 +68,20 @@ async function renderNativePage() {
   if (!rect || rect.width < 1 || rect.height < 1) return;
 
   const currentGeneration = ++generation;
+  const initialRect = props.visible ? rect : { left: -10_000, top: -10_000, width: 1, height: 1 };
   const instance = new Webview(getCurrentWindow(), webviewLabel(), {
     url: props.url,
-    x: rect.left,
-    y: rect.top,
-    width: rect.width,
-    height: rect.height,
-    focus: true,
+    x: initialRect.left,
+    y: initialRect.top,
+    width: initialRect.width,
+    height: initialRect.height,
+    focus: props.visible,
     zoomHotkeysEnabled: true,
   });
   webview = instance;
   instance.once("tauri://created", async () => {
     if (webview !== instance || generation !== currentGeneration) return;
-    await positionWebview(instance);
+    await syncVisibility(instance);
     emit("loaded");
   });
   instance.once<string>("tauri://error", (event) => {
@@ -81,6 +93,9 @@ async function renderNativePage() {
 
 watch(() => [props.url, props.reloadKey], () => {
   void renderNativePage();
+});
+watch(() => props.visible, () => {
+  void syncVisibility();
 });
 
 onMounted(() => {

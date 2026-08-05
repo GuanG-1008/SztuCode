@@ -66,10 +66,18 @@ def test_permission_response_rejects_legacy_decision_name() -> None:
 
 def test_settings_update_accepts_only_the_exposed_runtime_fields() -> None:
     command = SettingsUpdateCommand.model_validate(
-        {"provider": "openai", "model": "gpt-4o", "permission_mode": "plan"}
+        {
+            "provider": "openai",
+            "model": "gpt-4o",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret",
+            "permission_mode": "plan",
+        }
     )
     assert command.type == "settings.update"
     assert command.provider == "openai"
+    assert command.base_url == "https://example.test/v1"
+    assert command.api_key == "secret"
 
     with pytest.raises(ValidationError):
         SettingsUpdateCommand.model_validate({"provider": "unsupported"})

@@ -382,12 +382,14 @@ class SettingsUpdateCommand(BaseModel):
     type: Literal["settings.update"] = "settings.update"
     provider: Literal["anthropic", "openai"] | None = None
     model: str | None = Field(default=None, min_length=1, max_length=200)
+    base_url: str | None = Field(default=None, max_length=2000)
+    api_key: str | None = Field(default=None, min_length=1, max_length=4000)
     permission_mode: Literal["normal", "accept_edits", "plan", "auto"] | None = None
 
 
 class SettingsUpdateResult(BaseModel):
     settings: SettingsSnapshot
-    updated: list[Literal["provider", "model", "permission_mode"]]
+    updated: list[Literal["provider", "model", "base_url", "api_key", "permission_mode"]]
 
 
 class ProviderStatusCommand(BaseModel):
@@ -429,6 +431,61 @@ class ProviderCcswitchApplyCommand(BaseModel):
 class ProviderCcswitchApplyResult(BaseModel):
     settings: SettingsSnapshot
     updated: list[Literal["provider", "model", "base_url"]]
+
+
+class ModelProfileSummary(BaseModel):
+    id: str
+    name: str
+    vendor: str
+    provider: Literal["anthropic", "openai"]
+    model: str
+    base_url: str = ""
+    has_api_key: bool
+    is_current: bool
+    builtin: bool = False
+
+
+class ModelProfileListCommand(BaseModel):
+    type: Literal["provider.model_list"] = "provider.model_list"
+
+
+class ModelProfileListResult(BaseModel):
+    models: list[ModelProfileSummary]
+
+
+class ModelProfileSaveCommand(BaseModel):
+    type: Literal["provider.model_save"] = "provider.model_save"
+    id: str | None = Field(default=None, max_length=100)
+    name: str = Field(min_length=1, max_length=100)
+    vendor: str = Field(min_length=1, max_length=100)
+    provider: Literal["anthropic", "openai"]
+    model: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(default="", max_length=2000)
+    api_key: str | None = Field(default=None, min_length=1, max_length=4000)
+
+
+class ModelProfileSaveResult(BaseModel):
+    settings: SettingsSnapshot
+    models: list[ModelProfileSummary]
+
+
+class ModelProfileSelectCommand(BaseModel):
+    type: Literal["provider.model_select"] = "provider.model_select"
+    model_id: str = Field(min_length=1, max_length=100)
+
+
+class ModelProfileSelectResult(BaseModel):
+    settings: SettingsSnapshot
+    models: list[ModelProfileSummary]
+
+
+class ModelProfileDeleteCommand(BaseModel):
+    type: Literal["provider.model_delete"] = "provider.model_delete"
+    model_id: str = Field(min_length=1, max_length=100)
+
+
+class ModelProfileDeleteResult(BaseModel):
+    models: list[ModelProfileSummary]
 
 
 class SessionCompactCommand(BaseModel):
@@ -480,6 +537,10 @@ Command = Annotated[
     | ProviderStatusCommand
     | ProviderCcswitchListCommand
     | ProviderCcswitchApplyCommand
+    | ModelProfileListCommand
+    | ModelProfileSaveCommand
+    | ModelProfileSelectCommand
+    | ModelProfileDeleteCommand
     | SessionCompactCommand,
     Discriminator("type"),
 ]

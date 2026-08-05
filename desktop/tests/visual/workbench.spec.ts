@@ -337,6 +337,39 @@ test("sidebar content keeps its width while the navigation viewport collapses", 
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeVisible();
 });
 
+test("sidebar resizer clamps its range and collapses after an intentional over-pull", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.addInitScript(() => localStorage.removeItem("sztu.sidebarWidth"));
+  await page.goto("/");
+
+  const shell = page.locator(".kimi-shell");
+  const resizer = page.getByRole("separator", { name: "调整导航宽度" });
+  const dragTo = async (targetX: number, release = true) => {
+    const bounds = await resizer.boundingBox();
+    if (!bounds) throw new Error("Sidebar resizer is unavailable");
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(targetX, bounds.y + bounds.height / 2, { steps: 5 });
+    if (release) await page.mouse.up();
+  };
+
+  await dragTo(520);
+  await expect(resizer).toHaveAttribute("aria-valuenow", "360");
+  expect(await page.evaluate(() => localStorage.getItem("sztu.sidebarWidth"))).toBe("360");
+
+  await dragTo(210);
+  await expect(resizer).toHaveAttribute("aria-valuenow", "224");
+  await expect(shell).not.toHaveClass(/sidebar-collapsed/);
+
+  await dragTo(150, false);
+  await expect(shell).toHaveClass(/sidebar-collapse-armed/);
+  await expect(shell).not.toHaveClass(/sidebar-collapsed/);
+  await page.mouse.up();
+
+  await expect(shell).toHaveClass(/sidebar-collapsed/);
+  await expect(page.getByRole("button", { name: "展开导航" })).toHaveAttribute("aria-expanded", "false");
+});
+
 test("settings remains available from the workbench footer", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");

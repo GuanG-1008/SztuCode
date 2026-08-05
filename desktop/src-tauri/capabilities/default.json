@@ -9,11 +9,15 @@
     "core:webview:allow-set-webview-focus",
     "core:webview:allow-set-webview-position",
     "core:webview:allow-set-webview-size",
+    "core:webview:allow-webview-hide",
+    "core:webview:allow-webview-show",
     "core:webview:allow-webview-close",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
-    "dialog:default"
+    "dialog:default",
+    "opener:allow-default-urls",
+    "opener:allow-open-url"
   ]
 }

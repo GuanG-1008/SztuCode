@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import time
+import uuid
 from datetime import UTC
 from functools import partial
 from pathlib import Path
@@ -35,6 +36,15 @@ from sztu_code.core.bus.commands import (
     FileReadResult,
     FileSearchCommand,
     FileSearchResult,
+    ModelProfileDeleteCommand,
+    ModelProfileDeleteResult,
+    ModelProfileListCommand,
+    ModelProfileListResult,
+    ModelProfileSaveCommand,
+    ModelProfileSaveResult,
+    ModelProfileSelectCommand,
+    ModelProfileSelectResult,
+    ModelProfileSummary,
     PermissionRespondCommand,
     PermissionRespondResult,
     PermissionSetModeCommand,
@@ -102,7 +112,12 @@ from sztu_code.core.changes import (
     load_manifest,
     revert_manifest_changes,
 )
-from sztu_code.core.config import SztuConfig, get_config, save_client_settings
+from sztu_code.core.config import (
+    SztuConfig,
+    get_config,
+    load_model_profiles,
+    save_client_settings,
+)
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm import create_provider
 from sztu_code.core.llm.ccswitch import get_ccswitch_provider, list_ccswitch_providers
@@ -126,9 +141,58 @@ from sztu_code.core.workspace.manager import Workspace
 
 logger = logging.getLogger(__name__)
 
+_CAMPUS_DEEPSEEK_PROFILE: dict[str, Any] = {
+    "id": "builtin-campus-deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro(校园网)",
+    "vendor": "深圳技术大学",
+    "provider": "openai",
+    "model": "deepseek-v4-pro",
+    "base_url": "https://apiai.sztu.edu.cn/v1",
+    "api_key": "",
+    "api_key_env": "SZTU_CAMPUS_DEEPSEEK_API_KEY",
+    "builtin": True,
+}
+
+# opencode Zen 免费模型（免 key，OpenAI 兼容端点）内置 profile
+_OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+_OPENCODE_ZEN_FREE_MODELS: list[str] = [
+    "deepseek-v4-flash-free",
+    "ling-3.0-flash-free",
+    "nemotron-3-ultra-free",
+    "north-mini-code-free",
+    "longcat-2.0-free",
+    "mimo-v2.5-free",
+    "laguna-s-2.1-free",
+]
+_OPENCODE_ZEN_PROFILES: list[dict[str, Any]] = [
+    {
+        "id": f"builtin-opencode-zen-{model}",
+        "name": model,
+        "vendor": "opencode",
+        "provider": "openai",
+        "model": model,
+        "base_url": _OPENCODE_ZEN_BASE_URL,
+        "api_key": "",
+        "keyless": True,
+        "builtin": True,
+    }
+    for model in _OPENCODE_ZEN_FREE_MODELS
+]
+
 
 def _now() -> str:
     return datetime.datetime.now(UTC).isoformat()
+
+
+# 判断当前模型凭证是否可用；指定专用变量后不回退到其他供应商的通用密钥
+def _llm_api_key_configured(config: SztuConfig, fallback_name: str) -> bool:
+    if config.llm.keyless:
+        return True  # 免 key 端点（如 opencode Zen）无需凭证
+    if config.llm.api_key:
+        return True
+    if config.llm.api_key_env:
+        return bool(os.environ.get(config.llm.api_key_env))
+    return bool(os.environ.get(fallback_name))
 
 
 class CoreApp:
@@ -605,6 +669,75 @@ class CoreApp:
             base_url=self._config.llm.base_url,
         )
 
+    def _model_profile_summaries(
+        self, profiles: list[dict[str, Any]], active_id: str
+    ) -> list[ModelProfileSummary]:
+        return [
+            ModelProfileSummary(
+                id=str(item.get("id", "")),
+                name=str(item.get("name", "")),
+                vendor=str(item.get("vendor", "")),
+                provider=item.get("provider", "anthropic"),
+                model=str(item.get("model", "")),
+                base_url=str(item.get("base_url", "")),
+                has_api_key=bool(
+                    item.get("keyless")
+                    or item.get("api_key")
+                    or os.environ.get(str(item.get("api_key_env", "")))
+                ),
+                is_current=str(item.get("id", "")) == active_id,
+                builtin=bool(item.get("builtin")),
+            )
+            for item in profiles
+            if item.get("id") and item.get("name") and item.get("model")
+        ]
+
+    def _stored_model_profiles(self) -> tuple[list[dict[str, Any]], str]:
+        assert self._config is not None
+        profiles, active_id = load_model_profiles()
+        if not profiles and self._config.llm.default_model.strip():
+            active_id = "default"
+            profiles = [
+                {
+                    "id": active_id,
+                    "name": self._config.llm.default_model,
+                    "vendor": self._config.llm.provider.title(),
+                    "provider": self._config.llm.provider,
+                    "model": self._config.llm.default_model,
+                    "base_url": self._config.llm.base_url,
+                    "api_key": self._config.llm.api_key,
+                }
+            ]
+        # 过滤掉所有内置 profile（校园网 + opencode Zen），再统一追加，保证定义唯一
+        builtin_ids = {_CAMPUS_DEEPSEEK_PROFILE["id"]} | {
+            p["id"] for p in _OPENCODE_ZEN_PROFILES
+        }
+        profiles = [item for item in profiles if item.get("id") not in builtin_ids]
+        profiles.append(dict(_CAMPUS_DEEPSEEK_PROFILE))
+        profiles.extend(dict(p) for p in _OPENCODE_ZEN_PROFILES)
+        return profiles, active_id
+
+    def _activate_model_profile(self, profile: dict[str, Any]) -> None:
+        assert self._config is not None
+        self._config.llm.provider = str(profile["provider"])
+        self._config.llm.default_model = str(profile["model"])
+        self._config.llm.base_url = str(profile.get("base_url", ""))
+        self._config.llm.api_key = str(profile.get("api_key", ""))
+        self._config.llm.api_key_env = str(profile.get("api_key_env", ""))
+        self._config.llm.keyless = bool(profile.get("keyless"))
+        if self._sessions is not None:
+            key_name = (
+                "OPENAI_API_KEY"
+                if self._config.llm.provider == "openai"
+                else "ANTHROPIC_API_KEY"
+            )
+            has_key = _llm_api_key_configured(self._config, key_name)
+            self._sessions.set_provider(
+                create_provider(self._config)
+                if has_key and self._config.llm.default_model.strip()
+                else None
+            )
+
     async def _settings_get_handler(self, params: dict[str, Any]) -> SettingsGetResult:
         SettingsGetCommand.model_validate(params)
         return SettingsGetResult(settings=self._settings_snapshot())
@@ -613,13 +746,25 @@ class CoreApp:
         assert self._config is not None
         assert self._permission_manager is not None
         cmd = SettingsUpdateCommand.model_validate(params)
-        updated: list[Literal["provider", "model", "permission_mode"]] = []
+        updated: list[
+            Literal["provider", "model", "base_url", "api_key", "permission_mode"]
+        ] = []
         if cmd.provider is not None and cmd.provider != self._config.llm.provider:
             self._config.llm.provider = cmd.provider
             updated.append("provider")
         if cmd.model is not None and cmd.model != self._config.llm.default_model:
             self._config.llm.default_model = cmd.model
             updated.append("model")
+        if cmd.base_url is not None and cmd.base_url != self._config.llm.base_url:
+            self._config.llm.base_url = cmd.base_url
+            updated.append("base_url")
+        if any(field in updated for field in ("provider", "model", "base_url")):
+            self._config.llm.api_key_env = ""
+            self._config.llm.keyless = False  # 手动改端点不再假定免 key
+        if cmd.api_key is not None and cmd.api_key != self._config.llm.api_key:
+            self._config.llm.api_key = cmd.api_key
+            self._config.llm.api_key_env = ""
+            updated.append("api_key")
         if cmd.permission_mode is not None:
             current_mode = self._permission_manager.get_mode()
             new_mode = PermissionMode(cmd.permission_mode)
@@ -635,18 +780,42 @@ class CoreApp:
                 updated.append("permission_mode")
                 self._config.permission.mode = new_mode.value
         if updated:
-            save_client_settings(self._config)
+            profiles, active_id = self._stored_model_profiles()
+            if any(
+                field in updated for field in ("provider", "model", "base_url", "api_key")
+            ):
+                current = next(
+                    (item for item in profiles if item.get("id") == active_id), None
+                )
+                if current is None:
+                    active_id = uuid.uuid4().hex
+                    current = {"id": active_id}
+                    profiles.append(current)
+                current.update(
+                    {
+                        "name": self._config.llm.default_model,
+                        "vendor": self._config.llm.provider.title(),
+                        "provider": self._config.llm.provider,
+                        "model": self._config.llm.default_model,
+                        "base_url": self._config.llm.base_url,
+                        "api_key": self._config.llm.api_key,
+                    }
+                )
+            save_client_settings(
+                self._config, models=profiles, active_model_id=active_id
+            )
         if self._sessions is not None and any(
-            field in updated for field in ("provider", "model")
+            field in updated for field in ("provider", "model", "base_url", "api_key")
         ):
             key_name = (
                 "OPENAI_API_KEY"
                 if self._config.llm.provider == "openai"
                 else "ANTHROPIC_API_KEY"
             )
+            credential_configured = _llm_api_key_configured(self._config, key_name)
             provider = (
                 create_provider(self._config)
-                if os.environ.get(key_name) and self._config.llm.default_model.strip()
+                if credential_configured and self._config.llm.default_model.strip()
                 else None
             )
             self._sessions.set_provider(provider)
@@ -667,13 +836,17 @@ class CoreApp:
             if self._mcp_manager is not None
             else []
         )
+        api_key_configured = _llm_api_key_configured(self._config, api_key_name)
+        custom_endpoint_configured = bool(
+            self._config.llm.base_url or os.environ.get(endpoint_name)
+        )
         return ProviderStatusResult(
             provider=provider,  # type: ignore[arg-type]
             model=self._config.llm.default_model,
-            api_key_configured=bool(os.environ.get(api_key_name)),
-            custom_endpoint_configured=bool(os.environ.get(endpoint_name)),
+            api_key_configured=api_key_configured,
+            custom_endpoint_configured=custom_endpoint_configured,
             ready_for_next_run=bool(
-                os.environ.get(api_key_name) and self._config.llm.default_model.strip()
+                api_key_configured and self._config.llm.default_model.strip()
             ),
             mcp_servers=mcp_servers,
             skills=skills,
@@ -707,15 +880,128 @@ class CoreApp:
         provider = get_ccswitch_provider(cmd.provider_id)
         if provider is None:
             raise HandlerError(-32602, f"cc-switch provider not found: {cmd.provider_id}")
+        profiles, _ = self._stored_model_profiles()
         self._config.llm.provider = "anthropic"
         self._config.llm.default_model = provider.model
         self._config.llm.base_url = provider.base_url
         self._config.llm.api_key = provider.api_key
-        save_client_settings(self._config)
+        self._config.llm.api_key_env = ""
+        profile_id = f"ccswitch-{provider.id}"
+        current = next(
+            (item for item in profiles if item.get("id") == profile_id), None
+        )
+        if current is None:
+            current = {"id": profile_id}
+            profiles.append(current)
+        current.update(
+            {
+                "name": provider.name,
+                "vendor": "cc-switch",
+                "provider": "anthropic",
+                "model": provider.model,
+                "base_url": provider.base_url,
+                "api_key": provider.api_key,
+            }
+        )
+        save_client_settings(
+            self._config, models=profiles, active_model_id=profile_id
+        )
         if self._sessions is not None:
             self._sessions.set_provider(create_provider(self._config))
         return ProviderCcswitchApplyResult(
             settings=self._settings_snapshot(), updated=["provider", "model", "base_url"]
+        )
+
+    async def _model_profile_list_handler(
+        self, params: dict[str, Any]
+    ) -> ModelProfileListResult:
+        ModelProfileListCommand.model_validate(params)
+        profiles, active_id = self._stored_model_profiles()
+        return ModelProfileListResult(
+            models=self._model_profile_summaries(profiles, active_id)
+        )
+
+    async def _model_profile_save_handler(
+        self, params: dict[str, Any]
+    ) -> ModelProfileSaveResult:
+        assert self._config is not None
+        cmd = ModelProfileSaveCommand.model_validate(params)
+        profiles, active_id = self._stored_model_profiles()
+        profile_id = cmd.id or uuid.uuid4().hex
+        current = next(
+            (item for item in profiles if item.get("id") == profile_id), None
+        )
+        if current is None:
+            current = {"id": profile_id}
+            profiles.append(current)
+        current.update(
+            {
+                "name": cmd.name,
+                "vendor": cmd.vendor,
+                "provider": cmd.provider,
+                "model": cmd.model,
+                "base_url": cmd.base_url,
+                "api_key_env": "",
+                "builtin": False,
+            }
+        )
+        if cmd.api_key is not None:
+            current["api_key"] = cmd.api_key
+        else:
+            current.setdefault("api_key", "")
+        active_id = profile_id
+        self._activate_model_profile(current)
+        save_client_settings(
+            self._config, models=profiles, active_model_id=active_id
+        )
+        return ModelProfileSaveResult(
+            settings=self._settings_snapshot(),
+            models=self._model_profile_summaries(profiles, active_id),
+        )
+
+    async def _model_profile_select_handler(
+        self, params: dict[str, Any]
+    ) -> ModelProfileSelectResult:
+        assert self._config is not None
+        cmd = ModelProfileSelectCommand.model_validate(params)
+        profiles, _ = self._stored_model_profiles()
+        profile = next(
+            (item for item in profiles if item.get("id") == cmd.model_id), None
+        )
+        if profile is None:
+            raise HandlerError(-32602, f"model profile not found: {cmd.model_id}")
+        self._activate_model_profile(profile)
+        save_client_settings(
+            self._config, models=profiles, active_model_id=cmd.model_id
+        )
+        return ModelProfileSelectResult(
+            settings=self._settings_snapshot(),
+            models=self._model_profile_summaries(profiles, cmd.model_id),
+        )
+
+    async def _model_profile_delete_handler(
+        self, params: dict[str, Any]
+    ) -> ModelProfileDeleteResult:
+        assert self._config is not None
+        cmd = ModelProfileDeleteCommand.model_validate(params)
+        profiles, active_id = self._stored_model_profiles()
+        profile = next(
+            (item for item in profiles if item.get("id") == cmd.model_id), None
+        )
+        if profile is not None and profile.get("builtin"):
+            raise HandlerError(-32602, "cannot delete a built-in model profile")
+        if cmd.model_id == active_id:
+            raise HandlerError(-32602, "cannot delete the current model profile")
+        next_profiles = [
+            item for item in profiles if item.get("id") != cmd.model_id
+        ]
+        if len(next_profiles) == len(profiles):
+            raise HandlerError(-32602, f"model profile not found: {cmd.model_id}")
+        save_client_settings(
+            self._config, models=next_profiles, active_model_id=active_id
+        )
+        return ModelProfileDeleteResult(
+            models=self._model_profile_summaries(next_profiles, active_id)
         )
 
     async def _session_compact_handler(self, params: dict[str, Any]) -> SessionCompactResult:
@@ -837,7 +1123,8 @@ class CoreApp:
         )
         compact_provider = (
             create_provider(self._config)
-            if os.environ.get(provider_key_name) and self._config.llm.default_model.strip()
+            if _llm_api_key_configured(self._config, provider_key_name)
+            and self._config.llm.default_model.strip()
             else None
         )
 
@@ -904,6 +1191,10 @@ class CoreApp:
         server.register("provider.status", self._provider_status_handler)
         server.register("provider.ccswitch_list", self._provider_ccswitch_list_handler)
         server.register("provider.ccswitch_apply", self._provider_ccswitch_apply_handler)
+        server.register("provider.model_list", self._model_profile_list_handler)
+        server.register("provider.model_save", self._model_profile_save_handler)
+        server.register("provider.model_select", self._model_profile_select_handler)
+        server.register("provider.model_delete", self._model_profile_delete_handler)
         server.register("session.compact", self._session_compact_handler)
 
         addr = await server.start()

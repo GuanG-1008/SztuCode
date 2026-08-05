@@ -22,6 +22,7 @@ const props = defineProps<{
   attachments?: string[];
   workspaceName?: string;
   workspacePath?: string;
+  obscured?: boolean;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
@@ -371,6 +372,7 @@ onBeforeUnmount(() => {
           :tab-id="currentBrowser.id"
           :url="currentBrowser.url"
           :reload-key="currentBrowser.frameKey"
+          :visible="!toolMenuOpen && !currentBrowser.loading && !obscured"
           @loaded="currentBrowser.loading = false"
           @error="browserLoadError(currentBrowser, $event)"
         />

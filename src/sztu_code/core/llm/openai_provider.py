@@ -166,17 +166,36 @@ def _map_finish_reason(finish_reason: str | None) -> str:
     return "end_turn"
 
 
+# 去掉 Authorization 头的 httpx transport，用于免 key 的 OpenAI 兼容端点（如 opencode Zen 免费模型）
+class _StripAuthTransport(httpx.AsyncBaseTransport):
+    def __init__(self, inner: httpx.AsyncHTTPTransport) -> None:
+        self._inner = inner
+
+    # 发送请求前移除 Authorization 头，其余原样转发
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        request.headers.pop("Authorization", None)
+        return await self._inner.handle_async_request(request)
+
+
+# 构建免 key 模式使用的 httpx 客户端（内部用去 auth 的 transport）
+def _keyless_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=_StripAuthTransport(httpx.AsyncHTTPTransport()))
+
+
 class OpenAIProvider:
     # 初始化 OpenAI 客户端；client 可在测试时注入以跳过 API key 检查
     def __init__(self, model: str, client: Any = None, *, context_window: int = 0) -> None:
         if client is None:
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                raise SystemExit("OPENAI_API_KEY not set")
+            api_key = os.environ.get("OPENAI_API_KEY") or ""
             base_url = os.environ.get("OPENAI_BASE_URL")
-            client_kwargs: dict[str, Any] = {"api_key": api_key}
+            if not api_key and not base_url:
+                raise SystemExit("OPENAI_API_KEY not set (或设置 OPENAI_BASE_URL 使用免 key 端点)")
+            client_kwargs: dict[str, Any] = {"api_key": api_key or "keyless-placeholder"}
             if base_url:
                 client_kwargs["base_url"] = base_url
+            if not api_key:
+                # 免 key 端点：SDK 需要非空 key，但用自定义 transport 剥掉 Authorization 头
+                client_kwargs["http_client"] = _keyless_http_client()
             self._client: Any = AsyncOpenAI(**client_kwargs)
         else:
             self._client = client
