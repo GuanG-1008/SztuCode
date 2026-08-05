@@ -343,7 +343,14 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
     return;
   }
   if (type === "run.finished") {
-    for (const step of timeline.value.keys()) setStep(step, (current) => current.status === "done" ? current : { ...current, status: String(event.status) === "success" ? "done" : "failed", finalText: current.finalText || current.tokens.join("") });
+    for (const step of timeline.value.keys()) {
+      setStep(step, (current) => current.runId === relatedRunId || !current.runId ? {
+        ...current,
+        status: String(event.status) === "success" ? "done" : "failed",
+        finalText: current.finalText || current.tokens.join(""),
+        outcome: { status: String(event.status) === "success" ? "success" : "failed", reason: String(event.reason ?? "") || undefined },
+      } : current);
+    }
     if (runId === activeRunId.value) activeRunId.value = null;
     return;
   }
@@ -860,14 +867,14 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <section class="task-canvas">
               <div class="task-conversation">
                 <div class="task-stream">
-                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><p>任务已经创建。告诉 SztuCode 你希望完成什么，它会在这里展示计划、工具调用与最终结果。</p></div>
+                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><div><b>从一个明确目标开始</b><p>SztuCode 会在当前项目中完成工作，并把验证结果、文件变更和可回滚记录留在这里。</p></div></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" />
                 </div>
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
-                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复会话后继续' : '输入消息，键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
+                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加附件" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '标准审批' }}<ChevronDown :size="13" /></button><span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span><button class="send" type="submit" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
               <WorkContextPanel :steps="orderedTimeline" :attachments="attachedFiles" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" />
@@ -904,7 +911,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 </div>
                 <span />
                 <span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span>
-                <button class="send" type="submit" :disabled="!connected || !prompt.trim()">↑</button>
+                <button class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
               </div>
               <div class="launcher-project-control">
                 <button type="button" class="composer-project" aria-haspopup="menu" :aria-expanded="launcherProjectMenuOpen" @click.stop="toggleLauncherProjectMenu"><FolderOpen :size="15" /><span>{{ workspace?.name || '选择本地项目' }}</span><ChevronDown :size="13" /></button>
