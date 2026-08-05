@@ -1,0 +1,48 @@
+{
+  "name": "sztucode-tui",
+  "version": "0.0.1",
+  "description": "One-command installer and launcher for the SztuCode terminal UI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "sztucode": "bin/sztucode.js",
+    "sztucode-tui": "bin/sztucode.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "vendor",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rojim666/SztuCode.git",
+    "directory": "npm/sztucode-tui"
+  },
+  "bugs": {
+    "url": "https://github.com/rojim666/SztuCode/issues"
+  },
+  "homepage": "https://github.com/rojim666/SztuCode#readme",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "terminal",
+    "textual",
+    "tui"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

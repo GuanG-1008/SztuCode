@@ -9,6 +9,9 @@ build-backend = "hatchling.build" # 使用 Hatchling 作为构建后端
 [project]
 name = "SztuCode"
 version = "0.0.1"
+description = "Local AI coding agent with CLI, Textual TUI, and desktop clients"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2.0",       # 数据校验与序列化（含 JSON 模型等）
@@ -26,6 +29,11 @@ sztu-code = "sztu_code.core.app:run"
 sztu-tui = "sztu_code.tui.__main__:main"
 sztu-desktop = "sztu_code.desktop.__main__:main"
 sztucode = "sztu_code.tui.launcher:main"
+
+[project.urls]
+Homepage = "https://github.com/rojim666/SztuCode"
+Repository = "https://github.com/rojim666/SztuCode.git"
+Issues = "https://github.com/rojim666/SztuCode/issues"
 
 # ---- Hatch：打 wheel 时从 src 布局收录包 ----
 [tool.hatch.build.targets.wheel]
