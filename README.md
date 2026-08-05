@@ -1,6 +1,6 @@
 # SztuCode
 
-> 本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
+> 一个本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
@@ -19,7 +19,7 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 
 ## 为什么是 SztuCode
 
-项目不止封装模型 API，而是实现 AI Coding Agent 的完整工程链路：
+项目不止封装模型 API，而是尝试复现当前 AI Coding Agent 的完整工程链路：
 
 ```text
 用户目标
@@ -30,7 +30,7 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
   → Diff 审阅、Trace 与会话恢复
 ```
 
-当前适合用于：
+当前项目适合：
 
 - 学习 Agent Loop、工具调用、上下文治理和多智能体协作；
 - 构建本地优先、可观察、可扩展的 Coding Agent；
@@ -39,18 +39,19 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 
 ## 核心能力
 
-| 能力 | 当前实现 |
-| --- | --- |
-| Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制 |
-| 多种客户端 | Textual TUI、Tauri 2 + Vue 3 桌面工作台，以及调试用 CLI |
-| 模型接入 | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商 |
-| 工作区工具 | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行 |
-| 权限系统 | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式 |
-| 会话与记忆 | 持久化会话、分层上下文、Notes、历史恢复和上下文压缩 |
-| 扩展机制 | Skills、Subagents 与 MCP 外部工具统一接入 |
-| 可观测性 | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放 |
-| 变更审阅 | 桌面端展示文件变化和 Diff，支持接受、暂存与回退 |
-| Agent 评测 | 轨迹分析和 SWE-bench 适配器，持续建设自动化评测基线 |
+
+| 能力          | 当前实现                                                  |
+| ------------- | --------------------------------------------------------- |
+| Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制       |
+| 多种客户端    | Textual TUI、Tauri 2 + Vue 3 桌面工作台，以及调试用 CLI   |
+| 模型接入      | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商   |
+| 工作区工具    | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行 |
+| 权限系统      | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式     |
+| 会话与记忆    | 持久化会话、分层上下文、Notes、历史恢复和上下文压缩       |
+| 扩展机制      | Skills、Subagents 与 MCP 外部工具统一接入                 |
+| 可观测性      | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放         |
+| 变更审阅      | 桌面端展示文件变化和 Diff，支持接受、暂存与回退           |
+| Agent 评测    | 轨迹分析和 SWE-bench 适配器，持续建设自动化评测基线       |
 
 项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和完整多智能体工作流仍在路线图中，不将设计目标描述为已完成能力。
 
@@ -219,19 +220,20 @@ uv run python scripts/gen_protocol_doc.py --check
 
 项目按可验证能力逐步推进：
 
-| 阶段 | 目标 |
-| --- | --- |
-| Contributor Ready | 新成员能理解项目、运行检查并提交第一个聚焦 PR |
-| v0.1 | 稳定本地任务闭环、自动化评测基线和更可靠的权限边界 |
-| v0.2 | 项目级语义索引、分层上下文、统一 LSP 和多语言评测 |
-| v0.3 | 领域 RAG、安全扫描闭环和角色化多智能体协作 |
-| v1.0 | 稳定升级路径、发行流程、安全响应和兼容性政策 |
+
+| 阶段              | 目标                                               |
+| ----------------- | -------------------------------------------------- |
+| Contributor Ready | 新成员能理解项目、运行检查并提交第一个聚焦 PR      |
+| v0.1              | 稳定本地任务闭环、自动化评测基线和更可靠的权限边界 |
+| v0.2              | 项目级语义索引、分层上下文、统一 LSP 和多语言评测  |
+| v0.3              | 领域 RAG、安全扫描闭环和角色化多智能体协作         |
+| v1.0              | 稳定升级路径、发行流程、安全响应和兼容性政策       |
 
 详细版本门槛、研究轨道和明确非目标见[项目路线图](docs/ROADMAP.md)。当前研究与工程任务可在 [GitHub Issues](https://github.com/rojim666/SztuCode/issues) 查看。
 
 ## 参与贡献
 
-欢迎学生、开发者和研究者通过代码、测试、文档、设计、评测和问题分析参与。新贡献者可以从 [`good first issue`](https://github.com/rojim666/SztuCode/labels/good%20first%20issue) 开始，需要社区协作的任务会标注 [`help wanted`](https://github.com/rojim666/SztuCode/labels/help%20wanted)。
+欢迎同学、开发者和研究者通过代码、测试、文档、设计、评测和问题分析参与。新贡献者可以从 [`good first issue`](https://github.com/rojim666/SztuCode/labels/good%20first%20issue) 开始，需要社区协作的任务会标注 [`help wanted`](https://github.com/rojim666/SztuCode/labels/help%20wanted)。
 
 开始前请阅读：
 
@@ -272,7 +274,7 @@ uv run python scripts/gen_protocol_doc.py --check
   </tr>
 </table>
 
-贡献以公开 Issue、Commit、Pull Request、Review 和 Release 为准。参与项目不自动等同于核心成员身份；持续贡献者可以逐步承担模块 Review 和维护职责。
+贡献以公开 Issue、Commit、Pull Request、Review 和 Release 为准；持续贡献者可以逐步承担模块 Review 和维护职责。
 
 ## License
 

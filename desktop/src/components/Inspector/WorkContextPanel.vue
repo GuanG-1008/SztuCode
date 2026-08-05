@@ -30,7 +30,11 @@ const contextItems = computed<ContextItem[]>(() => {
     for (const call of step.toolCalls) {
       for (const key of ["path", "file_path", "target_path"]) {
         const value = call.params[key];
-        if (typeof value === "string" && value.trim()) items.push({ path: value, source: "tool" });
+        if (typeof value === "string" && value.trim()) {
+          const path = value.trim();
+          if ((path === "." || path === "./") && props.workspacePath) items.push({ path: props.workspacePath, source: "workspace" });
+          else items.push({ path, source: "tool" });
+        }
       }
     }
   }

@@ -3,7 +3,6 @@ import { IpcClient } from "../lib/ipc";
 
 export type Workspace = { workspace_id: string; name: string; path: string; archived: boolean };
 export type NativeSettings = { autostart: boolean; stay_awake: boolean; supported: boolean };
-export type SandboxResult = { stdout: string; stderr: string; exit_code: number; timed_out: boolean };
 export type WorkspaceNode = { path: string; name: string; kind: "directory" | "file"; children?: WorkspaceNode[] };
 export type FileSearchMatch = { path: string; line: number; preview: string };
 export type FileReadResult = {
@@ -47,8 +46,20 @@ export async function setNativeSettings(update: { autostart?: boolean; stayAwake
   return await invoke<NativeSettings>("native_settings_update", update);
 }
 
-export async function sandboxExecute(workspacePath: string, command: string): Promise<SandboxResult> {
-  return await invoke<SandboxResult>("sandbox_execute", { workspacePath, command });
+export async function sandboxPtyStart(sessionId: string, workspacePath: string, cols: number, rows: number): Promise<void> {
+  await invoke("sandbox_pty_start", { sessionId, workspacePath, cols, rows });
+}
+
+export async function sandboxPtyWrite(sessionId: string, data: string): Promise<void> {
+  await invoke("sandbox_pty_write", { sessionId, data });
+}
+
+export async function sandboxPtyResize(sessionId: string, cols: number, rows: number): Promise<void> {
+  await invoke("sandbox_pty_resize", { sessionId, cols, rows });
+}
+
+export async function sandboxPtyClose(sessionId: string): Promise<void> {
+  await invoke("sandbox_pty_close", { sessionId });
 }
 
 export async function connectRuntime(): Promise<boolean> {

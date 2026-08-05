@@ -27,12 +27,13 @@ const emit = defineEmits<{ close: [] }>();
 
 type SectionKey = "todo" | "artifacts" | "references";
 type BrowserTab = { id: number; label: string; input: string; url: string; frameKey: number; loading: boolean };
-type ActiveTab = "summary" | "sandbox" | `browser-${number}` | "";
+type ActiveTab = "summary" | `sandbox-${number}` | `browser-${number}` | "";
 type WorkspaceTab = { key: ActiveTab; kind: "summary" | "browser" | "sandbox" };
 type Artifact = { path: string; source: "change" | "attachment"; change?: ChangeSummary; previewPath?: string };
 
 const activeTab = ref<ActiveTab>("summary");
 const browserSequence = ref(0);
+const sandboxSequence = ref(0);
 const browserTabs = ref<BrowserTab[]>([]);
 const workspaceTabs = ref<WorkspaceTab[]>([{ key: "summary", kind: "summary" }]);
 const openSections = ref<Set<SectionKey>>(new Set(["todo", "artifacts", "references"]));
@@ -83,6 +84,7 @@ const currentBrowser = computed(() => {
   const id = Number(activeTab.value.slice(8));
   return browserTabs.value.find((tab) => tab.id === id) ?? null;
 });
+const sandboxTabs = computed(() => workspaceTabs.value.filter((tab) => tab.kind === "sandbox"));
 
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -144,10 +146,18 @@ function openBrowser() {
 }
 
 function openTerminal() {
-  if (!workspaceTabs.value.some((tab) => tab.kind === "sandbox")) workspaceTabs.value.push({ key: "sandbox", kind: "sandbox" });
-  activeTab.value = "sandbox";
+  const id = ++sandboxSequence.value;
+  const key = `sandbox-${id}` as const;
+  workspaceTabs.value.push({ key, kind: "sandbox" });
+  activeTab.value = key;
   selectedPath.value = "";
   toolMenuOpen.value = false;
+}
+
+function sandboxLabel(key: ActiveTab) {
+  if (!key.startsWith("sandbox-")) return "沙盒";
+  const id = Number(key.slice(8));
+  return id > 1 ? `沙盒 ${id}` : "沙盒";
 }
 
 function normalizedUrl(value: string) {
@@ -231,6 +241,7 @@ function closeToolMenuOnEscape(event: KeyboardEvent) {
 watch(() => [props.workspaceId, props.runId], () => {
   activeTab.value = "summary";
   browserSequence.value = 0;
+  sandboxSequence.value = 0;
   browserTabs.value = [];
   workspaceTabs.value = [{ key: "summary", kind: "summary" }];
   selectedPath.value = "";
@@ -255,7 +266,7 @@ onBeforeUnmount(() => {
         <nav v-if="toolMenuOpen" class="workspace-tool-menu" aria-label="选择功能" role="menu">
           <button type="button" role="menuitem" :class="{ active: activeTab === 'summary' }" @click="openSummary"><ListChecks :size="15" /><span>任务摘要</span></button>
           <button type="button" role="menuitem" :class="{ active: currentBrowser }" @click="openBrowser"><Globe2 :size="15" /><span>浏览器</span></button>
-          <button type="button" role="menuitem" :class="{ active: activeTab === 'sandbox' }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
+          <button type="button" role="menuitem" :class="{ active: activeTab.startsWith('sandbox-') }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
         </nav>
       </div>
       <nav class="workspace-open-tabs" aria-label="已打开功能">
@@ -266,9 +277,9 @@ onBeforeUnmount(() => {
               <Globe2 v-else-if="tab.kind === 'browser'" class="workspace-tab-kind-icon" :size="14" />
               <SquareTerminal v-else class="workspace-tab-kind-icon" :size="14" />
             </span>
-            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? '沙盒' : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
+            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
           </button>
-          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? '沙盒' : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
+          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
         </div>
       </nav>
       <button type="button" class="workspace-browser-add" aria-label="新建浏览器标签页" @click="createBrowserTab"><Plus :size="16" /></button>
@@ -355,8 +366,8 @@ onBeforeUnmount(() => {
       </div>
     </main>
 
-    <main v-else-if="activeTab === 'sandbox'" class="sandbox-workspace"><SandboxTerminal :key="workspacePath" :workspace-path="workspacePath || ''" /></main>
-    <main v-else class="workspace-empty-view" />
+    <main v-for="tab in sandboxTabs" v-show="activeTab === tab.key" :key="`${workspacePath}-${tab.key}`" class="sandbox-workspace"><SandboxTerminal :workspace-path="workspacePath || ''" /></main>
+    <main v-if="!activeTab" class="workspace-empty-view" />
 
     <section v-if="selectedPath" class="file-preview file-preview--flyout">
       <header><span class="preview-tab"><FileText :size="15" /><b>{{ selectedName }}</b><i /></span><button title="关闭预览" @click="selectedPath = ''; preview = ''"><X :size="17" /></button></header>

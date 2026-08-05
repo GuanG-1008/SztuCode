@@ -1,110 +1,47 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import "@xterm/xterm/css/xterm.css";
-import { sandboxExecute } from "../../services/sztu-runtime";
+import {
+  sandboxPtyClose,
+  sandboxPtyResize,
+  sandboxPtyStart,
+  sandboxPtyWrite,
+} from "../../services/sztu-runtime";
 
 const props = defineProps<{ workspacePath: string }>();
+type PtyOutput = { session_id: string; data: number[] };
 
 const terminalRoot = ref<HTMLElement | null>(null);
+const sessionId = crypto.randomUUID();
+const decoder = new TextDecoder();
 let terminal: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
-let command = "";
-let busy = false;
-let historyIndex = 0;
-const history: string[] = [];
+let unlistenOutput: UnlistenFn | null = null;
+let inputDisposable: { dispose(): void } | null = null;
+let resizeDisposable: { dispose(): void } | null = null;
+let writeQueue = Promise.resolve();
+const pendingInput: string[] = [];
+let started = false;
+let disposed = false;
 
-function prompt() {
-  return `PS ${props.workspacePath}> `;
+function showError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  terminal?.writeln(`\r\n${message}`);
 }
 
-function writePrompt() {
-  terminal?.write(prompt());
+function sendInput(data: string) {
+  if (!started) {
+    pendingInput.push(data);
+    return;
+  }
+  writeQueue = writeQueue.then(() => sandboxPtyWrite(sessionId, data)).catch(showError);
 }
 
-function replaceCommand(next: string) {
-  if (!terminal) return;
-  terminal.write(`\r\x1b[2K${prompt()}${next}`);
-  command = next;
-}
-
-function writeOutput(value: string) {
-  if (!terminal || !value) return;
-  const normalized = value.replace(/\r?\n/g, "\r\n").replace(/\r\n$/, "");
-  terminal.write(normalized);
-  if (normalized) terminal.write("\r\n");
-}
-
-async function runCommand() {
-  if (!terminal || busy) return;
-  const submitted = command.trim();
-  terminal.write("\r\n");
-  command = "";
-  if (!submitted) {
-    writePrompt();
-    return;
-  }
-
-  history.push(submitted);
-  historyIndex = history.length;
-  busy = true;
-  try {
-    const result = await sandboxExecute(props.workspacePath, submitted);
-    writeOutput(result.stdout);
-    writeOutput(result.stderr);
-  } catch (error) {
-    writeOutput(error instanceof Error ? error.message : String(error));
-  } finally {
-    busy = false;
-    writePrompt();
-  }
-}
-
-function handleData(data: string) {
-  if (!terminal) return;
-  if (data === "\r") {
-    void runCommand();
-    return;
-  }
-  if (busy) return;
-  if (data === "\u0003") {
-    terminal.write("^C\r\n");
-    command = "";
-    writePrompt();
-    return;
-  }
-  if (data === "\u000c") {
-    terminal.clear();
-    writePrompt();
-    return;
-  }
-  if (data === "\u007f") {
-    if (command.length) {
-      command = command.slice(0, -1);
-      terminal.write("\b \b");
-    }
-    return;
-  }
-  if (data === "\u001b[A") {
-    if (!history.length) return;
-    historyIndex = Math.max(0, historyIndex - 1);
-    replaceCommand(history[historyIndex] ?? "");
-    return;
-  }
-  if (data === "\u001b[B") {
-    if (!history.length) return;
-    historyIndex = Math.min(history.length, historyIndex + 1);
-    replaceCommand(history[historyIndex] ?? "");
-    return;
-  }
-  if (data.startsWith("\u001b") || /[\u0000-\u001f]/.test(data)) return;
-  command += data;
-  terminal.write(data);
-}
-
-onMounted(() => {
+async function initialize() {
   if (!terminalRoot.value) return;
   terminal = new Terminal({
     cursorBlink: true,
@@ -145,24 +82,54 @@ onMounted(() => {
   terminal.writeln("Windows PowerShell");
   terminal.writeln("Copyright (C) Microsoft Corporation. All rights reserved.");
   terminal.writeln("");
-  writePrompt();
-  terminal.onData(handleData);
-  terminalRoot.value.addEventListener("pointerdown", () => terminal?.focus());
 
+  try {
+    unlistenOutput = await listen<PtyOutput>("sandbox:pty-output", ({ payload }) => {
+      if (payload.session_id !== sessionId || disposed) return;
+      terminal?.write(decoder.decode(Uint8Array.from(payload.data), { stream: true }));
+    });
+    inputDisposable = terminal.onData(sendInput);
+    fitAddon.fit();
+    await sandboxPtyStart(sessionId, props.workspacePath, terminal.cols, terminal.rows);
+    if (disposed) {
+      await sandboxPtyClose(sessionId);
+      return;
+    }
+    started = true;
+    for (const data of pendingInput.splice(0)) sendInput(data);
+    resizeDisposable = terminal.onResize(({ cols, rows }) => {
+      void sandboxPtyResize(sessionId, cols, rows).catch(showError);
+    });
+    terminal.focus();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+onMounted(() => {
+  if (!terminalRoot.value) return;
+  terminalRoot.value.addEventListener("pointerdown", () => terminal?.focus());
   resizeObserver = new ResizeObserver(() => {
-    requestAnimationFrame(() => fitAddon?.fit());
+    requestAnimationFrame(() => {
+      if (terminalRoot.value?.clientWidth && terminalRoot.value.clientHeight) fitAddon?.fit();
+    });
   });
   resizeObserver.observe(terminalRoot.value);
-  requestAnimationFrame(() => {
-    fitAddon?.fit();
-    terminal?.focus();
-  });
+  void initialize();
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   resizeObserver?.disconnect();
+  inputDisposable?.dispose();
+  resizeDisposable?.dispose();
+  unlistenOutput?.();
+  if (started) void sandboxPtyClose(sessionId);
   terminal?.dispose();
   resizeObserver = null;
+  inputDisposable = null;
+  resizeDisposable = null;
+  unlistenOutput = null;
   fitAddon = null;
   terminal = null;
 });

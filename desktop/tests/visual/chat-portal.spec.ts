@@ -8,10 +8,22 @@ test("Chat portal exposes every tool page and its primary interactions", async (
 
   await expect(page.getByPlaceholder("输入 / 唤起插件和技能")).toBeVisible();
 
-  await page.getByRole("button", { name: "扩展", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "插件", exact: true })).toBeVisible();
-  await page.getByPlaceholder("搜索插件").fill("Stripe");
-  await expect(page.locator(".plugin-card")).toHaveCount(1);
+  await page.getByRole("button", { name: "技能", exact: true }).click();
+  await expect(page.getByRole("region", { name: "技能中心" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "精选技能" })).toBeVisible();
+  await page.getByPlaceholder("搜索技能").fill("frontend");
+  await expect(page.locator(".skill-card")).toHaveCount(1);
+  await page.getByRole("region", { name: "SkillHub" }).getByRole("button", { name: "移除 frontend-design" }).click();
+  await page.getByRole("button", { name: "我安装的 6" }).click();
+  await expect(page.locator(".skill-card")).toHaveCount(0);
+  await page.getByRole("button", { name: "添加技能", exact: true }).click();
+  await page.getByPlaceholder("例如：release-notes").fill("release-notes");
+  await page.getByPlaceholder("本地路径或仓库地址").fill("./skills/release-notes");
+  await page.getByRole("dialog").getByRole("button", { name: "添加", exact: true }).click();
+  await expect(page.getByRole("button", { name: "我安装的 7" })).toBeVisible();
+  await page.getByRole("button", { name: "我安装的 7" }).click();
+  await page.getByPlaceholder("搜索技能").fill("");
+  await expect(page).toHaveScreenshot("skill-center-1280.png", { fullPage: true });
 
   await page.getByRole("button", { name: /自动化/ }).click();
   await page.getByRole("button", { name: "新建任务", exact: true }).click();

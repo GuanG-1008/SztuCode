@@ -2,7 +2,7 @@
   position: relative;
   align-self: stretch;
   display: grid;
-  grid-template-rows: 46px minmax(0, 1fr);
+  grid-template-rows: 50px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: auto;
