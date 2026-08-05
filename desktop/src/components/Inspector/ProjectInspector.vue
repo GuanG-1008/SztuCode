@@ -9,6 +9,7 @@ import {
   changeDiff, listChanges, readFile,
   type ChangeSummary,
 } from "../../services/sztu-runtime";
+import BrowserWebview from "./BrowserWebview.vue";
 import CodePreview from "./CodePreview.vue";
 import type { TimelineStep } from "../timeline/types";
 
@@ -187,6 +188,11 @@ function reloadBrowser(tab: BrowserTab) {
   tab.frameKey += 1;
 }
 
+function browserLoadError(tab: BrowserTab, message: string) {
+  tab.loading = false;
+  notice.value = `网页加载失败：${message}`;
+}
+
 async function refreshArtifacts() {
   loadingArtifacts.value = true;
   notice.value = "";
@@ -359,10 +365,17 @@ onBeforeUnmount(() => {
         <button type="submit" title="访问" aria-label="访问网页"><Send :size="14" /></button>
       </form>
       <div class="browser-stage">
-        <iframe v-if="currentBrowser.url" :key="currentBrowser.frameKey" :src="currentBrowser.url" :title="currentBrowser.label" @load="currentBrowser.loading = false" />
+        <BrowserWebview
+          v-if="currentBrowser.url"
+          :key="currentBrowser.id"
+          :tab-id="currentBrowser.id"
+          :url="currentBrowser.url"
+          :reload-key="currentBrowser.frameKey"
+          @loaded="currentBrowser.loading = false"
+          @error="browserLoadError(currentBrowser, $event)"
+        />
         <div v-else class="browser-empty"><Globe2 :size="28" /><p>暂无网页预览，让AI生成一些内容看看吧！</p></div>
         <div v-if="currentBrowser.loading" class="browser-loading"><LoaderCircle :size="20" /><span>正在载入网页</span></div>
-        <p v-if="currentBrowser.url && !currentBrowser.loading" class="browser-frame-note">页面空白时，可能是网站限制嵌入预览</p>
       </div>
     </main>
 

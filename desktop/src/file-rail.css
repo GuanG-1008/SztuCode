@@ -121,12 +121,12 @@
 .browser-toolbar label:focus-within { border-color: #9cb8aa; box-shadow: 0 0 0 3px rgb(69 119 94 / 8%); }
 .browser-toolbar input { min-width: 0; padding: 0; color: #424844; background: transparent; border: 0; outline: 0; font-size: 10px; }
 .browser-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
-.browser-stage iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.browser-renderer,
+.browser-renderer iframe { width: 100%; height: 100%; border: 0; background: #fff; }
 .browser-empty { display: flex; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 11px; padding: 24px; color: #a3a8a4; text-align: center; }
 .browser-empty p { max-width: 270px; margin: 0; color: #989d99; font-size: 11px; line-height: 1.7; }
 .browser-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #68716c; background: rgb(255 255 255 / 88%); font-size: 10px; }
 .browser-loading svg { animation: spin 1s linear infinite; }
-.browser-frame-note { position: absolute; right: 9px; bottom: 8px; margin: 0; padding: 4px 6px; color: #8c928e; background: rgb(250 250 249 / 92%); border: 1px solid #e3e5e2; border-radius: 4px; font-size: 8px; pointer-events: none; }
 
 .sandbox-workspace { min-width: 0; min-height: 0; overflow: hidden; background: #fff; border-radius: 0 0 9px 9px; }
 .workspace-empty-view { min-width: 0; min-height: 0; background: #fff; border-radius: 0 0 9px 9px; }
