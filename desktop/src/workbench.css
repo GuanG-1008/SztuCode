@@ -24,6 +24,7 @@
   position: relative;
   z-index: 6;
   width: min(920px, calc(100% - 48px));
+  overflow: visible;
 }
 
 .layout-divider {
@@ -445,25 +446,33 @@
 .nav-toggle { background: transparent; border-color: transparent; box-shadow: none; }
 .nav-toggle:hover { background: #e7e7e7; border-color: transparent; }
 .window-action:hover { background: #e5e5e5; }
-.agent-sidebar { padding: 0 10px; background: #f2f2f2; border-right: 0; }
+.sidebar-viewport { min-width: 0; min-height: 0; overflow: hidden; background: #f2f2f2; visibility: visible; transition: visibility 0s linear; }
+.agent-sidebar { width: 268px; min-width: 268px; height: 100%; padding: 0 10px; background: #f2f2f2; border-right: 0; opacity: 1; transform: translateX(0); transition: opacity 150ms ease, transform 220ms cubic-bezier(.22, .72, .22, 1); }
+.sidebar-collapsed .sidebar-viewport { visibility: hidden; pointer-events: none; transition-delay: 220ms; }
+.sidebar-collapsed .agent-sidebar { opacity: 0; transform: translateX(-12px); }
 .kimi-main { margin: 0 8px 8px 0; background: #fff; border: 0; border-radius: 13px; box-shadow: 0 1px 3px #18202b0a; }
 .kimi-main:has(.work-page) { overflow: visible; background: transparent; border-radius: 0; box-shadow: none; }
 .kimi-main.chat-main, .chat-main { border: 0; border-radius: 13px; }
-.sidebar-brand { display: flex; align-items: center; min-height: 45px; padding: 4px 8px 0; }
+.sidebar-brand { display: flex; align-items: center; min-height: 45px; padding: 4px 1px 0 8px; }
 .sidebar-brand h1 { margin: 0; color: #172033; font-family: "Aptos Display", "Microsoft YaHei UI", sans-serif; font-size: 17px; font-weight: 650; letter-spacing: 0; }
-.sidebar-command { display: grid; gap: 7px; padding: 4px 0 12px; border-bottom: 0; }
-.new-task-button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 37px; padding: 0 10px; color: #253047; background: #fff; border: 0; border-radius: 7px; box-shadow: 0 1px 3px #17203312; font-size: 13px; font-weight: 500; text-align: left; transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 100ms ease; }
-.new-task-button:hover { color: #171b22; background: #fafafa; box-shadow: 0 2px 6px #17203314; }
-.new-task-button:active { transform: translateY(1px); }
-.new-task-button:focus-visible { outline: 0; box-shadow: inset 0 0 0 1px #5f646b, 0 1px 3px #17203312; }
-.new-task-button > svg { color: #4d5665; }
+.task-search-toggle { display: grid; width: 30px; height: 30px; margin-left: auto; padding: 0; place-items: center; color: #69717c; background: transparent; border-radius: 6px; transition: color 120ms ease, background-color 120ms ease; }
+.task-search-toggle:hover, .task-search-toggle[aria-expanded="true"] { color: #25292f; background: #e5e5e5; }
+.task-search-toggle:focus-visible { outline: 0; box-shadow: inset 0 0 0 1px #8b8f95; }
+.sidebar-command { display: grid; padding: 4px 1px 0; border-bottom: 0; }
+.new-task-button { display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; min-height: 31px; padding: 0 8px; color: #626871; background: transparent; border: 0; border-radius: 6px; box-shadow: none; font-size: 11px; font-weight: 400; text-align: left; transition: color 120ms ease, background-color 120ms ease; }
+.new-task-button:hover { color: #25292f; background: #e9e9e9; box-shadow: none; }
+.new-task-button:active { background: #dedede; }
+.new-task-button:focus-visible { color: #25292f; background: #e9e9e9; outline: 0; box-shadow: inset 0 0 0 1px #8b8f95; }
+.new-task-button > svg { width: 16px; height: 16px; color: currentColor; }
 .new-task-button kbd { margin-left: auto; color: #8b96a7; font: 10px/1 "SFMono-Regular", Consolas, monospace; }
-.task-search { display: flex; align-items: center; gap: 7px; min-height: 33px; padding: 0 9px; color: #8490a2; background: #fff; border: 0; border-radius: 7px; box-shadow: 0 1px 3px #17203310; }
+.task-search { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; min-height: 33px; margin: 1px 1px 4px; padding: 0 5px 0 9px; color: #8490a2; background: #fff; border: 0; border-radius: 7px; box-shadow: 0 1px 3px #17203310; }
 .task-search:focus-within { color: #2563eb; box-shadow: 0 0 0 2px #2563eb14, 0 1px 3px #17203310; }
 .task-search input { min-width: 0; width: 100%; padding: 0; color: #253047; background: transparent; border: 0; outline: 0; font-size: 12px; }
 .task-search input::placeholder { color: #9aa4b2; }
 .task-search input::-webkit-search-cancel-button { opacity: .55; }
-.sidebar-workspace { min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; padding: 4px 1px 10px; scrollbar-width: thin; scrollbar-color: #cdd1d5 transparent; }
+.task-search > button { display: grid; flex: 0 0 auto; width: 24px; height: 24px; padding: 0; place-items: center; color: #828a95; background: transparent; border-radius: 5px; }
+.task-search > button:hover { color: #343940; background: #eceeef; }
+.sidebar-workspace { min-height: 0; flex: 1 1 auto; overflow-x: hidden; overflow-y: auto; padding: 6px 1px 10px; scrollbar-width: thin; scrollbar-color: #cdd1d5 transparent; }
 .agent-sidebar .side-section { margin-top: 15px; }
 .agent-sidebar .side-label { display: flex; align-items: center; min-height: 24px; margin: 0 7px 5px; color: #6f7b8e; font-size: 11px; font-weight: 500; }
 .agent-sidebar .side-label small { margin-left: auto; color: #a0a5ab; font-size: 10px; font-weight: 400; }
@@ -506,7 +515,7 @@
 .archived-projects summary small { margin-left: auto; font-size: 10px; }
 .archived-projects[open] summary { color: #555a61; }
 .archived-projects .project-row-shell { margin-left: -7px; }
-.sidebar-tools { display: grid; flex: 0 0 auto; gap: 1px; padding: 8px 1px; border-top: 0; }
+.sidebar-tools { display: grid; flex: 0 0 auto; gap: 1px; padding: 1px 1px 5px; border-top: 0; }
 .sidebar-tools button { display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 31px; width: 100%; padding: 0 8px; color: #626871; background: transparent; border-radius: 6px; text-align: left; font-size: 11px; transition: color 120ms ease, background-color 120ms ease; }
 .sidebar-tools button:hover { color: #25292f; background: #e9e9e9; }
 .sidebar-tools button:focus-visible { color: #25292f; background: #e9e9e9; outline: 0; box-shadow: inset 0 0 0 1px #8b8f95; }
@@ -528,20 +537,23 @@
 .agent-sidebar .settings-link { flex: 0 0 auto; }
 @media (max-width: 760px) {
   .kimi-shell { grid-template-columns: 224px minmax(0, 1fr); }
-  .agent-sidebar { padding-inline: 7px; }
+  .agent-sidebar { width: 224px; min-width: 224px; padding-inline: 7px; }
   .status-task-row small, .sidebar-tools button small { display: none; }
 }
 
 /* New-task launcher: project context, execution controls, then starter tasks. */
 .task-launcher { display: flex; min-height: 100%; padding: 40px 28px; align-items: center; justify-content: center; }
 .launcher-content { width: 760px; min-width: 0; flex: 0 1 760px; transform: translateY(-3vh); }
-.launcher-heading { display: flex; align-items: center; gap: 13px; margin: 0 0 19px 3px; }
-.launcher-mark { display: block; width: 44px; height: 44px; flex: 0 0 auto; overflow: hidden; background: #24272c; border-radius: 11px; box-shadow: inset 0 0 0 1px #ffffff1f, 0 2px 5px #1f23291f; }
-.launcher-mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.launcher-heading { display: flex; align-items: center; gap: 19px; min-height: 58px; margin: 0 0 24px 3px; }
+.launcher-mark { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; color: #202225; }
+.launcher-mark svg { display: block; }
 .launcher-heading__copy { min-width: 0; }
-.launcher-product { display: block; margin: 0 0 2px; color: #555b63; font-size: 11px; font-weight: 650; line-height: 1.2; letter-spacing: 0; }
-.launcher-heading h1 { margin: 0; color: #20242a; font-size: 22px; font-weight: 600; line-height: 1.18; letter-spacing: 0; }
-.launcher-heading p { margin: 4px 0 0; color: #8a9098; font-size: 12px; }
+.task-launcher .launcher-heading h1 { display: inline-grid; margin: 0; color: #1e2023; font-family: "Aptos Display", "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif; font-size: 42px; font-weight: 560; line-height: 1.16; letter-spacing: 0; }
+.launcher-heading h1::before, .launcher-heading h1 > span { grid-area: 1 / 1; white-space: nowrap; }
+.launcher-heading h1::before { visibility: hidden; content: "Work with SztuCode"; }
+.launcher-heading h1 > span { width: 0; overflow: hidden; border-right: 2px solid #25282c; animation: launcher-title-type 1.35s steps(18, end) 180ms forwards, launcher-title-caret 450ms step-end 3 180ms forwards; }
+@keyframes launcher-title-type { to { width: 100%; } }
+@keyframes launcher-title-caret { 50%, 100% { border-color: transparent; } }
 .task-launcher .landing-composer { width: 100%; min-width: 0; margin: 0; overflow: visible; background: #f5f5f5; border: 0; border-radius: 13px; box-shadow: none; }
 .task-launcher .landing-composer:focus-within { border-color: transparent; box-shadow: none; }
 .task-launcher .landing-composer textarea { min-height: 126px; padding: 17px 18px 10px; background: #fff; border: 1px solid #d7d9dc; border-radius: 13px; box-shadow: 0 4px 14px #18202b0c; font-size: 14px; }
@@ -600,9 +612,13 @@
   .starter-tasks > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {
-  .launcher-heading p, .task-launcher .model-label { display: none; }
+  .task-launcher .model-label { display: none; }
   .task-launcher { padding-inline: 14px; }
   .launcher-content { transform: none; }
+  .launcher-heading { gap: 13px; }
+  .launcher-mark { width: 40px; height: 40px; }
+  .launcher-mark svg { width: 36px; height: 36px; }
+  .task-launcher .launcher-heading h1 { font-size: 32px; }
   .permission-popover { left: -40px; width: min(310px, calc(100vw - 264px)); }
   .project-picker-popover { width: min(310px, calc(100vw - 264px)); }
 }
@@ -635,10 +651,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .kimi-shell,
+  .sidebar-viewport,
+  .agent-sidebar,
   .project-task-list,
   .project-collapse svg,
   .project-action-menu,
   .sidebar-more-tools,
   .sidebar-more-trigger > svg:last-child,
   .starter-tasks button { transition: none; animation: none; }
+  .launcher-heading h1 > span { width: 100%; border-right-color: transparent; animation: none; }
+  .sidebar-collapsed .sidebar-viewport { transition-delay: 0s; }
 }

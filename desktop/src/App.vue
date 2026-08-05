@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, ArrowLeft, Bot, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
-  Globe2, LayoutDashboard, MessageCircle, Minimize2, PanelLeftClose, PanelLeftOpen,
+  AlertTriangle, Archive, ArrowLeft, BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  Globe2, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import appIconUrl from "../src-tauri/icons/icon.svg";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
@@ -59,10 +58,13 @@ const projectActionsOpen = ref<string | null>(null);
 const sidebarToolsExpanded = ref(false);
 const collapsedProjects = ref(new Set<string>());
 const taskQuery = ref("");
+const taskSearchOpen = ref(false);
+const taskSearchInput = ref<HTMLInputElement | null>(null);
 const inspectorOpen = ref(true);
 const inspectorRendered = ref(true);
 const inspectorWidth = ref(Math.min(720, Math.max(340, Number(localStorage.getItem("sztu.inspectorWidth")) || 390)));
 let inspectorCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let inspectorOpenFrame: number | undefined;
 const attachedFiles = ref<string[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
@@ -119,18 +121,39 @@ const taskStatusLabel = (item: Session) => item.status === "active" ? "运行中
 // 工作区布局：保留三列结构，让分隔线和面板宽度在收起时连续归零
 const workLayoutStyle = computed(() => {
   if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr) 0px 0px" };
-  return { gridTemplateColumns: `minmax(0, 1fr) 10px ${inspectorWidth.value}px` };
+  return { gridTemplateColumns: `minmax(0, 1fr) 6px ${inspectorWidth.value}px` };
 });
+
+async function toggleTaskSearch() {
+  taskSearchOpen.value = !taskSearchOpen.value;
+  if (taskSearchOpen.value) {
+    await nextTick();
+    taskSearchInput.value?.focus();
+  }
+}
+
+function clearTaskSearch() {
+  taskQuery.value = "";
+  taskSearchOpen.value = false;
+}
 // 延迟卸载工作区面板，保证关闭动画完整播放
 function setInspectorOpen(next: boolean) {
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
+  if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
   if (next) {
     inspectorRendered.value = true;
-    requestAnimationFrame(() => { inspectorOpen.value = true; });
+    inspectorOpenFrame = requestAnimationFrame(() => {
+      inspectorOpen.value = true;
+      inspectorOpenFrame = undefined;
+    });
     return;
   }
+  inspectorOpenFrame = undefined;
   inspectorOpen.value = false;
-  inspectorCloseTimer = setTimeout(() => { inspectorRendered.value = false; }, 240);
+  inspectorCloseTimer = setTimeout(() => {
+    inspectorRendered.value = false;
+    inspectorCloseTimer = undefined;
+  }, 240);
 }
 function toggleInspector() { setInspectorOpen(!inspectorOpen.value); }
 // 拖拽分割线调整左右面板宽度比，并限制最小/最大宽度
@@ -740,6 +763,8 @@ onMounted(() => {
   void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
 });
 onBeforeUnmount(() => {
+  if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
+  if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("resize", handleWindowResize);
   document.removeEventListener("pointerdown", handleDocumentPointerDown);
@@ -762,24 +787,43 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       </div>
       <div class="titlebar-drag-region" data-tauri-drag-region @dblclick="toggleMaximizeWindow" />
       <div class="window-actions" aria-label="Window controls">
-        <button class="window-action" type="button" title="Minimize" aria-label="Minimize window" @click="minimizeWindow"><Minimize2 :size="15" :stroke-width="1.8" /></button>
+        <button class="window-action" type="button" title="Minimize" aria-label="Minimize window" @click="minimizeWindow"><Minus :size="15" :stroke-width="1.8" /></button>
         <button class="window-action" type="button" title="Maximize or restore" aria-label="Maximize or restore window" @click="toggleMaximizeWindow"><Square :size="13" :stroke-width="1.8" /></button>
         <button class="window-action window-action--close" type="button" title="Close" aria-label="Close window" @click="closeWindow"><X :size="17" :stroke-width="1.8" /></button>
       </div>
     </header>
 
-    <aside id="primary-navigation" class="kimi-sidebar agent-sidebar">
+    <div class="sidebar-viewport">
+      <aside id="primary-navigation" class="kimi-sidebar agent-sidebar">
       <header class="sidebar-brand">
         <h1>SztuCode</h1>
+        <button class="task-search-toggle" type="button" title="搜索任务或项目" aria-label="搜索任务或项目" :aria-expanded="taskSearchOpen" aria-controls="task-search-field" @click="toggleTaskSearch">
+          <Search :size="16" aria-hidden="true" />
+        </button>
       </header>
+
+      <label v-if="taskSearchOpen || taskQuery" id="task-search-field" class="task-search">
+        <Search :size="15" aria-hidden="true" />
+        <input ref="taskSearchInput" v-model="taskQuery" type="search" placeholder="搜索任务或项目" aria-label="搜索任务或项目" @keydown.esc="clearTaskSearch" />
+        <button v-if="taskQuery" type="button" title="清除搜索" aria-label="清除搜索" @click="clearTaskSearch"><X :size="14" /></button>
+      </label>
 
       <div class="sidebar-command">
         <button class="new-task-button" @click="beginTask()"><CirclePlus :size="18" />新建任务 <kbd>Ctrl K</kbd></button>
-        <label class="task-search">
-          <Search :size="15" aria-hidden="true" />
-          <input v-model="taskQuery" type="search" placeholder="搜索任务或项目" aria-label="搜索任务或项目" />
-        </label>
       </div>
+
+      <nav class="sidebar-tools" aria-label="工作台工具">
+        <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="16" /><span>全部任务</span></button>
+        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" /><span>自动化</span><small>即将推出</small></button>
+        <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" /><span>更多</span><ChevronDown :size="13" /></button>
+        <div v-if="sidebarToolsExpanded" id="sidebar-more-tools" class="sidebar-more-tools">
+          <div>
+            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>技能</span></button>
+            <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" /><span>浏览器连接</span></button>
+            <button :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
+          </div>
+        </div>
+      </nav>
 
       <div class="sidebar-workspace">
         <section v-if="!normalizedTaskQuery && (attentionTasks.length || runningTasks.length)" class="side-section task-focus">
@@ -862,24 +906,12 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         </details>
       </div>
 
-      <nav class="sidebar-tools" aria-label="工作台工具">
-        <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="16" /><span>全部任务</span></button>
-        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" /><span>自动化</span><small>即将推出</small></button>
-        <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" /><span>更多</span><ChevronDown :size="13" /></button>
-        <div v-if="sidebarToolsExpanded" id="sidebar-more-tools" class="sidebar-more-tools">
-          <div>
-            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>技能</span></button>
-            <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" /><span>浏览器连接</span></button>
-            <button :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
-          </div>
-        </div>
-      </nav>
-
       <footer class="sidebar-footer">
         <div class="service-status"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : '未连接' }}</small></span></div>
         <button class="settings-link" title="设置" aria-label="设置" @click="openPage('settings')"><Settings :size="16" /></button>
       </footer>
-    </aside>
+      </aside>
+    </div>
 
     <main class="kimi-main" :class="{ 'chat-main': page === 'chat' }">
       <template v-if="page === 'work'">
@@ -931,11 +963,9 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-else class="landing-page task-launcher" :class="{ 'slash-open': slashMenuOpen }">
           <div class="launcher-content">
             <header class="launcher-heading">
-              <span class="launcher-mark"><img :src="appIconUrl" alt="SztuCode" /></span>
+              <span class="launcher-mark" aria-hidden="true"><BookOpen :size="42" :stroke-width="1.8" /></span>
               <div class="launcher-heading__copy">
-                <span class="launcher-product">SztuCode</span>
-                <h1>开始一个任务</h1>
-                <p>{{ workspace ? `在 ${workspace.name} 中工作` : '选择本地项目，或直接创建临时任务' }}</p>
+                <h1 aria-label="Work with SztuCode"><span aria-hidden="true">Work with SztuCode</span></h1>
               </div>
             </header>
 

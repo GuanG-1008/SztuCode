@@ -248,3 +248,75 @@ samp,
 .task-summary-view .summary-plan-list li.in_progress {
   font-weight: 400;
 }
+
+/* Slash invocation menu: wider command column and readable UI-sized supporting copy. */
+.slash-menu {
+  width: min(820px, 100%);
+  max-width: 100%;
+  font-family: var(--font-ui);
+}
+
+.slash-menu__scroll {
+  max-height: min(340px, 42vh);
+  padding: 7px;
+}
+
+.slash-menu__group h3 {
+  height: 30px;
+  padding-inline: 9px;
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
+
+.slash-menu__group h3 small {
+  font-size: var(--text-micro);
+}
+
+.slash-menu__group button {
+  grid-template-columns: 26px minmax(120px, 210px) minmax(0, 1fr) 18px;
+  gap: 10px;
+  min-height: 42px;
+  padding: 6px 9px;
+}
+
+.slash-menu__group button b {
+  font: 500 var(--text-control)/1.45 var(--font-code);
+}
+
+.slash-menu__group button > span:nth-of-type(2) {
+  font-size: var(--text-control);
+  line-height: 1.55;
+}
+
+.slash-menu__empty b {
+  font-size: var(--text-control);
+}
+
+.slash-menu__empty span,
+.slash-menu__notice,
+.slash-menu > footer {
+  font-size: var(--text-caption);
+  line-height: 1.55;
+}
+
+.slash-menu > footer {
+  min-height: 38px;
+  padding-inline: 12px;
+}
+
+.slash-menu kbd {
+  font: 400 var(--text-micro)/1 var(--font-code);
+}
+
+@media (max-width: 900px) {
+  .slash-menu__group button {
+    grid-template-columns: 24px minmax(108px, 170px) minmax(0, 1fr) 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .slash-menu__group button {
+    grid-template-columns: 24px minmax(96px, 145px) minmax(0, 1fr) 14px;
+    gap: 8px;
+  }
+}
