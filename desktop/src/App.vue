@@ -9,12 +9,12 @@ import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
-import WorkContextPanel from "./components/Inspector/WorkContextPanel.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
 import DiffReview from "./components/Diff/DiffReview.vue";
 import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
+import SkillCenter from "./components/Skills/SkillCenter.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry } from "./components/timeline/types";
 import {
@@ -27,9 +27,12 @@ import {
 type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "settings" | "diff";
 type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
 type RuntimeEvent = Record<string, unknown>;
+const FULL_SIDEBAR_MIN_WIDTH = 952;
+const FULL_SIDEBAR_MIN_HEIGHT = 640;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
-const sidebarCollapsed = ref(window.innerWidth <= 620);
+const sidebarCollapsed = ref(window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT);
+let sidebarAutoCollapsed = sidebarCollapsed.value;
 const connected = ref(false);
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
@@ -57,7 +60,9 @@ const sidebarToolsExpanded = ref(false);
 const collapsedProjects = ref(new Set<string>());
 const taskQuery = ref("");
 const inspectorOpen = ref(true);
-const inspectorWidth = ref(Math.min(720, Math.max(280, Number(localStorage.getItem("sztu.inspectorWidth")) || 355)));
+const inspectorRendered = ref(true);
+const inspectorWidth = ref(Math.min(720, Math.max(340, Number(localStorage.getItem("sztu.inspectorWidth")) || 390)));
+let inspectorCloseTimer: ReturnType<typeof setTimeout> | undefined;
 const attachedFiles = ref<string[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
@@ -111,19 +116,31 @@ const permissionModeLabel = computed(() => ({
   auto: "全部允许",
 }[runtimeSettings.value?.permission_mode ?? "normal"]));
 const taskStatusLabel = (item: Session) => item.status === "active" ? "运行中" : item.status === "waiting_for_input" ? "等待输入" : "已完成";
-// 工作区布局：右侧文件面板宽度走可拖拽的 CSS 变量，收起时退化为单列
+// 工作区布局：保留三列结构，让分隔线和面板宽度在收起时连续归零
 const workLayoutStyle = computed(() => {
-  if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr)" };
-  return { gridTemplateColumns: `minmax(0, 1fr) 6px ${inspectorWidth.value}px` };
+  if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr) 0px 0px" };
+  return { gridTemplateColumns: `minmax(0, 1fr) 10px ${inspectorWidth.value}px` };
 });
+// 延迟卸载工作区面板，保证关闭动画完整播放
+function setInspectorOpen(next: boolean) {
+  if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
+  if (next) {
+    inspectorRendered.value = true;
+    requestAnimationFrame(() => { inspectorOpen.value = true; });
+    return;
+  }
+  inspectorOpen.value = false;
+  inspectorCloseTimer = setTimeout(() => { inspectorRendered.value = false; }, 240);
+}
+function toggleInspector() { setInspectorOpen(!inspectorOpen.value); }
 // 拖拽分割线调整左右面板宽度比，并限制最小/最大宽度
 function startDividerDrag(event: MouseEvent) {
   event.preventDefault();
   const startX = event.clientX;
   const startWidth = inspectorWidth.value;
   const container = (event.currentTarget as HTMLElement).parentElement;
-  const maxWidth = Math.max(280, (container?.clientWidth ?? 1200) - 320); // 左侧对话区至少保留 320
-  const minWidth = 280;
+  const maxWidth = Math.max(340, (container?.clientWidth ?? 1200) - 360); // 左侧对话区至少保留 360
+  const minWidth = 340;
   function onMove(ev: MouseEvent) {
     inspectorWidth.value = Math.min(maxWidth, Math.max(minWidth, startWidth + (startX - ev.clientX)));
   }
@@ -433,7 +450,7 @@ async function createProjectTask(item: Workspace) {
 }
 async function showProjectFiles(item: Workspace) {
   projectActionsOpen.value = null;
-  inspectorOpen.value = true;
+  setInspectorOpen(true);
   workspace.value = item;
   const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id);
   if (matching) await chooseTask(matching.session_id);
@@ -681,7 +698,24 @@ async function submitChat(content: string) { await submitTask(content, null); pa
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
 async function toggleMaximizeWindow() { await getCurrentWindow().toggleMaximize(); }
 async function closeWindow() { await getCurrentWindow().close(); }
-function toggleSidebar() { sidebarCollapsed.value = !sidebarCollapsed.value; }
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  sidebarAutoCollapsed = false;
+}
+function handleWindowResize() {
+  const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
+  if (belowFullSidebarSize) {
+    if (!sidebarCollapsed.value) {
+      sidebarCollapsed.value = true;
+      sidebarAutoCollapsed = true;
+    }
+    return;
+  }
+  if (sidebarAutoCollapsed) {
+    sidebarCollapsed.value = false;
+    sidebarAutoCollapsed = false;
+  }
+}
 function handleGlobalShortcut(event: KeyboardEvent) {
   if (event.ctrlKey && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); beginTask(); }
@@ -699,6 +733,7 @@ let stopEvents: (() => void) | undefined;
 let stopDisconnect: (() => void) | undefined;
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
+  window.addEventListener("resize", handleWindowResize);
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
   void loadNativeSettings();
@@ -706,6 +741,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleGlobalShortcut);
+  window.removeEventListener("resize", handleWindowResize);
   document.removeEventListener("pointerdown", handleDocumentPointerDown);
   stopEvents?.();
   stopDisconnect?.();
@@ -832,7 +868,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" /><span>更多</span><ChevronDown :size="13" /></button>
         <div v-if="sidebarToolsExpanded" id="sidebar-more-tools" class="sidebar-more-tools">
           <div>
-            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>扩展</span></button>
+            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>技能</span></button>
             <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" /><span>浏览器连接</span></button>
             <button :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
           </div>
@@ -848,23 +884,23 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
     <main class="kimi-main" :class="{ 'chat-main': page === 'chat' }">
       <template v-if="page === 'work'">
         <section v-if="active" class="work-page">
-          <header class="work-header">
-            <button class="workspace-trigger" @click="projectMenuOpen = !projectMenuOpen"><span>{{ activeWorkspace?.name || '未选择项目' }}</span><ChevronDown :size="14" /></button>
-            <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
-            <div class="work-header__tools">
-              <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
-              <button title="项目文件" :class="{ active: inspectorOpen }" @click="inspectorOpen = !inspectorOpen"><Folder :size="18" /></button>
-            </div>
-          </header>
-          <div v-if="pendingPermissions.length" class="global-permission-banner" aria-live="polite">
-            <div v-for="perm in pendingPermissions" :key="perm.toolUseId" class="global-permission-item">
-              <ShieldCheck :size="15" /><b>后台任务请求权限</b><span>{{ perm.toolName }} · {{ perm.preview }}</span>
-              <button type="button" @click="decidePermission(perm.toolUseId, 'deny_once')">拒绝</button>
-              <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
-            </div>
-          </div>
           <div class="work-layout" :class="{ 'no-inspector': !inspectorOpen || !activeWorkspace }" :style="workLayoutStyle">
             <section class="task-canvas">
+              <header class="work-header">
+                <button class="workspace-trigger" @click="projectMenuOpen = !projectMenuOpen"><span>{{ activeWorkspace?.name || '未选择项目' }}</span><ChevronDown :size="14" /></button>
+                <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
+                <div class="work-header__tools">
+                  <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
+                  <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
+                </div>
+              </header>
+              <div v-if="pendingPermissions.length" class="global-permission-banner" aria-live="polite">
+                <div v-for="perm in pendingPermissions" :key="perm.toolUseId" class="global-permission-item">
+                  <ShieldCheck :size="15" /><b>后台任务请求权限</b><span>{{ perm.toolName }} · {{ perm.preview }}</span>
+                  <button type="button" @click="decidePermission(perm.toolUseId, 'deny_once')">拒绝</button>
+                  <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
+                </div>
+              </div>
               <div class="task-conversation">
                 <div class="task-stream">
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><div><b>从一个明确目标开始</b><p>SztuCode 会在当前项目中完成工作，并把验证结果、文件变更和可回滚记录留在这里。</p></div></div>
@@ -877,11 +913,18 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
-              <WorkContextPanel :steps="orderedTimeline" :attachments="attachedFiles" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" />
             </section>
-            <template v-if="inspectorOpen && activeWorkspace">
+            <template v-if="inspectorRendered && activeWorkspace">
               <div class="layout-divider" role="separator" aria-orientation="vertical" title="拖拽调整面板宽度" @mousedown="startDividerDrag" />
-              <ProjectInspector :workspace-id="activeWorkspace.workspace_id" :run-id="active.latest_run_id" />
+              <ProjectInspector
+                :workspace-id="activeWorkspace.workspace_id"
+                :run-id="active.latest_run_id"
+                :steps="orderedTimeline"
+                :attachments="attachedFiles"
+                :workspace-name="activeWorkspace.name"
+                :workspace-path="activeWorkspace.path"
+                @close="setInspectorOpen(false)"
+              />
             </template>
           </div>
         </section>
@@ -958,7 +1001,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       </section>
       <section v-else-if="page === 'automations'" class="chat-main"><ChatPortal view="automations" :connected="connected" @submit="submitChat" @navigate="(view) => { page = 'chat'; chatView = view }" @open-project="openLocalProject" /></section>
 
-      <section v-else-if="page === 'skills'" class="chat-main"><ChatPortal view="plugins" :connected="connected" @submit="submitChat" @navigate="(view) => { page = 'chat'; chatView = view }" @open-project="openLocalProject" /></section>
+      <section v-else-if="page === 'skills'" class="chat-main"><SkillCenter :skills="providerStatus?.skills ?? []" :connected="connected" /></section>
 
       <section v-else-if="page === 'webbridge'" class="simple-page"><header><div><h1>浏览器连接</h1><p>连接浏览器，让 Agent 在授权范围内协助网页操作</p></div></header><div class="bridge-card"><Globe2 :size="24" /><div><h2>连接状态</h2><p>当前未连接。此功能需要浏览器扩展与本地服务支持。</p></div><span class="status-pill">未连接</span></div></section>
 

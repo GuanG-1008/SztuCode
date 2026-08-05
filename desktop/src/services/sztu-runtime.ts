@@ -3,6 +3,7 @@ import { IpcClient } from "../lib/ipc";
 
 export type Workspace = { workspace_id: string; name: string; path: string; archived: boolean };
 export type NativeSettings = { autostart: boolean; stay_awake: boolean; supported: boolean };
+export type SandboxResult = { stdout: string; stderr: string; exit_code: number; timed_out: boolean };
 export type WorkspaceNode = { path: string; name: string; kind: "directory" | "file"; children?: WorkspaceNode[] };
 export type FileSearchMatch = { path: string; line: number; preview: string };
 export type FileReadResult = {
@@ -44,6 +45,10 @@ export async function getNativeSettings(): Promise<NativeSettings> {
 
 export async function setNativeSettings(update: { autostart?: boolean; stayAwake?: boolean }): Promise<NativeSettings> {
   return await invoke<NativeSettings>("native_settings_update", update);
+}
+
+export async function sandboxExecute(workspacePath: string, command: string): Promise<SandboxResult> {
+  return await invoke<SandboxResult>("sandbox_execute", { workspacePath, command });
 }
 
 export async function connectRuntime(): Promise<boolean> {

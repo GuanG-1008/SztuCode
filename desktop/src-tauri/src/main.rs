@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State, Window};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -59,6 +59,19 @@ struct NativeSettingsResult {
     autostart: bool,
     stay_awake: bool,
     supported: bool,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceRecord {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct SandboxResult {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    timed_out: bool,
 }
 
 static STAY_AWAKE: AtomicBool = AtomicBool::new(false);
@@ -181,6 +194,72 @@ fn native_settings_update(
         STAY_AWAKE.store(enabled, Ordering::Relaxed);
     }
     Ok(native_settings_get())
+}
+
+fn registered_workspace(requested: &str) -> Result<PathBuf, String> {
+    let canonical = PathBuf::from(requested)
+        .canonicalize()
+        .map_err(|error| format!("无法访问当前项目目录：{error}"))?;
+    if !canonical.is_dir() {
+        return Err("当前项目路径不是目录".into());
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| "无法确定用户目录".to_string())?;
+    let registry_path = PathBuf::from(home).join(".sztu").join("workspaces.json");
+    let registry = std::fs::read_to_string(&registry_path)
+        .map_err(|error| format!("无法读取项目登记信息：{error}"))?;
+    let records: Vec<WorkspaceRecord> = serde_json::from_str(&registry)
+        .map_err(|error| format!("项目登记信息格式无效：{error}"))?;
+    let registered = records.into_iter().any(|record| {
+        PathBuf::from(record.path)
+            .canonicalize()
+            .is_ok_and(|path| path == canonical)
+    });
+    if !registered {
+        return Err("仅允许在已登记的当前项目目录中执行命令".into());
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
+async fn sandbox_execute(workspace_path: String, command: String) -> Result<SandboxResult, String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Err("命令不能为空".into());
+    }
+    if command.len() > 16_384 {
+        return Err("命令长度超过限制".into());
+    }
+    let workspace = registered_workspace(&workspace_path)?;
+    let mut process = Command::new("powershell.exe");
+    process
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command])
+        .current_dir(workspace)
+        .kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    process.as_std_mut().creation_flags(0x0800_0000);
+    let child = process
+        .spawn()
+        .map_err(|error| format!("无法启动 PowerShell：{error}"))?;
+    match tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(SandboxResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            exit_code: output.status.code().unwrap_or(-1),
+            timed_out: false,
+        }),
+        Ok(Err(error)) => Err(format!("命令执行失败：{error}")),
+        Err(_) => Ok(SandboxResult {
+            stdout: String::new(),
+            stderr: "命令运行超过 30 秒，已停止等待".into(),
+            exit_code: 124,
+            timed_out: true,
+        }),
+    }
 }
 
 fn daemon_candidates() -> Vec<(PathBuf, Vec<String>, Option<PathBuf>)> {
@@ -375,13 +454,34 @@ fn main() {
             ipc_send,
             daemon_start,
             native_settings_get,
-            native_settings_update
+            native_settings_update,
+            sandbox_execute
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window exists");
+            if let Some(icon) = app.default_window_icon() {
+                window.set_icon(icon.clone())?;
+            }
             window.set_focus().expect("focus main window");
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running SztuCode desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_rejects_unregistered_workspace() {
+        let temporary = std::env::temp_dir().join(format!(
+            "sztucode-sandbox-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temporary).expect("temporary directory");
+        let result = registered_workspace(temporary.to_string_lossy().as_ref());
+        let _ = std::fs::remove_dir(&temporary);
+        assert!(result.is_err());
+    }
 }
