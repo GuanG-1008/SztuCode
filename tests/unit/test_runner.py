@@ -308,7 +308,10 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
 
     await runner.run_and_capture("remember python", run_id="run-new", session=session, store=store)
 
-    assert provider.messages == [{"role": "user", "content": "remember python"}]
+    # read_messages 现在透出 ts 时间戳，LLM 上下文忽略它
+    assert [{k: v for k, v in m.items() if k != "ts"} for m in provider.messages] == [
+        {"role": "user", "content": "remember python"}
+    ]
     assert provider.system is not None
     assert "Python 3.12" in provider.system
     assert (store.runs_dir("sess-1") / "run-new" / "events.jsonl").exists()

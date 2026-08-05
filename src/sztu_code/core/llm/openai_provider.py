@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+import openai
 from openai import AsyncOpenAI
 
 from sztu_code.core.bus.events import (
@@ -35,6 +36,8 @@ _KNOWN_CONTEXT_WINDOWS: list[tuple[str, int]] = [
 
 _MAX_STREAM_RETRIES = 3
 _RETRY_BACKOFF_S = (1.0, 2.0, 4.0)
+# 限流/服务过载（429/503/5xx）用更长的退避
+_RATE_LIMIT_BACKOFF_S = (5.0, 10.0, 20.0)
 
 log = logging.getLogger(__name__)
 
@@ -66,8 +69,11 @@ def _now() -> str:
 def _anth_to_openai_messages(
     messages: list[dict[str, object]],
     system: str | None = None,
+    *,
+    text_tool_history: bool = False,
 ) -> list[dict[str, object]]:
     openai_msgs: list[dict[str, object]] = []
+    tool_names: dict[str, str] = {}
 
     # system prompt 作为第一条消息
     effective_system = system or _SYSTEM_PROMPT
@@ -92,9 +98,17 @@ def _anth_to_openai_messages(
                         tc_content = str(block.get("content", ""))
                         if block.get("is_error"):
                             tc_content = "[ERROR] " + tc_content
-                        tool_msgs.append(
-                            {"role": "tool", "tool_call_id": tc_id, "content": tc_content}
-                        )
+                        if text_tool_history:
+                            tool_name = tool_names.get(tc_id, tc_id or "unknown")
+                            text_parts.append(f"[Tool result for {tool_name}]\n{tc_content}")
+                        else:
+                            tool_msgs.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tc_id,
+                                    "content": tc_content,
+                                }
+                            )
                 if text_parts:
                     openai_msgs.append({"role": "user", "content": "\n".join(text_parts)})
                 openai_msgs.extend(tool_msgs)
@@ -104,29 +118,44 @@ def _anth_to_openai_messages(
                 openai_msgs.append({"role": "assistant", "content": content})
             elif isinstance(content, list):
                 assistant_text: list[str] = []
+                reasoning_parts: list[str] = []
                 tool_calls: list[dict[str, object]] = []
                 for block in content:
                     btype = block.get("type", "")
                     if btype == "text":
                         assistant_text.append(str(block.get("text", "")))
+                    elif btype == "thinking":
+                        # DeepSeek 推理模型要求把 reasoning_content 原样传回
+                        thinking = str(block.get("thinking", ""))
+                        if thinking:
+                            reasoning_parts.append(thinking)
                     elif btype == "tool_use":
                             inp_json = json.dumps(block.get("input", {}), ensure_ascii=False)
+                            tool_id = str(block.get("id", ""))
+                            tool_name = str(block.get("name", ""))
+                            tool_names[tool_id] = tool_name
+                            if text_tool_history:
+                                assistant_text.append(
+                                    f"[Tool call] {tool_name}({inp_json})"
+                                )
+                                continue
                             tool_calls.append(
                                 {
-                                    "id": str(block.get("id", "")),
+                                    "id": tool_id,
                                     "type": "function",
                                     "function": {
-                                        "name": str(block.get("name", "")),
+                                        "name": tool_name,
                                         "arguments": inp_json,
                                     },
                                 }
                             )
-                    # thinking 块在 OpenAI 请求中跳过，不需要传回
                 assistant_msg: dict[str, object] = {"role": "assistant"}
                 if assistant_text:
                     assistant_msg["content"] = "\n".join(assistant_text)
                 else:
                     assistant_msg["content"] = None
+                if reasoning_parts:
+                    assistant_msg["reasoning_content"] = "".join(reasoning_parts)
                 if tool_calls:
                     assistant_msg["tool_calls"] = tool_calls
                 openai_msgs.append(assistant_msg)
@@ -185,14 +214,21 @@ def _keyless_http_client() -> httpx.AsyncClient:
 class OpenAIProvider:
     # 初始化 OpenAI 客户端；client 可在测试时注入以跳过 API key 检查
     def __init__(self, model: str, client: Any = None, *, context_window: int = 0) -> None:
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        is_campus_deepseek = bool(
+            model == "deepseek-v4-pro"
+            and base_url
+            and "apiai.sztu.edu.cn" in base_url.lower()
+        )
         if client is None:
             api_key = os.environ.get("OPENAI_API_KEY") or ""
-            base_url = os.environ.get("OPENAI_BASE_URL")
             if not api_key and not base_url:
                 raise SystemExit("OPENAI_API_KEY not set (或设置 OPENAI_BASE_URL 使用免 key 端点)")
             client_kwargs: dict[str, Any] = {"api_key": api_key or "keyless-placeholder"}
             if base_url:
                 client_kwargs["base_url"] = base_url
+            if is_campus_deepseek:
+                client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
             if not api_key:
                 # 免 key 端点：SDK 需要非空 key，但用自定义 transport 剥掉 Authorization 头
                 client_kwargs["http_client"] = _keyless_http_client()
@@ -200,6 +236,7 @@ class OpenAIProvider:
         else:
             self._client = client
         self._model = model
+        self._text_tool_history = is_campus_deepseek
         self._context_window_override = context_window
 
     # 流式调用 OpenAI 兼容 API，逐 token 发布事件并返回 LlmResponse；网络中断时自动重试
@@ -217,7 +254,11 @@ class OpenAIProvider:
             LlmModelSelectedEvent(run_id=run_id, model=self._model, strategy="static", ts=_now())
         )
 
-        openai_msgs = _anth_to_openai_messages(messages, system=system)
+        openai_msgs = _anth_to_openai_messages(
+            messages,
+            system=system,
+            text_tool_history=self._text_tool_history,
+        )
         tools = _anth_to_openai_tools(tool_schemas) if tool_schemas else None
 
         text_parts: list[str] = []
@@ -314,6 +355,19 @@ class OpenAIProvider:
                 log.warning(
                     "stream dropped (attempt %d/%d) run_id=%s step=%d: %s — retrying in %.0fs",
                     attempt, _MAX_STREAM_RETRIES, run_id, step, exc, delay,
+                )
+                await asyncio.sleep(delay)
+            except openai.APIError as exc:
+                # 免费档限流/过载（429/503/5xx）带更长退避重试；其余 API 错误（401 等）直接抛
+                status = getattr(exc, "status_code", None)
+                if not (status in (429, 503) or (status and status >= 500)):
+                    raise
+                if attempt == _MAX_STREAM_RETRIES:
+                    raise
+                delay = _RATE_LIMIT_BACKOFF_S[attempt - 1]
+                log.warning(
+                    "LLM transient API error status=%s (attempt %d/%d) %s — retry in %.0fs",
+                    status, attempt, _MAX_STREAM_RETRIES, run_id, delay,
                 )
                 await asyncio.sleep(delay)
 

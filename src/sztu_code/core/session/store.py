@@ -137,7 +137,13 @@ class SessionStore:
                     role,
                 )
                 continue
-            messages.append({"role": role, "content": row.get("content", "")})
+            messages.append(
+                {
+                    "role": role,
+                    "content": row.get("content", ""),
+                    "ts": row.get("ts", ""),
+                }
+            )
 
         messages = self._trim_orphan_tool_use(messages)
         from sztu_code.core.compact.budget import truncate_tool_results

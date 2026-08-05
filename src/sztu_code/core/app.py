@@ -1087,6 +1087,10 @@ class CoreApp:
         self._start_time = time.monotonic()
         self._config = get_config()
         setup_logging(self._config)
+        # 写入自身 pid，保证 core stop 能正确定位真实 daemon（uv 包装进程的 pid 不可靠）
+        _pid_file = Path("~/.sztu/sztu-code.pid").expanduser()
+        _pid_file.parent.mkdir(parents=True, exist_ok=True)
+        _pid_file.write_text(str(os.getpid()))
 
         if self._config.trace.enabled:
             trace_path = Path(self._config.trace.file).expanduser()

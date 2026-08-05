@@ -247,6 +247,44 @@ def test_mixed_user_content_split_to_messages() -> None:
     assert non_system[2] == {"role": "tool", "tool_call_id": "t2", "content": "r2"}
 
 
+# 功能：验证校园 DeepSeek 兼容模式将工具历史降级为服务端接受的普通文本消息
+# 设计：同时覆盖 assistant.tool_calls 和 role=tool 两项被校园接口拒绝的标准字段
+def test_text_tool_history_uses_only_supported_message_roles() -> None:
+    messages: list[dict[str, object]] = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "t1", "name": "bash", "input": {"cmd": "ls"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "file.txt"},
+            ],
+        },
+    ]
+
+    result = _anth_to_openai_messages(messages, text_tool_history=True)
+
+    assert [item["role"] for item in result] == ["system", "assistant", "user"]
+    assert result[1]["content"] == '[Tool call] bash({"cmd": "ls"})'
+    assert result[2]["content"] == "[Tool result for bash]\nfile.txt"
+    assert all("tool_calls" not in item and "tool_call_id" not in item for item in result)
+
+
+# 功能：验证校园模型会识别专用端点并启用文本工具历史兼容模式
+# 设计：注入假客户端避免联网，仅通过环境端点检查实例模式不影响其他模型
+def test_campus_deepseek_enables_text_tool_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://apiai.sztu.edu.cn/v1")
+
+    campus, _ = _make_provider(model="deepseek-v4-pro")
+    other, _ = _make_provider(model="gpt-4o")
+
+    assert campus._text_tool_history is True
+    assert other._text_tool_history is False
+
+
 # --- tool schema translation tests -------------------------------------------
 
 
