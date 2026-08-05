@@ -241,7 +241,7 @@ function stepFor(event: RuntimeEvent): number {
 }
 function addUserMessage(content: string) {
   const step = Math.max(0, ...timeline.value.keys()) + 1;
-  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content }));
+  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: new Date().toISOString() }));
   return step;
 }
 function hydrateTimeline(messages: unknown[], runId?: string | null) {
@@ -264,7 +264,13 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
     }
     if (role === "user") {
       step += 1;
-      next.set(step, { ...emptyStep(step), status: "done", runId: runId ?? undefined, userMessage: text });
+      next.set(step, {
+        ...emptyStep(step),
+        status: "done",
+        runId: runId ?? undefined,
+        userMessage: text,
+        userMessageTime: String((message as { ts?: unknown })?.ts ?? ""),
+      });
       continue;
     }
     if (!step) step = 1;

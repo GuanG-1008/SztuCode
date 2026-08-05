@@ -25,6 +25,8 @@ type TurnView = {
   runId?: string;
   changePaths: string[];
   userMessage?: string;
+  userMessageTime?: string;
+  model?: string;
   hasContent: boolean;
   hasActivity: boolean;
   pending?: PermissionState;
@@ -96,6 +98,14 @@ function failureLabel(reason?: string): string {
   return `执行失败：${reason}`;
 }
 
+// 将 ISO 时间戳格式化为可读的本地时间，空值返回空串
+function formatTime(iso?: string): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, calls: ToolCallEntry[], text: string) {
   if (pending) return { state: "waiting" as const, label: "等待你的授权" };
   const failedOutcome = [...steps].reverse().find((step) => step.outcome?.status === "failed")?.outcome;
@@ -115,10 +125,10 @@ function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, ca
 }
 
 const turns = computed<TurnView[]>(() => {
-  const groups: { userMessage?: string; steps: TimelineStep[] }[] = [];
+  const groups: { userMessage?: string; userMessageTime?: string; steps: TimelineStep[] }[] = [];
   for (const item of props.steps) {
     if (item.userMessage) {
-      const group = { userMessage: item.userMessage, steps: [] as TimelineStep[] };
+      const group = { userMessage: item.userMessage, userMessageTime: item.userMessageTime, steps: [] as TimelineStep[] };
       groups.push(group);
       if (hasAssistantContent(item)) group.steps.push(item);
     } else {
@@ -128,6 +138,7 @@ const turns = computed<TurnView[]>(() => {
   }
   return groups.map((group, index) => {
     const steps = group.steps;
+    const model = steps.find((step) => step.usage?.model)?.usage?.model ?? "";
     const text = steps.map((step) => step.finalText || step.tokens.join("")).filter(Boolean).join("\n\n");
     const allToolCalls = toolCallsOf(steps);
     const thinkingText = thinkingTextOf(steps);
@@ -146,6 +157,8 @@ const turns = computed<TurnView[]>(() => {
       runId: steps.find((step) => step.runId)?.runId,
       changePaths,
       userMessage: group.userMessage,
+      userMessageTime: group.userMessageTime,
+      model,
       hasActivity,
       pending,
       text,
@@ -168,7 +181,10 @@ const turns = computed<TurnView[]>(() => {
 <template>
   <section class="execution-timeline" aria-live="polite">
     <article v-for="turn in turns" :key="turn.key" class="timeline-step">
-      <div v-if="turn.userMessage" class="timeline-user-message">{{ turn.userMessage }}</div>
+      <div v-if="turn.userMessage" class="timeline-user-message">
+        {{ turn.userMessage }}
+        <span v-if="turn.model || turn.userMessageTime" class="timeline-user-message__meta">{{ turn.model || "未记录模型" }} · {{ formatTime(turn.userMessageTime) }}</span>
+      </div>
       <div v-if="turn.hasContent" class="timeline-assistant">
         <span class="assistant-avatar" :class="turn.state" aria-label="SztuCode">
           <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="15" />

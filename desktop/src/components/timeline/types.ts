@@ -50,6 +50,7 @@ export interface TimelineStep {
   permission?: PermissionState;
   usage?: LlmUsage;
   userMessage?: string;
+  userMessageTime?: string;
   finalText?: string;
   outcome?: RunOutcome;
   plan?: PlanItem[];
