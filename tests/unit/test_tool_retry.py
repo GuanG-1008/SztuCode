@@ -136,9 +136,9 @@ async def test_schema_error_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert failed_events[0].attempt == 1  # type: ignore[attr-defined]
 
 
-# 功能：验证 timeout_error 不触发重试，直接失败
-# 设计：SlowTool 配合极短超时触发 TimeoutError；断言只发一次 failed 事件，不重试（重试会再次超时）
-async def test_timeout_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+# 功能：验证 timeout 触发重试（瞬时超时值得再试）
+# 设计：SlowTool 配合极短超时，断言每次超时都重试并发出 failed 事件，最终失败
+async def test_timeout_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
     class _SlowTool(BaseTool):
@@ -165,7 +165,8 @@ async def test_timeout_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.is_error
     assert result.error_type == "timeout"
     failed_events = [e for e in events if e.type == "tool.call_failed"]  # type: ignore[attr-defined]
-    assert len(failed_events) == 1
+    # 初始 1 次 + _MAX_RETRIES 次重试，每次都超时并发出 failed 事件
+    assert len(failed_events) == inv_mod._MAX_RETRIES + 1
 
 
 # 功能：验证成功后的 tool.call_failed 事件中 error_class 字段存在且取值合法

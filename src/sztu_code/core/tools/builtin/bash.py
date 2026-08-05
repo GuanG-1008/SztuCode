@@ -63,6 +63,23 @@ def _has_dangerous_paths(command: str) -> bool:
     return any(pat.search(command) for pat in _DANGEROUS_RE)
 
 
+# 预处理 agent 常见的 Windows 风格命令，让其在 git-bash 下可用
+def _preprocess_command(command: str) -> str:
+    # cmd 风格 `cd /d X` → `cd X`（/d 是 cmd 切换盘符的标志，bash 不认）
+    cmd = re.sub(r"\bcd\s+/d\b", "cd", command)
+    # 前导 `dir` → `ls`（git-bash 下无 dir 命令）
+    cmd = re.sub(r"^\s*dir(?=\s|$)", "ls", cmd)
+    # 含 Windows 盘符路径（C:\a\b 或 C:/a/b）时转成 git-bash 风格 /c/a/b，并把反斜杠转正斜杠
+    if re.search(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]", cmd):
+        cmd = re.sub(
+            r"(?<![A-Za-z0-9])([A-Za-z]):([\\/])",
+            lambda m: f"/{m.group(1).lower()}/",
+            cmd,
+        )
+        cmd = cmd.replace("\\", "/")
+    return cmd
+
+
 class BashTool(BaseTool):
     params_model = BashParams
     name = "bash"
@@ -95,7 +112,7 @@ class BashTool(BaseTool):
     # 在子进程中执行 shell 命令，合并 stdout/stderr，超时或非零退出码时返回错误
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         p = BashParams.model_validate(params)
-        command = p.command
+        command = _preprocess_command(p.command)
         timeout = p.timeout
 
         try:

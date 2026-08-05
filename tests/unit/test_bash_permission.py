@@ -78,3 +78,17 @@ def test_dangerous_path_detection() -> None:
     assert not _has_dangerous_paths("ls -la")
     assert not _has_dangerous_paths("cat file.txt")
     assert not _has_dangerous_paths("git status")
+
+
+# 功能：验证 Windows 风格命令被预处理为 git-bash 可用形式
+# 设计：覆盖 cd /d、前导 dir、Windows 盘符路径三种常见误用（raw 字符串保证反斜杠字面量）
+def test_preprocess_windows_commands() -> None:
+    from sztu_code.core.tools.builtin.bash import _preprocess_command
+
+    assert _preprocess_command(r"cd /d C:\repo\src && pwd") == "cd /c/repo/src && pwd"
+    assert _preprocess_command("dir") == "ls"
+    assert _preprocess_command(r"cd /d D:\data") == "cd /d/data"
+    # 不含盘符的命令保持原样（避免破坏正则转义）
+    assert _preprocess_command(r"grep '\d+' file") == r"grep '\d+' file"
+    # cd 不带 /d 不受影响
+    assert _preprocess_command("cd src && ls") == "cd src && ls"
