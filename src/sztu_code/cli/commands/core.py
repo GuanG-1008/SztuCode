@@ -27,7 +27,8 @@ def _running_pid() -> int | None:
         pid = int(_PID_FILE.read_text().strip())
         os.kill(pid, 0)
         return pid
-    except (ValueError, ProcessLookupError, PermissionError):
+    except (ValueError, OSError):
+        # Windows 上 os.kill(pid,0) 对已死/无效 pid 抛 OSError(WinError 87)，一并视为进程已消失
         _PID_FILE.unlink(missing_ok=True)
         return None
 
