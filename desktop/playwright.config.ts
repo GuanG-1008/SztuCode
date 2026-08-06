@@ -1,7 +1,5 @@
 import { defineConfig } from "@playwright/test";
 
-const chromiumPath = "C:/Users/Mozero/AppData/Local/ms-playwright/chromium-1045/chrome-win/chrome.exe";
-
 export default defineConfig({
   testDir: "./tests/visual",
   timeout: 30_000,
@@ -9,7 +7,6 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:1424",
     browserName: "chromium",
-    launchOptions: { executablePath: chromiumPath },
     colorScheme: "dark",
     deviceScaleFactor: 1,
   },
