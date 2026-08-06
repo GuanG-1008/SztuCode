@@ -31,13 +31,15 @@ async def test_bash_nonzero_exit_is_error() -> None:
 
 
 # 功能：验证命令超时后 is_error=True，error_type 为 "timeout"
-# 设计：用受控假进程模拟 communicate 超时，避免依赖平台特定的 sleep 命令
+# 设计：固定关闭 git-bash 分支并 mock create_subprocess_shell，保证各平台都走同一条 shell 路径；
+#       用受控假进程模拟 communicate 超时，避免依赖平台特定的 sleep 命令
 @pytest.mark.asyncio
 async def test_bash_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     process = Mock(returncode=None)
     process.communicate = AsyncMock(side_effect=[TimeoutError, (b"", None)])
     process.kill = Mock()
     create_process = AsyncMock(return_value=process)
+    monkeypatch.setattr("sztu_code.core.tools.builtin.bash._git_bash_path", lambda: None)
     monkeypatch.setattr(asyncio, "create_subprocess_shell", create_process)
 
     result = await BashTool().invoke({"command": "long-running", "timeout": 1})

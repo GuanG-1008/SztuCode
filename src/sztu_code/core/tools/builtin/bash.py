@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import os
 import re
+import shutil
+import sys
 from pathlib import Path
 from typing import ClassVar
 
@@ -82,6 +86,20 @@ def _has_dangerous_paths(command: str) -> bool:
     return any(pat.search(command) for pat in _DANGEROUS_RE)
 
 
+# 返回 Windows 上可用的 git-bash 路径；未找到返回 None（缓存，可用 SZTU_BASH_PATH 覆盖）
+@functools.lru_cache(maxsize=1)
+def _git_bash_path() -> str | None:
+    candidates = [
+        os.environ.get("SZTU_BASH_PATH", ""),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return shutil.which("bash")
+
+
 # 预处理 agent 常见的 Windows 风格命令，让其在 git-bash 下可用
 def _preprocess_command(command: str) -> str:
     # cmd 风格 `cd /d X` → `cd X`（/d 是 cmd 切换盘符的标志，bash 不认）
@@ -146,13 +164,23 @@ class BashTool(BaseTool):
                 error_type="runtime_error",
             )
 
+        # Windows 下优先用 git-bash 执行，否则 cmd.exe 找不到 grep/sed/pwd 等 Unix 工具
+        bash = _git_bash_path() if sys.platform == "win32" else None
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=str(self._workspace_root) if self._workspace_root is not None else None,
-            )
+            if bash:
+                proc = await asyncio.create_subprocess_exec(
+                    bash, "-c", command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=str(self._workspace_root) if self._workspace_root is not None else None,
+                )
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=str(self._workspace_root) if self._workspace_root is not None else None,
+                )
             try:
                 stdout_bytes, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout
