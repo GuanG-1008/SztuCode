@@ -283,9 +283,25 @@ uv run python scripts/gen_protocol_doc.py --check
       <sub>Contributor</sub>
     </td>
     <td align="center">
-      <a href="https://github.com/szzk">
-        <img src="https://github.com/szzk.png?size=100" width="80" alt="szzk" /><br />
-        <sub><b>szzk</b></sub>
+      <a href="https://github.com/szzhangkkk">
+        <img src="https://github.com/szzhangkkk.png?size=100" width="80" alt="szzhangkkk" /><br />
+        <sub><b>szzhangkkk</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/GuanG-1008">
+        <img src="https://github.com/GuanG-1008.png?size=100" width="80" alt="GuanG-1008" /><br />
+        <sub><b>GuanG-1008</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/neutronstar238">
+        <img src="https://github.com/neutronstar238.png?size=100" width="80" alt="neutronstar238" /><br />
+        <sub><b>neutronstar238</b></sub>
       </a><br />
       <sub>Contributor</sub>
     </td>
