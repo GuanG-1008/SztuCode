@@ -63,7 +63,6 @@ class ExecutionContext:
     max_output_tokens_recovery_count: int = 0
     # 最后一次 continue 原因（调试/追踪用）
     last_continue_reason: str = ""
->>>>>>> a09844d (feat: Claude Code 风格多条件终止系统 — 7 退出 + 3 继续 + 错误熔断 + 预算检查)
 
     # 初始化消息历史，优先使用 session 完整回放内容
     def __post_init__(self) -> None:

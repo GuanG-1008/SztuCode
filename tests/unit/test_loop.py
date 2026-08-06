@@ -185,8 +185,8 @@ async def test_max_steps_marks_failed() -> None:
     loop, _ = _make_loop(provider)
     ctx = _ctx(max_steps=2)
     await loop.run(ctx)
-    assert ctx.status == "failed"
-    assert ctx.reason == "max_turns"
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
     assert ctx.step == 2
 
 
@@ -557,8 +557,8 @@ async def test_loop_max_steps_still_waits() -> None:
 
     gate.set()
     await asyncio.wait_for(run_task, 2.0)
-    assert ctx.status == "failed"
-    assert ctx.reason == "max_turns"
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
     assert "bg result" in ctx.result
 
 
@@ -674,5 +674,5 @@ async def test_blocking_limit_termination() -> None:
     loop = AgentLoop(provider, registry, EventBus())
     ctx = _ctx(max_steps=10)
     await loop.run(ctx)
-    assert ctx.status == "failed"
+    assert ctx.status == "interrupted"
     assert ctx.reason == "blocking_limit"

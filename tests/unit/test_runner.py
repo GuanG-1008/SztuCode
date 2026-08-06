@@ -196,7 +196,7 @@ async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None
     )
     finished = next(e for e in events if e.type == "run.finished")  # type: ignore[attr-defined]
     assert finished.status == "failed"  # type: ignore[attr-defined]
-    assert finished.reason == "max_turns"  # type: ignore[attr-defined]
+    assert finished.reason == "exceeded_max_steps"  # type: ignore[attr-defined]
 
 
 # 功能：验证 events.jsonl 第一行为 run.started、最后一行为 run.finished
