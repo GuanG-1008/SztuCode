@@ -71,9 +71,8 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 | 可观测性      | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放             |
 | 变更审阅      | 桌面端展示文件变化和 Diff，支持接受、暂存与回退               |
 | Agent 评测    | 轨迹分析和 SWE-bench 适配器，持续建设自动化评测基线           |
-| 多智能体工作流 | Planner 任务图、受控 Coder、独立 Tester、Reviewer 仲裁与统一 Trace |
 
-项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和动态多智能体协商仍在路线图中，不将设计目标描述为已完成能力。
+项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和完整多智能体工作流仍在路线图中，不将设计目标描述为已完成能力。
 
 ## 系统架构
 
@@ -284,9 +283,25 @@ uv run python scripts/gen_protocol_doc.py --check
       <sub>Contributor</sub>
     </td>
     <td align="center">
-      <a href="https://github.com/szzk">
-        <img src="https://github.com/szzk.png?size=100" width="80" alt="szzk" /><br />
-        <sub><b>szzk</b></sub>
+      <a href="https://github.com/szzhangkkk">
+        <img src="https://github.com/szzhangkkk.png?size=100" width="80" alt="szzhangkkk" /><br />
+        <sub><b>szzhangkkk</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/GuanG-1008">
+        <img src="https://github.com/GuanG-1008.png?size=100" width="80" alt="GuanG-1008" /><br />
+        <sub><b>GuanG-1008</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/neutronstar238">
+        <img src="https://github.com/neutronstar238.png?size=100" width="80" alt="neutronstar238" /><br />
+        <sub><b>neutronstar238</b></sub>
       </a><br />
       <sub>Contributor</sub>
     </td>
