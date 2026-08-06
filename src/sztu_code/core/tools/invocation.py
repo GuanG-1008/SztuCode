@@ -18,7 +18,12 @@ from sztu_code.core.bus.events import (
 )
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import ToolCallBlock
-from sztu_code.core.tools.base import ToolResult
+from sztu_code.core.tools.base import (
+    _PERMISSION_GRANT_KEY,
+    _PERMISSION_GRANT_TOKEN,
+    ToolPermission,
+    ToolResult,
+)
 from sztu_code.core.tools.errors import RateLimitedError
 from sztu_code.core.tools.registry import ToolRegistry
 
@@ -117,6 +122,7 @@ async def invoke_tool(
     tool_call.input = registry.enrich_tool_input(tool_call.name, tool_call.input)
     runtime_params = dict(tool_call.input)
     runtime_params.pop("description", None)
+    runtime_params.pop(_PERMISSION_GRANT_KEY, None)
 
     await bus.publish(
         ToolCallStartedEvent(
@@ -163,6 +169,9 @@ async def invoke_tool(
             tool_permission=tool_permission,
         )
         if allowed:
+            if tool_permission == ToolPermission.DANGER_FULL_ACCESS:
+                # 不可序列化的身份令牌只在权限系统放行后注入，防止模型伪造越权
+                runtime_params[_PERMISSION_GRANT_KEY] = _PERMISSION_GRANT_TOKEN
             if decision not in ("auto_allow",):
                 await bus.publish(
                     PermissionGrantedEvent(

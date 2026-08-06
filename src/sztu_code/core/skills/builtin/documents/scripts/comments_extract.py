@@ -30,7 +30,7 @@ import re
 import zipfile
 from typing import Any
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -142,13 +142,14 @@ def extract(in_docx: str) -> dict[str, Any]:
             for cid, info in ranges.items():
                 anchors.setdefault(cid, []).append({"part": part, **info})
 
-    out = {
+    extracted_comments: list[dict[str, Any]] = []
+    out: dict[str, Any] = {
         "file": in_docx,
         "comment_count": len(comments),
-        "comments": [],
+        "comments": extracted_comments,
     }
     for cid, c in sorted(comments.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else kv[0]):
-        out["comments"].append({**c, "anchors": anchors.get(cid, [])})
+        extracted_comments.append({**c, "anchors": anchors.get(cid, [])})
     return out
 
 

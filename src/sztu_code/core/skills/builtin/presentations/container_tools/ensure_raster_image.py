@@ -21,8 +21,8 @@ from os import listdir
 from os.path import basename, dirname, expanduser, isfile, join, splitext
 from subprocess import run
 
-from pdf2image import convert_from_path
-from PIL import Image
+from pdf2image import convert_from_path  # type: ignore[import-not-found]
+from PIL import Image  # type: ignore[import-not-found]
 
 SCRIPT_DIR = dirname(__file__)
 if SCRIPT_DIR not in sys.path:
@@ -193,7 +193,8 @@ def main() -> None:
         "--output_dir",
         default=None,
         help=(
-            "Directory to write converted PNGs. If omitted, converted files are written next to inputs."
+            "Directory to write converted PNGs. If omitted, converted files are "
+            "written next to inputs."
         ),
     )
     args = parser.parse_args()

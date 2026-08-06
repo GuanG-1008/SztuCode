@@ -6,7 +6,6 @@ from sztu_code.core.compact.budget import truncate_tool_results
 from sztu_code.core.compact.offload import OffloadManager, OffloadRecord, _make_summary
 from sztu_code.core.tools.builtin.read_ref import ReadRefTool
 
-
 # ============================================================
 # _make_summary 摘要生成
 # ============================================================
@@ -81,7 +80,7 @@ def test_should_offload_disabled(tmp_path: Path) -> None:
 
 # 功能：验证禁用卸载时不创建 refs/ 和 offload/ 空目录（Bug5 回归测试）
 def test_disabled_offload_manager_creates_no_dirs(tmp_path: Path) -> None:
-    mgr = OffloadManager(tmp_path, enabled=False)
+    OffloadManager(tmp_path, enabled=False)
     assert not (tmp_path / "refs").exists()
     assert not (tmp_path / "offload").exists()
 

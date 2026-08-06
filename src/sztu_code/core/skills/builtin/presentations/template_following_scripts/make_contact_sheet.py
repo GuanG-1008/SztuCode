@@ -6,7 +6,7 @@ import argparse
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw  # type: ignore[import-not-found]
 
 
 def parse_args() -> argparse.Namespace:

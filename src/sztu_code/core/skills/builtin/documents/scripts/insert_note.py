@@ -16,10 +16,12 @@ This helper performs a minimal, high-ROI insertion:
 Usage
 -----
 # Insert a footnote at marker [[FN]] in the doc
-python scripts/insert_note.py in.docx --kind footnote --text "hello" --marker "[[FN]]" --out out.docx
+python scripts/insert_note.py in.docx --kind footnote --text "hello" \
+    --marker "[[FN]]" --out out.docx
 
 # Insert an endnote
-python scripts/insert_note.py in.docx --kind endnote --text "source" --marker "[[EN]]" --out out.docx
+python scripts/insert_note.py in.docx --kind endnote --text "source" \
+    --marker "[[EN]]" --out out.docx
 
 Always render and inspect PNGs after insertion.
 """
@@ -30,7 +32,7 @@ import argparse
 import re
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -47,7 +49,9 @@ CT_ENDNOTES = "application/vnd.openxmlformats-officedocument.wordprocessingml.en
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _read_xml(z: zipfile.ZipFile, name: str) -> etree._Element:

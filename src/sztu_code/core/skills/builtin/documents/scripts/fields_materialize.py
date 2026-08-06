@@ -39,7 +39,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 try:
     from docx_ooxml_patch import unzip_docx, zip_docx
@@ -120,7 +120,8 @@ def build_bookmark_text(root: etree._Element) -> dict[str, str]:
                     break
             if idx is not None:
                 _bid, name, buf = open_stack.pop(idx)
-                # If nested, remaining open bookmarks should also include text, but we keep it simple.
+                # If nested, remaining open bookmarks should also include text,
+                # but we keep it simple.
                 out[name] = "".join(buf)
         elif el.tag == qn("t"):
             if not open_stack:

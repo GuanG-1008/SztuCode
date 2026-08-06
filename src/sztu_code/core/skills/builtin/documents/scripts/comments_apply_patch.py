@@ -34,7 +34,7 @@ import datetime as _dt
 import json
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -45,7 +45,9 @@ def w(tag: str) -> str:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _append_para(comment: etree._Element, text: str) -> None:
@@ -58,7 +60,7 @@ def _append_para(comment: etree._Element, text: str) -> None:
 def _split_lines(text: str) -> list[str]:
     # Keep empty lines out (Word comments don't love empty paragraphs).
     lines = [ln.strip("\r") for ln in str(text).split("\n")]
-    return [ln for ln in (l.strip() for l in lines) if ln != ""]
+    return [line for line in (raw_line.strip() for raw_line in lines) if line != ""]
 
 
 def _set_comment_text(comment: etree._Element, text: str) -> None:
@@ -77,7 +79,7 @@ def _set_comment_text(comment: etree._Element, text: str) -> None:
 
 
 def apply_patch(in_docx: str, patch_path: str, out_docx: str) -> None:
-    patch = json.loads(open(patch_path, "r", encoding="utf-8").read())
+    patch = json.loads(open(patch_path, encoding="utf-8").read())
     ops = patch.get("ops") or []
 
     with zipfile.ZipFile(in_docx, "r") as zin:

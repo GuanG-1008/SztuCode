@@ -26,7 +26,7 @@ import argparse
 import re
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -37,19 +37,21 @@ def w(tag: str) -> str:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _is_begin(el: etree._Element) -> bool:
-    return el.tag == w("fldChar") and el.get(w("fldCharType")) == "begin"
+    return bool(el.tag == w("fldChar") and el.get(w("fldCharType")) == "begin")
 
 
 def _is_separate(el: etree._Element) -> bool:
-    return el.tag == w("fldChar") and el.get(w("fldCharType")) == "separate"
+    return bool(el.tag == w("fldChar") and el.get(w("fldCharType")) == "separate")
 
 
 def _is_end(el: etree._Element) -> bool:
-    return el.tag == w("fldChar") and el.get(w("fldCharType")) == "end"
+    return bool(el.tag == w("fldChar") and el.get(w("fldCharType")) == "end")
 
 
 def _instr_text(p: etree._Element, start_idx: int, end_idx: int) -> str:

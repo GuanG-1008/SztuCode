@@ -45,6 +45,7 @@ from sztu_code.core.tools.builtin import (
 from sztu_code.core.tools.registry import ToolRegistry
 from sztu_code.core.trace.provider import TracingProvider
 from sztu_code.core.trace.writer import TraceWriter
+from sztu_code.core.workflow.tool import WorkflowRunTool
 
 
 def _now() -> str:
@@ -134,28 +135,32 @@ class AgentRunner:
             registry.register(ReadRefTool(offload_manager))
         if provider is not None and bus is not None and run_id is not None:
             runs_dir = child_runs_dir or self._runs_dir
+            spawn_tool = SpawnAgentTool(
+                provider=provider,
+                parent_bus=bus,
+                parent_run_id=run_id,
+                permission_manager=self._permission_manager,
+                max_steps=self._config.agent.max_steps,
+                task_registry=self._task_registry,
+                runs_dir=runs_dir,
+                session_id=session_id,
+                depth=0,
+                workspace_root=workspace_root,
+                parent_context=parent_context,
+                session=session,
+                store=store,
+                budget=self._config.budget,
+                wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
+                stuck_max_failures=self._config.agent.stuck_max_failures,
+                stuck_max_total=self._config.agent.stuck_max_total,
+                max_depth=self._config.workflow.max_depth,
+            )
             if _ok("spawn_agent"):
+                registry.register(spawn_tool)
+            if _ok("run_workflow") and workspace_root is not None:
                 registry.register(
-                    SpawnAgentTool(
-                        provider=provider,
-                        parent_bus=bus,
-                        parent_run_id=run_id,
-                        permission_manager=self._permission_manager,
-                        max_steps=self._config.agent.max_steps,
-                        task_registry=self._task_registry,
-                        runs_dir=runs_dir,
-                        session_id=session_id,
-                        depth=0,
-                        workspace_root=workspace_root,
-                        parent_context=parent_context,
-                        session=session,
-                        store=store,
-                        budget=self._config.budget,
-                        wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
-                        grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
-                        stuck_max_failures=self._config.agent.stuck_max_failures,
-                        stuck_max_total=self._config.agent.stuck_max_total,
-                    )
+                    WorkflowRunTool(spawn_tool, bus, run_id, workspace_root, self._config)
                 )
             if _ok("agent_result"):
                 registry.register(AgentResultTool(self._task_registry))

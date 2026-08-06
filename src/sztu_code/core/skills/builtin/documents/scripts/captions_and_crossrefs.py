@@ -15,7 +15,7 @@ import argparse
 import tempfile
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 try:
     from docx_ooxml_patch import unzip_docx, zip_docx

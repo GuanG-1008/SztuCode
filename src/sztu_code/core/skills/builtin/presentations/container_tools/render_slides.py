@@ -7,13 +7,14 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from os import makedirs, replace
 from os.path import abspath, basename, dirname, exists, expanduser, join, splitext
-from typing import Sequence, cast
+from typing import cast
 from zipfile import ZipFile
 
-from pdf2image import convert_from_path, pdfinfo_from_path
-from PIL import Image
+from pdf2image import convert_from_path, pdfinfo_from_path  # type: ignore[import-not-found]
+from PIL import Image  # type: ignore[import-not-found]
 
 SCRIPT_DIR = dirname(__file__)
 if SCRIPT_DIR not in sys.path:

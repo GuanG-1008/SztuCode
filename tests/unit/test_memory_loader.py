@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from sztu_code.core.memory.loader import load_context_file
 
 

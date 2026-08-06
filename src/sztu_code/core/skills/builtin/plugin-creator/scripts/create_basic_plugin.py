@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 MAX_PLUGIN_NAME_LENGTH = 64
 DEFAULT_INSTALL_POLICY = "AVAILABLE"
 DEFAULT_AUTH_POLICY = "ON_INSTALL"
@@ -102,7 +101,10 @@ def build_marketplace_entry(
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open() as handle:
-        return json.load(handle)
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
+    return payload
 
 
 def build_default_marketplace(marketplace_name: str) -> dict[str, Any]:
@@ -172,7 +174,7 @@ def update_marketplace_json(
     write_json(marketplace_path, payload, force=True)
 
 
-def write_json(path: Path, data: dict, force: bool) -> None:
+def write_json(path: Path, data: dict[str, Any], force: bool) -> None:
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists. Use --force to overwrite.")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +183,7 @@ def write_json(path: Path, data: dict, force: bool) -> None:
         handle.write("\n")
 
 
-def create_stub_file(path: Path, payload: dict, force: bool) -> None:
+def create_stub_file(path: Path, payload: dict[str, Any], force: bool) -> None:
     if path.exists() and not force:
         return
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -9,12 +9,13 @@ from os import listdir
 from os.path import basename, dirname, expanduser, isfile, join, splitext
 from typing import Literal
 
+from PIL import Image, ImageDraw, ImageFont, ImageOps  # type: ignore[import-not-found]
+
 SCRIPT_DIR = dirname(__file__)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from ensure_raster_image import SUPPORTED_EXTS, ensure_raster_image  # type: ignore
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from ensure_raster_image import SUPPORTED_EXTS, ensure_raster_image  # noqa: E402
 
 
 def _make_placeholder(w: int, h: int) -> Image.Image:
@@ -54,7 +55,7 @@ def _load_images_with_placeholders(
     return labels, images
 
 
-def _natural_key(s: str) -> list:
+def _natural_key(s: str) -> list[int | str]:
     """Key function for natural sorting (e.g., Slide2 before Slide10)."""
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", s)]
 
@@ -201,7 +202,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Create a montage with a fixed number of columns. "
-            "Each image is resized isotropically to fit inside a cell of size (cell_width x cell_height)."
+            "Each image is resized isotropically to fit inside a cell of size "
+            "(cell_width x cell_height)."
         )
     )
     group = parser.add_mutually_exclusive_group(required=True)

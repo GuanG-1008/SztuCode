@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from sztu_code.core.compact.canvas import CanvasNode, TaskCanvas
 
-
 # ============================================================
 # CanvasNode
 # ============================================================

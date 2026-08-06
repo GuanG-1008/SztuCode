@@ -32,7 +32,7 @@ import argparse
 import zipfile
 from dataclasses import dataclass
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -51,7 +51,9 @@ def _read_xml(z: zipfile.ZipFile, name: str) -> etree._Element:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _unwrap(el: etree._Element) -> None:
@@ -150,7 +152,8 @@ def main() -> None:
             settings_root = _read_xml(z, "word/settings.xml")
 
     print(
-        f"[report] ins={counts_before.ins} del={counts_before.del_} moveTo={counts_before.moveto} moveFrom={counts_before.movefrom}"
+        f"[report] ins={counts_before.ins} del={counts_before.del_} "
+        f"moveTo={counts_before.moveto} moveFrom={counts_before.movefrom}"
     )
 
     if args.mode == "report":
@@ -169,7 +172,8 @@ def main() -> None:
     # Re-count
     counts_after = count_revisions(doc_root)
     print(
-        f"[after]  ins={counts_after.ins} del={counts_after.del_} moveTo={counts_after.moveto} moveFrom={counts_after.movefrom}"
+        f"[after]  ins={counts_after.ins} del={counts_after.del_} "
+        f"moveTo={counts_after.moveto} moveFrom={counts_after.movefrom}"
     )
 
     write_out(args.in_docx, args.out, _xml_bytes(doc_root), settings_bytes)

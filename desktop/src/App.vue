@@ -17,7 +17,7 @@ import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
-import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry } from "./components/timeline/types";
+import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import {
   applyCcswitchProvider, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, respondPermission,
@@ -35,8 +35,9 @@ const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_COLLAPSE_PULL = 48;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
-// 暂时隐藏"通用问答"入口；恢复时改为 true 即可（按钮模板在 sidebar-more-tools 中保留）
-const chatEntryVisible = false;
+// 正式界面暂时隐藏入口；视觉测试可用开发态查询参数覆盖，避免整套 ChatPortal 回归被跳过。
+const chatEntryVisible = import.meta.env.DEV
+  && new URLSearchParams(window.location.search).get("visual-chat") === "1";
 const sidebarCollapsed = ref(window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT);
 let sidebarAutoCollapsed = sidebarCollapsed.value;
 const storedSidebarWidth = Number(localStorage.getItem("sztu.sidebarWidth"));
@@ -425,6 +426,78 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     for (const step of timeline.value.keys()) {
       setStep(step, (current) => ({ ...current, subagents: current.subagents?.map((agent) => agent.runId === runId ? { ...agent, status: String(event.status) === "success" ? "success" : "failed" } : agent) }));
     }
+    return;
+  }
+  if (type === "workflow.started") {
+    const step = stepFor(timelineEvent);
+    const tasks = ((event.tasks as Record<string, unknown>[] | undefined) ?? []).map((task) => ({
+      id: String(task.id ?? ""),
+      title: String(task.title ?? ""),
+      owner: String(task.owner ?? "coder") as WorkflowTaskEntry["owner"],
+      status: String(task.status ?? "pending") as WorkflowTaskEntry["status"],
+      dependencies: (task.dependencies as string[] | undefined) ?? [],
+      completionCriteria: (task.completion_criteria as string[] | undefined) ?? [],
+      allowedPaths: (task.allowed_paths as string[] | undefined) ?? [],
+      attempt: Number(task.attempt ?? 0),
+      error: String(task.error ?? "") || undefined,
+    }));
+    setStep(step, (current) => ({ ...current, workflowTasks: tasks }));
+    return;
+  }
+  if (type === "workflow.task_updated") {
+    const step = stepFor(timelineEvent);
+    const task = (event.task as Record<string, unknown> | undefined) ?? {};
+    const entry = {
+      id: String(task.id ?? ""),
+      title: String(task.title ?? ""),
+      owner: String(task.owner ?? "coder") as WorkflowTaskEntry["owner"],
+      status: String(task.status ?? "pending") as WorkflowTaskEntry["status"],
+      dependencies: (task.dependencies as string[] | undefined) ?? [],
+      completionCriteria: (task.completion_criteria as string[] | undefined) ?? [],
+      allowedPaths: (task.allowed_paths as string[] | undefined) ?? [],
+      attempt: Number(task.attempt ?? 0),
+      error: String(task.error ?? "") || undefined,
+    };
+    setStep(step, (current) => ({ ...current, workflowTasks: [...(current.workflowTasks ?? []).filter((item) => item.id !== entry.id), entry] }));
+    return;
+  }
+  if (type === "workflow.handoff") {
+    const step = stepFor(timelineEvent);
+    const artifact = (event.artifact as Record<string, unknown> | undefined) ?? {};
+    setStep(step, (current) => ({ ...current, workflowHandoffs: [...(current.workflowHandoffs ?? []), {
+      taskId: String(artifact.task_id ?? ""),
+      role: String(artifact.role ?? "coder") as "planner" | "coder" | "tester" | "reviewer",
+      status: String(artifact.status) === "failed" ? "failed" : "succeeded",
+      summary: String(artifact.summary ?? ""),
+      changedPaths: (artifact.changed_paths as string[] | undefined) ?? [],
+      scopeEscalations: (artifact.scope_escalations as string[] | undefined) ?? [],
+      commands: (artifact.commands as string[] | undefined) ?? [],
+      output: String(artifact.output ?? ""),
+      conclusion: String(artifact.conclusion ?? ""),
+      childRunId: String(artifact.child_run_id ?? ""),
+    }] }));
+    return;
+  }
+  if (type === "workflow.reviewed") {
+    const step = stepFor(timelineEvent);
+    setStep(step, (current) => ({ ...current, workflowReviews: [...(current.workflowReviews ?? []), {
+      taskId: String(event.task_id ?? ""),
+      decision: String(event.decision) === "accept" ? "accept" : "return",
+      diffSummary: String(event.diff_summary ?? ""),
+      testSummary: String(event.test_summary ?? ""),
+      securitySummary: String(event.security_summary ?? ""),
+      conclusion: String(event.conclusion ?? ""),
+    }] }));
+    return;
+  }
+  if (type === "workflow.finished") {
+    const step = stepFor(timelineEvent);
+    setStep(step, (current) => ({ ...current, workflowOutcome: {
+      status: String(event.status) as "succeeded" | "failed" | "cancelled" | "timed_out",
+      reason: String(event.reason ?? ""),
+      totalTokens: Number(event.total_tokens ?? 0),
+      elapsedS: Number(event.elapsed_s ?? 0),
+    } }));
     return;
   }
   if (type === "skill.invoked") {

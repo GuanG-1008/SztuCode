@@ -102,9 +102,12 @@ def _run(cmd: list[str], stdin: str | None = None) -> str:
 def _run_json(cmd: list[str], stdin: str | None = None) -> dict[str, Any]:
     out = _run(cmd, stdin=stdin)
     try:
-        return json.loads(out)
+        payload = json.loads(out)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse JSON from command output: {e}\nRaw:\n{out}") from e
+    if not isinstance(payload, dict):
+        raise RuntimeError("Expected a JSON object from GitHub CLI")
+    return payload
 
 
 def _ensure_gh_authenticated() -> None:
@@ -112,7 +115,9 @@ def _ensure_gh_authenticated() -> None:
         _run(["gh", "auth", "status"])
     except RuntimeError:
         print("run `gh auth login` to authenticate the GitHub CLI", file=sys.stderr)
-        raise RuntimeError("gh auth status failed; run `gh auth login` to authenticate the GitHub CLI") from None
+        raise RuntimeError(
+            "gh auth status failed; run `gh auth login` to authenticate the GitHub CLI"
+        ) from None
 
 
 def gh_pr_view_json(fields: str) -> dict[str, Any]:

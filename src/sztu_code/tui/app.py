@@ -215,7 +215,11 @@ class PermissionSelect(Static):
 
     # 焦点到达时记录，用于确认 focus() 是否真正生效
     def on_focus(self, event: events.Focus) -> None:
-        log.debug("PermissionSelect.on_focus  has_focus=%s  app.focused=%r", self.has_focus, self.app.focused)
+        log.debug(
+            "PermissionSelect.on_focus  has_focus=%s  app.focused=%r",
+            self.has_focus,
+            self.app.focused,
+        )
 
     # 焦点离开时记录，用于追踪是否被其他控件抢走焦点
     def on_blur(self, event: events.Blur) -> None:
@@ -223,7 +227,11 @@ class PermissionSelect(Static):
 
     # 生成 Claude Code 风格的键盘优先授权单：上下文在上，决定项在下
     def _render_ui(self) -> str:
-        preview = _preview(self._param_preview.strip(), 116) if self._param_preview.strip() else "no parameters"
+        preview = (
+            _preview(self._param_preview.strip(), 116)
+            if self._param_preview.strip()
+            else "no parameters"
+        )
         lines = [
             f"[bold #F2BB6C]Permission required[/bold #F2BB6C]  [bold]{self._tool_name}[/bold]",
             f"[dim]└─ {preview}[/dim]",
@@ -238,7 +246,10 @@ class PermissionSelect(Static):
         for i, (decision, label, key_hint) in enumerate(self._CHOICES):
             if i == self._cursor:
                 style = selected_styles[decision]
-                lines.append(f"[dim]❯[/dim] [{style}] {i + 1}. {label} [/{style}]  [dim]{key_hint}[/dim]")
+                lines.append(
+                    f"[dim]❯[/dim] [{style}] {i + 1}. {label} "
+                    f"[/{style}]  [dim]{key_hint}[/dim]"
+                )
             else:
                 lines.append(f"  {i + 1}. {label}  [dim]{key_hint}[/dim]")
         lines.append("\n[dim]↑↓ / j k select  ·  Enter confirm  ·  Y A N D direct[/dim]")
@@ -318,9 +329,17 @@ class PermissionBlock(Static):
 
     def _pending_text(self) -> str:
         action, impact = self._ACTION_MAP.get(
-            self._tool_name, (self._tool_name.replace("_", " ").title(), "This action needs your approval.")
+            self._tool_name,
+            (
+                self._tool_name.replace("_", " ").title(),
+                "This action needs your approval.",
+            ),
         )
-        preview = _preview(self._param_preview.strip(), 140) if self._param_preview.strip() else "no parameters"
+        preview = (
+            _preview(self._param_preview.strip(), 140)
+            if self._param_preview.strip()
+            else "no parameters"
+        )
         return (
             f"[bold #F2BB6C]● Approval required[/bold #F2BB6C]  [bold]{action}[/bold]\n"
             f"[dim]  {self._tool_name}  └─ {preview}[/dim]\n"
@@ -335,7 +354,11 @@ class PermissionBlock(Static):
         allowed = decision in ("allow_once", "always_allow")
         icon = "[bold green]✓[/bold green]" if allowed else "[bold red]✗[/bold red]"
         label = self._LABEL_MAP.get(decision, decision)
-        preview = f"  [dim]{_preview(self._param_preview.strip(), 96)}[/dim]" if self._param_preview.strip() else ""
+        preview = (
+            f"  [dim]{_preview(self._param_preview.strip(), 96)}[/dim]"
+            if self._param_preview.strip()
+            else ""
+        )
         self.update(
             f"{icon} approval  [bold]{self._tool_name}[/bold]{preview}  [dim]{label}[/dim]"
         )
@@ -577,7 +600,8 @@ class TrustScreen(Screen[str]):
             "",
             "[bold #F1F3F5]Quick safety check:[/bold #F1F3F5] "
             "Is this a project you created or one you trust?",
-            "[dim](Like your own code, a well-known open source project, or work from your team).[/dim]",
+            "[dim](Like your own code, a well-known open source project, "
+            "or work from your team).[/dim]",
             "[dim]If not, take a moment to review what's in this folder first.[/dim]",
             "",
             "[#F1F3F5]SztuCode will be able to [bold]read, edit, and execute[/bold] "
@@ -700,7 +724,12 @@ class KamaTuiApp(App[None]):
         self._model = "loading…"
         self._busy = False
         self._last_context_pct: float = 0.0
-        self._session_tokens: dict[str, int] = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+        self._session_tokens: dict[str, int] = {
+            "in": 0,
+            "out": 0,
+            "cache_read": 0,
+            "cache_write": 0,
+        }
         self._slash_items: list[tuple[str, str]] = []
         self._subagent_run_ids: dict[str, str] = {}  # child run_id -> description
         self._subagent_start_times: dict[str, float] = {}  # child run_id -> start time
@@ -874,7 +903,11 @@ class KamaTuiApp(App[None]):
                 self._update_header("ready")
                 self._update_header("ready")
             else:
-                log.warning("mode switch rejected target=%s error=%s", mode, result.get("error", "unknown"))
+                log.warning(
+                    "mode switch rejected target=%s error=%s",
+                    mode,
+                    result.get("error", "unknown"),
+                )
         except (IpcError, RuntimeError, OSError) as e:
             log.warning("mode switch failed target=%s error=%s", mode, e)
 
@@ -1040,7 +1073,10 @@ class KamaTuiApp(App[None]):
     # 展示当前工作区的顶层文件树，保留主任务时间线的阅读密度
     async def _show_workspace_tree(self) -> None:
         if self._client is None or self._workspace is None:
-            self._append(Static("[yellow]open a workspace first: /workspace <folder>[/yellow]", classes="log-line"))
+            self._append(Static(
+                "[yellow]open a workspace first: /workspace <folder>[/yellow]",
+                classes="log-line",
+            ))
             return
         try:
             result = await self._client.send_command("workspace.tree", {
@@ -1060,7 +1096,10 @@ class KamaTuiApp(App[None]):
     # 搜索当前工作区并将命中行以可读摘要加入任务时间线
     async def _search_workspace(self, query: str) -> None:
         if self._client is None or self._workspace is None:
-            self._append(Static("[yellow]open a workspace first: /workspace <folder>[/yellow]", classes="log-line"))
+            self._append(Static(
+                "[yellow]open a workspace first: /workspace <folder>[/yellow]",
+                classes="log-line",
+            ))
             return
         if not query:
             self._append(Static("[yellow]usage: /search <text>[/yellow]", classes="log-line"))
@@ -1085,7 +1124,10 @@ class KamaTuiApp(App[None]):
     # 展示当前工作区未提交变更的文件状态，便于在任务结束后快速审阅
     async def _show_changes(self) -> None:
         if self._client is None or self._workspace is None:
-            self._append(Static("[yellow]open a workspace first: /workspace <folder>[/yellow]", classes="log-line"))
+            self._append(Static(
+                "[yellow]open a workspace first: /workspace <folder>[/yellow]",
+                classes="log-line",
+            ))
             return
         try:
             result = await self._client.send_command("change.list", {
@@ -1093,7 +1135,8 @@ class KamaTuiApp(App[None]):
             })
             changes = result.get("changes", [])
             body = "\n".join(
-                f"  {change.get('index_status')}{change.get('worktree_status')}  {change.get('path')}"
+                f"  {change.get('index_status')}{change.get('worktree_status')}  "
+                f"{change.get('path')}"
                 for change in changes[:50]
             ) or "  (clean working tree)"
             self._append(Static(
@@ -1106,7 +1149,10 @@ class KamaTuiApp(App[None]):
     # 展示指定文件的 Git diff，原始 patch 保持可复制且不修改工作区
     async def _show_diff(self, path: str) -> None:
         if self._client is None or self._workspace is None:
-            self._append(Static("[yellow]open a workspace first: /workspace <folder>[/yellow]", classes="log-line"))
+            self._append(Static(
+                "[yellow]open a workspace first: /workspace <folder>[/yellow]",
+                classes="log-line",
+            ))
             return
         if not path:
             self._append(Static("[yellow]usage: /diff <path>[/yellow]", classes="log-line"))
@@ -1288,6 +1334,7 @@ class KamaTuiApp(App[None]):
                         "permission.*",
                         "context.*",
                         "subagent.*",
+                        "workflow.*",
                         "skill.*",
                     ],
                     "scope": "global",
@@ -1319,7 +1366,10 @@ class KamaTuiApp(App[None]):
                 self._update_header("ready")
                 await loop_task
             except IpcError as e:
-                header.update(f"[bold #76D6C1]SZTUCODE[/bold #76D6C1]  [red]subscribe error: {e}[/red]")
+                header.update(
+                    f"[bold #76D6C1]SZTUCODE[/bold #76D6C1]  "
+                    f"[red]subscribe error: {e}[/red]"
+                )
             finally:
                 if not loop_task.done():
                     loop_task.cancel()
@@ -1437,6 +1487,75 @@ class KamaTuiApp(App[None]):
                     f"[dim]└─[/dim] [bold red]✗[/bold red] {desc_part}",
                     classes="log-line",
                 ))
+
+        elif t == "workflow.started":
+            tasks = event.get("tasks") or []
+            lines = [
+                f"[bold cyan]多智能体工作流[/bold cyan]  [dim]{len(tasks)} 个任务[/dim]"
+            ]
+            for task in tasks:
+                dependencies = ", ".join(task.get("dependencies") or []) or "无"
+                lines.append(
+                    f"  [dim]○[/dim] ({task.get('owner', 'agent')}) "
+                    f"{_preview(str(task.get('title', '')), 64)}  "
+                    f"[dim]依赖: {dependencies}[/dim]"
+                )
+            self._append(Static("\n".join(lines), classes="log-line"))
+
+        elif t == "workflow.task_updated":
+            task = event.get("task") or {}
+            status = str(task.get("status") or "pending")
+            icons = {
+                "running": "[bold cyan]●[/bold cyan]",
+                "succeeded": "[bold green]✓[/bold green]",
+                "failed": "[bold red]✗[/bold red]",
+                "blocked": "[bold yellow]⊘[/bold yellow]",
+                "cancelled": "[bold yellow]■[/bold yellow]",
+                "timed_out": "[bold yellow]⌛[/bold yellow]",
+                "rejected": "[bold red]↩[/bold red]",
+            }
+            if status != "pending":
+                error = str(task.get("error") or "")
+                detail = f"  [dim]{_preview(error, 80)}[/dim]" if error else ""
+                self._append(Static(
+                    f"{icons.get(status, '○')} ({task.get('owner', 'agent')}) "
+                    f"{_preview(str(task.get('title', '')), 64)}{detail}",
+                    classes="log-line",
+                ))
+
+        elif t == "workflow.handoff":
+            artifact = event.get("artifact") or {}
+            escalations = artifact.get("scope_escalations") or []
+            escalation = (
+                f"  [yellow]范围审批: {', '.join(escalations)}[/yellow]"
+                if escalations
+                else ""
+            )
+            self._append(Static(
+                f"[dim]交接[/dim] ({artifact.get('role', 'agent')}) "
+                f"{_preview(str(artifact.get('summary', '')), 88)}{escalation}",
+                classes="log-line",
+            ))
+
+        elif t == "workflow.reviewed":
+            decision = str(event.get("decision") or "return")
+            label = "接受" if decision == "accept" else "退回"
+            color = "green" if decision == "accept" else "red"
+            self._append(Static(
+                f"[bold {color}]Reviewer {label}[/bold {color}]  "
+                f"{_preview(str(event.get('conclusion') or ''), 100)}",
+                classes="log-line",
+            ))
+
+        elif t == "workflow.finished":
+            status = str(event.get("status") or "failed")
+            color = "green" if status == "succeeded" else "red"
+            self._append(Static(
+                f"[bold {color}]工作流 {status}[/bold {color}]  "
+                f"[dim]tokens={event.get('total_tokens', 0)} "
+                f"elapsed={float(event.get('elapsed_s') or 0.0):.1f}s[/dim]",
+                classes="log-line",
+            ))
 
         elif t == "step.started":
             run_id = event.get("run_id", "")
@@ -1570,10 +1689,13 @@ class KamaTuiApp(App[None]):
             self._append(perm_block)
             select = PermissionSelect(tool_use_id, tool_name, param_preview)
             self._mount_permission_select(select)
-            log.debug("PermissionSelect mounted before #prompt  pending=%d", len(self._pending_permission_blocks))
+            log.debug(
+                "PermissionSelect mounted before #prompt  pending=%d",
+                len(self._pending_permission_blocks),
+            )
 
         elif t == "permission.denied":
-            # 处理超时或断连等非用户交互触发的 deny（用户主动 deny 已由 on_permission_select_decided 处理）
+            # 处理超时或断连等非用户交互 deny（主动 deny 已由 select 回调处理）
             tool_use_id = str(event.get("tool_use_id", ""))
             decision = str(event.get("decision", "denied"))
             if tool_use_id in self._pending_permission_blocks:

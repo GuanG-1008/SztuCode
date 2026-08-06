@@ -25,7 +25,7 @@ import tempfile
 from copy import deepcopy
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 try:
     # Local helper in this repo.

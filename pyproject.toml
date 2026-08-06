@@ -66,7 +66,11 @@ ignore = []
 [tool.mypy]
 python_version = "3.12"
 strict = true                 # 启用严格模式
-mypy_path = "src"             # 将 src 加入模块搜索路径
+mypy_path = [
+    "src",
+    "src/sztu_code/core/skills/builtin/documents/scripts",
+    "src/sztu_code/core/skills/builtin/presentations/container_tools",
+] # 将 src 与可执行 Skill 脚本目录加入模块搜索路径
 explicit_package_bases = true # 明确包根，减少隐式命名空间误判
 
 # ---- Pytest：默认发现 tests/，异步用例自动管理 event loop ----

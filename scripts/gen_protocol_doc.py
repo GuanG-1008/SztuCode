@@ -68,6 +68,11 @@ from sztu_code.core.bus.events import (
     ToolCallFailedEvent,
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
+    WorkflowFinishedEvent,
+    WorkflowHandoffEvent,
+    WorkflowReviewEvent,
+    WorkflowStartedEvent,
+    WorkflowTaskUpdatedEvent,
 )
 
 _OUTPUT_PATH = Path(__file__).parent.parent / "docs" / "reference" / "wire-protocol.md"
@@ -318,6 +323,16 @@ def generate() -> str:
         _model_section("ChangeAppliedEvent", ChangeAppliedEvent,
             {"type": "change.applied", "run_id": run_id, "workspace_path": "/repo",
              "paths": ["src/example.py"], "ts": ts}),
+        "\n## Multi-agent Workflow Events\n\n",
+        _model_section("WorkflowStartedEvent", WorkflowStartedEvent),
+        "\n",
+        _model_section("WorkflowTaskUpdatedEvent", WorkflowTaskUpdatedEvent),
+        "\n",
+        _model_section("WorkflowHandoffEvent", WorkflowHandoffEvent),
+        "\n",
+        _model_section("WorkflowReviewEvent", WorkflowReviewEvent),
+        "\n",
+        _model_section("WorkflowFinishedEvent", WorkflowFinishedEvent),
         "\n## Session Events\n\n",
         _model_section("SessionCreatedEvent", SessionCreatedEvent,
             {"type": "session.created", "session_id": session_id, "mode": "chat", "ts": ts}),

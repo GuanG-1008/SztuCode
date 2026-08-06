@@ -27,7 +27,14 @@ async def test_workspace_bound_read_and_write_use_project_root(tmp_path: Path) -
 # 设计：覆盖父目录、Windows 盘符、盘根和 UNC 写法，防止 POSIX 将 Windows 绝对路径误判为普通文件名。
 @pytest.mark.parametrize(
     "path",
-    ["../outside.txt", "C:/outside.txt", r"\outside.txt", r"\\server\share\outside.txt"],
+    [
+        "../outside.txt",
+        "/outside.txt",
+        "C:/outside.txt",
+        "C:outside.txt",
+        r"\outside.txt",
+        r"\\server\share\outside.txt",
+    ],
 )
 async def test_workspace_bound_tools_reject_paths_outside_project(tmp_path: Path, path: str) -> None:
     project = tmp_path / "project"

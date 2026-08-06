@@ -21,9 +21,10 @@ import argparse
 import re
 import zipfile
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -38,7 +39,7 @@ def _field_type(instr: str) -> str:
     return s.split()[0].upper()
 
 
-def _iter_word_xml_parts(z: zipfile.ZipFile):
+def _iter_word_xml_parts(z: zipfile.ZipFile) -> Iterator[str]:
     # Document + headers/footers are the common places fields live.
     for name in z.namelist():
         if not name.startswith("word/"):
@@ -174,7 +175,8 @@ def main() -> None:
     if needs_update:
         print("\nREMINDER")
         print(
-            "- If the PDF/PNGs show placeholders or wrong page numbers/TOC, open in Word and run: Ctrl+A → F9 (Update Fields), then re-render."
+            "- If the PDF/PNGs show placeholders or wrong page numbers/TOC, "
+            "open in Word and run: Ctrl+A → F9 (Update Fields), then re-render."
         )
 
 

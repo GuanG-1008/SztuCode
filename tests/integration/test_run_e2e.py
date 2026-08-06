@@ -1,7 +1,7 @@
 """
 End-to-end integration test for the S1 agent pipeline.
 
-Requires a real ANTHROPIC_API_KEY — skipped automatically when absent.
+Requires a configured real Anthropic or OpenAI-compatible provider.
 Run explicitly:
     uv run pytest tests/integration/test_run_e2e.py -v
 Or with the marker:
@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from sztu_code.core.config import SztuConfig
 from sztu_code.core.runner import AgentRunner
 
-# Load project .env so ANTHROPIC_API_KEY is available without going through get_config()
+# 加载项目 .env，使真实 provider 凭证可在不调用 get_config() 时用于集成测试
 load_dotenv(Path(__file__).parent.parent.parent / ".env", override=False)
 
 pytestmark = pytest.mark.integration
@@ -35,16 +35,30 @@ def sample_file(tmp_path: Path) -> Path:
     return f
 
 
-# 功能：验证完整的端到端 agent 链路：调用真实 LLM → 执行 read_file → 成功完成并写入 events.jsonl
-# 设计：使用真实 ANTHROPIC_API_KEY 和真实文件，goal 中指定一个具体的数字（7391）以便断言 LLM 确实读了文件；
-#       通过 events.jsonl 的事件序列断言每个关键阶段都被记录，而非只检查 stdout，因为 events.jsonl 是 S1 的核心验收产物
+# 功能：验证完整端到端链路调用真实可配置 LLM、读取文件并写入 events.jsonl
+# 设计：按环境选择 Anthropic/OpenAI 兼容 provider，以数字 7391 和事件序列证明模型确实使用了 read_file
 async def test_run_e2e_reads_file_and_succeeds(
     sample_file: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY not set")
+    requested_provider = os.environ.get("SZTU_E2E_PROVIDER", "").strip()
+    if requested_provider:
+        provider_name = requested_provider
+    elif os.environ.get("OPENAI_API_KEY"):
+        provider_name = "openai"
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        provider_name = "anthropic"
+    else:
+        pytest.skip("real LLM API key not set")
+    if provider_name not in {"anthropic", "openai"}:
+        pytest.fail(f"unsupported SZTU_E2E_PROVIDER: {provider_name}")
+    model = (
+        os.environ.get("SZTU_E2E_MODEL", "").strip()
+        or os.environ.get("SZTU_LLM_DEFAULT_MODEL", "").strip()
+    )
+    if not model:
+        pytest.skip("SZTU_E2E_MODEL or SZTU_LLM_DEFAULT_MODEL not set")
 
     # ReadFileTool resolves paths relative to CWD — point it at tmp_path
     monkeypatch.chdir(tmp_path)
@@ -57,6 +71,9 @@ async def test_run_e2e_reads_file_and_succeeds(
 
     config = SztuConfig()
     config.agent.max_steps = 5
+    config.llm.provider = provider_name
+    config.llm.default_model = model
+    config.llm.context_window = int(os.environ.get("SZTU_E2E_CONTEXT_WINDOW", "0"))
 
     runner = AgentRunner(config, runs_dir=runs_dir)
     await runner.run(goal)
