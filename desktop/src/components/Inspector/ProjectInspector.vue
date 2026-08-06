@@ -189,6 +189,10 @@ function reloadBrowser(tab: BrowserTab) {
   tab.frameKey += 1;
 }
 
+function clearBrowserInput(tab: BrowserTab) {
+  tab.input = "";
+}
+
 function browserLoadError(tab: BrowserTab, message: string) {
   tab.loading = false;
   notice.value = `网页加载失败：${message}`;
@@ -360,10 +364,14 @@ onBeforeUnmount(() => {
     </main>
 
     <main v-else-if="currentBrowser" class="browser-workspace">
-      <form class="browser-toolbar" @submit.prevent="navigateBrowser(currentBrowser)">
-        <button type="button" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url" @click="reloadBrowser(currentBrowser)"><RotateCw :size="14" /></button>
-        <label><Globe2 :size="14" /><input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入网址" spellcheck="false" /></label>
-        <button type="submit" title="访问" aria-label="访问网页"><Send :size="14" /></button>
+      <form class="browser-toolbar" aria-label="网页导航" @submit.prevent="navigateBrowser(currentBrowser)">
+        <button type="button" class="browser-toolbar-action" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url || currentBrowser.loading" @click="reloadBrowser(currentBrowser)"><RotateCw :size="14" :class="{ spin: currentBrowser.loading }" /></button>
+        <div class="browser-address">
+          <Globe2 :size="14" aria-hidden="true" />
+          <input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入网址" spellcheck="false" autocomplete="url" />
+          <button v-if="currentBrowser.input" type="button" class="browser-address-clear" title="清除地址" aria-label="清除地址" @click="clearBrowserInput(currentBrowser)"><X :size="13" /></button>
+        </div>
+        <button type="submit" class="browser-toolbar-submit" title="访问网页" aria-label="访问网页" :disabled="!currentBrowser.input.trim() || currentBrowser.loading"><Send :size="14" /></button>
       </form>
       <div class="browser-stage">
         <BrowserWebview
