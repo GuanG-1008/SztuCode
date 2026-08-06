@@ -23,9 +23,12 @@ async def test_workspace_bound_read_and_write_use_project_root(tmp_path: Path) -
     assert read.content == "workspace scoped"
 
 
-# 功能：验证绑定工作区后的文件工具拒绝绝对路径和父目录穿越。
-# 设计：对同一根目录分别提供 ../ 与临时目录绝对路径，直接断言 PermissionError，覆盖 resolve 后的真实边界检查。
-@pytest.mark.parametrize("path", ["../outside.txt", "C:/outside.txt"])
+# 功能：验证绑定工作区后的文件工具跨平台拒绝绝对路径和父目录穿越。
+# 设计：覆盖父目录、Windows 盘符、盘根和 UNC 写法，防止 POSIX 将 Windows 绝对路径误判为普通文件名。
+@pytest.mark.parametrize(
+    "path",
+    ["../outside.txt", "C:/outside.txt", r"\outside.txt", r"\\server\share\outside.txt"],
+)
 async def test_workspace_bound_tools_reject_paths_outside_project(tmp_path: Path, path: str) -> None:
     project = tmp_path / "project"
     project.mkdir()
