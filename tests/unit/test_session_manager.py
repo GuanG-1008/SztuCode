@@ -9,7 +9,7 @@ from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import LlmResponse, UsageStats
 from sztu_code.core.runner import RunOutcome
 from sztu_code.core.session.manager import SESSION_CLOSED, SESSION_NOT_FOUND, SessionManager
-from sztu_code.core.session.model import Session
+from sztu_code.core.session.model import RunStats, Session
 from sztu_code.core.session.store import SessionStore
 
 
@@ -107,6 +107,29 @@ async def test_send_message_chat_enters_waiting_and_writes_thread(tmp_path: Path
     assert messages[1]["role"] == "assistant"
     history = await manager.get_history(session.id)
     assert history[0]["run_id"] == run_id
+
+
+# 功能：验证切换会话读取历史时会从完成事件恢复尚未写入 meta 的运行统计
+# 设计：在 manager 已加载 session 后再落入 run.finished，模拟旧后台产生的数据，无需重启即可自愈
+async def test_get_history_backfills_run_stats_without_restart(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    manager = SessionManager(store, lambda: _Runner(), EventBus())  # type: ignore[arg-type]
+    session = await manager.create("chat")
+    session.run_ids.append("run-1")
+    store.write_meta(session)
+    events = store.runs_dir(session.id) / "run-1" / "events.jsonl"
+    events.parent.mkdir(parents=True)
+    events.write_text(
+        '{"type":"run.finished","total_input_tokens":120,"total_output_tokens":30,"elapsed_s":2.5}\n',
+        encoding="utf-8",
+    )
+
+    await manager.get_history(session.id)
+
+    assert manager.get_run_stats(session.id) == {
+        "run-1": RunStats(input_tokens=120, output_tokens=30, elapsed_s=2.5).to_dict()
+    }
+    assert store.read_meta(session.id).run_stats == session.run_stats
 
 
 # 功能：验证 one_shot session 在单次消息完成后自动 closed
