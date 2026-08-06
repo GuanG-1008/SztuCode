@@ -60,6 +60,38 @@ def test_backfill_run_stats_from_finished_event(tmp_path: Path) -> None:
     assert store.read_meta(session.id).run_stats == session.run_stats
 
 
+# 功能：验证多轮会话按各自 run_id 保存不同的 token 与耗时统计
+# 设计：为两个 run 写入数值不同的完成事件并回填，断言统计不会复用或串写到另一轮
+def test_backfill_keeps_each_run_stats_independent(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = Session(
+        id="sess-1", mode="chat", status="waiting_for_input", title="multi-run",
+        created_at="t1", updated_at="t2", run_ids=["run-1", "run-2"],
+    )
+    store.write_meta(session)
+    finished_by_run = {
+        "run-1": (120, 30, 2.5),
+        "run-2": (480, 75, 8.25),
+    }
+    for run_id, (input_tokens, output_tokens, elapsed_s) in finished_by_run.items():
+        events = store.runs_dir(session.id) / run_id / "events.jsonl"
+        events.parent.mkdir(parents=True)
+        events.write_text(
+            '{"type":"run.finished",'
+            f'"total_input_tokens":{input_tokens},'
+            f'"total_output_tokens":{output_tokens},'
+            f'"elapsed_s":{elapsed_s}}}\n',
+            encoding="utf-8",
+        )
+
+    assert store.backfill_run_stats(session)
+    assert session.run_stats == {
+        "run-1": RunStats(input_tokens=120, output_tokens=30, elapsed_s=2.5),
+        "run-2": RunStats(input_tokens=480, output_tokens=75, elapsed_s=8.25),
+    }
+    assert session.run_stats["run-1"] != session.run_stats["run-2"]
+
+
 def test_store_delete_removes_session_files(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     store.write_meta(Session(
