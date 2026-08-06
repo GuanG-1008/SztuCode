@@ -24,7 +24,7 @@ def test_mark_success() -> None:
     ctx.mark_success()
     assert ctx.is_done()
     assert ctx.status == "success"
-    assert ctx.reason is None
+    assert ctx.reason == "success"
 
 
 # 功能：验证 mark_failed 后 status 和 reason 被正确记录

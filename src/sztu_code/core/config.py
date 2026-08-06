@@ -34,6 +34,8 @@ class LoggingConfig:
 @dataclass
 class AgentConfig:
     max_steps: int = _DEFAULT_MAX_STEPS  # 0 = 不限步数；预算由 budget.max_tokens / max_wall_clock_s 兜底
+    max_budget_usd: float = 0.0  # 0 = 不限制 USD 成本上限
+    repeated_error_threshold: int = 3  # 同一工具同类错误连续 N 次触发熔断
     # max_steps 到达前给一次总结回合，避免裸失败
     wrap_up_on_max_steps: bool = _DEFAULT_WRAP_UP_ON_MAX_STEPS
     # max_steps 边界且最后一步工具全部成功时，追加一步无工具结语回合让模型正常收尾

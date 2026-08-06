@@ -216,6 +216,7 @@ class AgentRunner:
             run_id=run_id,
             goal=goal,
             max_steps=self._config.agent.max_steps,
+            max_budget_usd=self._config.agent.max_budget_usd,
             prefill_messages=history,
             session_notes=notes,
             global_context=global_ctx,
