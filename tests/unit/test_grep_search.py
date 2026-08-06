@@ -29,6 +29,34 @@ async def test_match_returns_file_line_text(tmp_path: Path) -> None:
     assert "src/main.py:3: class Greeter:" in result.content
 
 
+# 功能：命中结果保留行首空格和行尾空白
+# 设计：精确比较包含四格缩进与两个尾随空格的整行，防止 strip 再次破坏源文本
+async def test_match_preserves_space_indentation_and_trailing_whitespace(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "example.py"
+    source.write_text('def greet():\n    return "hello"  \n', encoding="utf-8")
+    tool = GrepSearchTool(tmp_path)
+
+    result = await tool.invoke({"pattern": "return"})
+
+    assert not result.is_error
+    assert result.content == 'example.py:2:     return "hello"  '
+
+
+# 功能：命中结果保留 Tab 缩进且不携带 CRLF 换行符
+# 设计：用字节写入固定 CRLF 与 Tab，精确断言单行输出以覆盖跨平台换行处理
+async def test_match_preserves_tab_indentation_without_source_newline(tmp_path: Path) -> None:
+    source = tmp_path / "example.py"
+    source.write_bytes(b'def greet():\r\n\treturn "hello"\r\n')
+    tool = GrepSearchTool(tmp_path)
+
+    result = await tool.invoke({"pattern": "return"})
+
+    assert not result.is_error
+    assert result.content == 'example.py:2: \treturn "hello"'
+
+
 # 功能：默认忽略大小写，case_sensitive=True 时区分大小写
 # 设计：同一 pattern 分别搜大小写两种写法，验证开关行为
 async def test_case_sensitivity_flag(tmp_path: Path) -> None:
