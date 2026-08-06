@@ -12,7 +12,7 @@ from sztu_code.core.bus.events import (
     StuckLoopEvent,
 )
 from sztu_code.core.compact.budget import truncate_tool_results
-from sztu_code.core.context import ExecutionContext
+from sztu_code.core.context import ContinueReason, ExecutionContext, TerminationReason
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.base import LLMProvider
 from sztu_code.core.stuck_tracker import stuck_signature
@@ -221,6 +221,11 @@ class AgentLoop:
                     )
                     if result.is_error:
                         has_errors = True
+                        # Claude Code 风格错误累积：非权限类错误 ≥3 次触发熔断
+                        if result.error_type != "permission_denied":
+                            context.record_error(tc.name, result.error_type or "runtime_error")
+                    else:
+                        context.record_success()
                     # 上下文卸载：将超长工具结果写入外部 refs/*.md，上下文仅保留占位符
                     # 参考 TencentDB Agent Memory Level 0-1 架构
                     content = result.content
@@ -296,6 +301,27 @@ class AgentLoop:
                     base += "\n\n" + "\n".join(pending_summaries)
                 context.result = base
                 context.mark_success()
+
+            # --- Claude Code 风格中间层终止检测 ---
+            # blocking_limit: 上下文即将溢出
+            elif (
+                response.usage is not None
+                and context.is_at_blocking_limit(response.usage.context_pct)
+            ):
+                context.mark_interrupted(TerminationReason.BLOCKING_LIMIT)
+
+            # max_budget_usd: USD 成本上限
+            elif context.is_over_budget():
+                context.mark_interrupted(TerminationReason.MAX_BUDGET_USD)
+
+            # repeated_error: 同一工具同类错误连续 N 次
+            elif context.error_accumulator and any(
+                count >= 3
+                for tool_errors in context.error_accumulator.values()
+                for count in tool_errors.values()
+            ):
+                context.mark_failed(TerminationReason.REPEATED_ERROR)
+
             elif context.max_steps > 0 and context.step >= context.max_steps:
                 # 结语宽限步：最后一步工具全部成功时，追加一步无工具回合让模型正常收尾。
                 # 模型给出完成标记即记为 success；否则保留文本并按步数耗尽标记 interrupted
@@ -329,6 +355,23 @@ class AgentLoop:
             if not context.is_done() and context.token_budget_exhausted():
                 context.mark_interrupted("max_tokens_exceeded")
                 break
+
+            # Claude Code 风格继续原因追踪
+            if not context.is_done() and response.stop_reason == "tool_use":
+                context.last_continue_reason = ContinueReason.NEXT_TURN
+            elif not context.is_done() and response.stop_reason == "max_tokens":
+                if context.max_output_tokens_recovery_count < 3:
+                    context.max_output_tokens_recovery_count += 1
+                    context.last_continue_reason = ContinueReason.MAX_OUTPUT_TOKENS_RECOVERY
+                else:
+                    context.messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have hit the output token limit multiple times. "
+                            "Please provide a concise final answer now."
+                        ),
+                    })
+                    context.last_continue_reason = ContinueReason.NEXT_TURN
 
             # 工具结果追加完毕（messages 末尾为 user）后检查压缩，仅在 run 继续时触发
             # 此时压缩结果 [user_summary, assistant_ack] 对下一次 LLM 调用是合法输入

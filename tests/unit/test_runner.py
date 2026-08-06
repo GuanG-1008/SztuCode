@@ -186,8 +186,8 @@ async def test_run_finished_event_published_on_success(tmp_path: Path) -> None:
     assert finished.status == "success"  # type: ignore[attr-defined]
 
 
-# 功能：验证步数耗尽时 run.finished 携带 interrupted 状态和正确的耗尽原因
-# 设计：LoopingProvider + max_steps=2 触发中断路径，确认 runner 在预算耗尽终止路径同样发布 finished 事件
+# 功能：验证步数耗尽时 run.finished 携带 failed 状态和正确的失败原因
+# 设计：LoopingProvider + max_steps=2 触发失败路径，确认 runner 在失败终止路径同样发布 finished 事件
 async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None:
     events = await _run(
         provider=_LoopingProvider(),
@@ -195,8 +195,8 @@ async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None
         tmp_path=tmp_path,
     )
     finished = next(e for e in events if e.type == "run.finished")  # type: ignore[attr-defined]
-    assert finished.status == "interrupted"  # type: ignore[attr-defined]
-    assert finished.reason == "exceeded_max_steps"  # type: ignore[attr-defined]
+    assert finished.status == "failed"  # type: ignore[attr-defined]
+    assert finished.reason == "max_turns"  # type: ignore[attr-defined]
 
 
 # 功能：验证 events.jsonl 第一行为 run.started、最后一行为 run.finished
@@ -240,12 +240,10 @@ async def test_extra_handlers_receive_events(tmp_path: Path) -> None:
 
 
 # 功能：验证 config.agent.max_steps 被正确传递给 AgentLoop，控制 LLM 调用次数上限
-# 设计：用 LoopingProvider 的调用次数反推 max_steps 是否生效；关闭收尾回合，避免其多一次调用干扰步数计数
+# 设计：用 LoopingProvider 的调用次数反推 max_steps 是否生效，不依赖内部状态检查，从行为角度验证配置传递
 async def test_config_max_steps_passed_to_loop(tmp_path: Path) -> None:
     provider = _LoopingProvider()
-    config = _config(max_steps=3)
-    config.agent.wrap_up_on_max_steps = False
-    await _run(provider=provider, config=config, tmp_path=tmp_path)
+    await _run(provider=provider, config=_config(max_steps=3), tmp_path=tmp_path)
     assert provider._call == 3
 
 
@@ -310,10 +308,7 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
 
     await runner.run_and_capture("remember python", run_id="run-new", session=session, store=store)
 
-    # read_messages 现在透出 ts 时间戳，LLM 上下文忽略它
-    assert [{k: v for k, v in m.items() if k != "ts"} for m in provider.messages] == [
-        {"role": "user", "content": "remember python"}
-    ]
+    assert provider.messages == [{"role": "user", "content": "remember python"}]
     assert provider.system is not None
     assert "Python 3.12" in provider.system
     assert (store.runs_dir("sess-1") / "run-new" / "events.jsonl").exists()
