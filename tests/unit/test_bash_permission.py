@@ -112,3 +112,35 @@ async def test_install_commands_blocked() -> None:
     result = await BashTool().invoke({"command": "pip install requests"})
     assert result.is_error
     assert "blocked" in result.content.lower()
+
+
+# 功能：验证 Windows 上能找到可用的 git-bash，避免 cmd.exe 缺 Unix 工具
+# 设计：标准安装路径或 PATH 中任一命中即视为可用；SZTU_BASH_PATH 可覆盖；未安装时回退 cmd 不算失败
+def test_git_bash_path_detection() -> None:
+    import sys
+
+    from sztu_code.core.tools.builtin.bash import _git_bash_path
+
+    found = _git_bash_path()
+    if sys.platform != "win32":
+        return
+    if found is not None:
+        from pathlib import Path
+
+        assert Path(found).is_file()
+
+
+# 功能：验证此前在 cmd.exe 下失败的命令（grep/pwd 等）经 git-bash 执行成功
+# 设计：覆盖真实 bug 回归——Windows 且 git-bash 存在时断言非错误输出；无 git-bash 的环境跳过
+async def test_bash_runs_unix_tools_on_windows() -> None:
+    import sys
+
+    from sztu_code.core.tools.builtin.bash import BashTool, _git_bash_path
+
+    if sys.platform != "win32" or _git_bash_path() is None:
+        return
+    result = await BashTool().invoke({"command": "grep --version"})
+    assert not result.is_error, result.content
+    assert "grep" in result.content.lower()
+    result = await BashTool().invoke({"command": "pwd"})
+    assert not result.is_error, result.content

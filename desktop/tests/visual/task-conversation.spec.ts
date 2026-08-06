@@ -19,6 +19,10 @@ test("task conversation prioritizes outcome, evidence, and optional work records
   await expect(page.getByText("第一次命令不可用，我已切换到项目中存在的测试入口并完成验证。", { exact: true })).toBeVisible();
   await expect(page.getByText("执行遇到问题", { exact: true })).toHaveCount(0);
 
+  const turnTokenTotals = await page.locator(".turn-usage b").allTextContents();
+  expect(turnTokenTotals).toHaveLength(3);
+  expect(new Set(turnTokenTotals).size).toBe(turnTokenTotals.length);
+
   const records = page.locator(".work-record");
   await expect(records).toHaveCount(4);
   await records.first().locator("summary").click();
@@ -38,5 +42,4 @@ test("task conversation remains readable in a narrow window", async ({ page }) =
   expect(layout.content).toBeLessThanOrEqual(layout.viewport);
   expect(layout.evidenceColumns).not.toBe("none");
   await expect(page.getByRole("button", { name: "允许一次" })).toBeVisible();
-  await expect(page.getByText("没有结构化测试记录", { exact: true })).toHaveCount(0);
 });

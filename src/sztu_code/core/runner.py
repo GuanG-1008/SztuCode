@@ -323,25 +323,26 @@ class AgentRunner:
                             ts=_now(),
                         )
                     )
+            final_stats = RunStats(
+                input_tokens=context.total_input_tokens,
+                output_tokens=context.total_output_tokens,
+                elapsed_s=context.elapsed_s(),
+            )
+            if session is not None and store is not None:
+                session.run_stats[run_id] = final_stats
+                store.write_meta(session)
             await bus.publish(
                 RunFinishedEvent(
                     run_id=run_id,
                     status=context.status,
                     reason=context.reason,
                     steps=context.step,
-                    total_input_tokens=context.total_input_tokens,
-                    total_output_tokens=context.total_output_tokens,
-                    elapsed_s=context.elapsed_s(),
+                    total_input_tokens=final_stats.input_tokens,
+                    total_output_tokens=final_stats.output_tokens,
+                    elapsed_s=final_stats.elapsed_s,
                     ts=_now(),
                 )
             )
-            if session is not None and store is not None:
-                session.run_stats[run_id] = RunStats(
-                    input_tokens=context.total_input_tokens,
-                    output_tokens=context.total_output_tokens,
-                    elapsed_s=context.elapsed_s(),
-                )
-                store.write_meta(session)
 
         if session is not None and store is not None:
             # Phase 3a: 等待后台异步压缩完成（compactor 为 None 时跳过）

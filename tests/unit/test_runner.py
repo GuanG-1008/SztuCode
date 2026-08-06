@@ -10,7 +10,7 @@ from sztu_code.core.config import SztuConfig
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import LlmResponse, ToolCallBlock, UsageStats
 from sztu_code.core.runner import AgentRunner
-from sztu_code.core.session.model import Session
+from sztu_code.core.session.model import RunStats, Session
 from sztu_code.core.session.store import SessionStore
 
 # --- mock provider -----------------------------------------------------------
@@ -316,6 +316,54 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
     assert "Python 3.12" in provider.system
     assert (store.runs_dir("sess-1") / "run-new" / "events.jsonl").exists()
     assert not (tmp_path / "runs" / "run-new").exists()
+
+
+# 功能：验证桌面端收到 run.finished 时本轮耗时与 token 已经持久化
+# 设计：在完成事件订阅器中立即读取 meta，锁定先落盘再广播的时序契约
+async def test_session_stats_persisted_before_finished_event(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    session = Session(
+        id="sess-1",
+        mode="chat",
+        status="active",
+        title="",
+        created_at="t",
+        updated_at="t",
+        run_ids=["run-new"],
+    )
+    store.write_meta(session)
+    store.append_message(session.id, "user", "hello", run_id="run-new")
+    persisted_at_finish: list[tuple[RunStats | None, float]] = []
+
+    async def capture_finished(event: BaseModel) -> None:
+        if event.type == "run.finished":  # type: ignore[attr-defined]
+            persisted_at_finish.append((
+                store.read_meta(session.id).run_stats.get("run-new"),
+                event.elapsed_s,  # type: ignore[attr-defined]
+            ))
+
+    provider = _CapturingProvider(
+        LlmResponse(
+            stop_reason="end_turn",
+            text="done",
+            usage=UsageStats(input_tokens=120, output_tokens=30),
+        )
+    )
+    runner = AgentRunner(
+        _config(),
+        provider=provider,
+        extra_handlers=[capture_finished],
+        runs_dir=tmp_path / "runs",
+    )
+
+    await runner.run_and_capture("hello", run_id="run-new", session=session, store=store)
+
+    assert len(persisted_at_finish) == 1
+    persisted, finished_elapsed = persisted_at_finish[0]
+    assert persisted is not None
+    assert persisted.input_tokens == 120
+    assert persisted.output_tokens == 30
+    assert persisted.elapsed_s == finished_elapsed
 
 
 # 功能：验证自动压缩后摘要会覆盖写入 thread，而不是按旧 prefill 长度切片丢弃

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   Activity, Check, CheckCircle2, ChevronDown, CircleAlert, FileDiff,
-  LoaderCircle, PauseCircle, Play, ShieldAlert, TestTube2,
+  LoaderCircle, PauseCircle, Play, ShieldAlert,
 } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
 import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
@@ -255,10 +255,9 @@ const turns = computed<TurnView[]>(() => {
             <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
           </div>
 
-          <section v-if="turn.text || turn.failedTests || turn.changePaths.length" class="evidence-strip" aria-label="验证与变更">
+          <section v-if="turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason)" class="evidence-strip" aria-label="验证与变更">
             <div v-if="turn.passedTests" class="evidence-item passed"><CheckCircle2 :size="15" /><span><b>{{ turn.passedTests }}</b> 项验证通过</span></div>
             <div v-if="turn.failedTests" class="evidence-item failed"><CircleAlert :size="15" /><span><b>{{ turn.failedTests }}</b> 项验证失败</span></div>
-            <div v-if="turn.text && !turn.passedTests && !turn.failedTests" class="evidence-item unverified"><TestTube2 :size="15" /><span>没有结构化测试记录</span></div>
             <div v-if="turn.changePaths.length" class="evidence-item changed"><FileDiff :size="15" /><span><b>{{ turn.changePaths.length }}</b> 个文件有变更</span></div>
             <div v-if="turn.state === 'failed' && turn.failureReason" class="evidence-item failed"><CircleAlert :size="15" /><span>{{ turn.failureReason }}</span></div>
           </section>

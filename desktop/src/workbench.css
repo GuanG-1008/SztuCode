@@ -160,7 +160,6 @@
 .evidence-item b { color: inherit; font-weight: 650; }
 .evidence-item.passed { color: #2f7549; background: #f1f8f3; border-color: #d8eadc; }
 .evidence-item.failed { color: #a33d43; background: #fff3f3; border-color: #f0d8da; }
-.evidence-item.unverified { color: #79672e; background: #fff9e9; border-color: #eee2bc; }
 .evidence-item.changed { color: #32658f; background: #f1f6fa; border-color: #dbe7f0; }
 
 .work-record { margin-top: 9px; border-top: 1px solid #eceeef; }

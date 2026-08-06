@@ -379,6 +379,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     liveRunUsage.set(relatedRunId, cumulative);
     setStep(step, (current) => ({
       ...current,
+      runId: relatedRunId,
       usage: { inputTokens, outputTokens, contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? "") },
       runStats: { ...cumulative, elapsedSeconds: 0 },
     }));
@@ -440,7 +441,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   if (type === "run.finished") {
     const runStatus = String(event.status);
     for (const step of timeline.value.keys()) {
-      setStep(step, (current) => current.runId === relatedRunId || !current.runId ? {
+      setStep(step, (current) => current.runId === relatedRunId ? {
         ...current,
         status: runStatus === "success" ? "done" : "failed",
         finalText: current.finalText || current.tokens.join(""),
@@ -457,6 +458,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     }
     if (runId === activeRunId.value) activeRunId.value = null;
     liveRunUsage.delete(relatedRunId);
+    void refreshIndex(false);
     return;
   }
 }

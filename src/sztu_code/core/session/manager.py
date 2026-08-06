@@ -241,11 +241,13 @@ class SessionManager:
 
     # 读取指定 session 的完整 thread 历史
     async def get_history(self, sid: str) -> list[dict[str, Any]]:
-        self._get_session(sid)
+        session = self._get_session(sid)
+        self._store.backfill_run_stats(session)
         return self._store.read_history(sid)
 
     def get_run_stats(self, sid: str) -> dict[str, dict[str, int | float]]:
         session = self._get_session(sid)
+        self._store.backfill_run_stats(session)
         return {run_id: stats.to_dict() for run_id, stats in session.run_stats.items()}
 
     # 返回稳定排序并支持 cursor 分页的 session 摘要列表
@@ -260,6 +262,8 @@ class SessionManager:
             session for session in self._sessions.values()
             if include_archived or not session.archived
         ]
+        for session in sessions:
+            self._store.backfill_run_stats(session)
         sessions.sort(
             key=lambda session: (not session.pinned, session.updated_at, session.id)
         )
