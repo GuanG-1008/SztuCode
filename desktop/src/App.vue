@@ -89,6 +89,7 @@ const nativeSettingsError = ref("");
 const webBridgeAllowed = ref(false);
 const currentStepByRun = new Map<string, number>();
 const runStepBase = new Map<string, number>(); // 每个 run 的 step 起点偏移，避免跨 run 步号冲突
+const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number }>();
 const reviewCtx = ref<ReviewContext | null>(null);
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
 const pendingPermissions = ref<Array<{ toolUseId: string; toolName: string; preview: string; runId: string }>>([]);
@@ -132,6 +133,13 @@ const permissionModeLabel = computed(() => ({
   auto: "全部允许",
 }[runtimeSettings.value?.permission_mode ?? "normal"]));
 const taskStatusLabel = (item: Session) => item.status === "active" ? "运行中" : item.status === "waiting_for_input" ? "等待输入" : "已完成";
+function formatSessionUsage(item: Session): string {
+  const tokens = Number(item.total_input_tokens ?? 0) + Number(item.total_output_tokens ?? 0);
+  const seconds = Number(item.total_elapsed_s ?? 0);
+  const tokenText = tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k tokens` : `${tokens} tokens`;
+  const durationText = seconds < 60 ? `${Math.round(seconds)}秒` : `${Math.floor(seconds / 60)}分${Math.round(seconds % 60)}秒`;
+  return item.status === "active" && !tokens ? "计时中" : `${durationText} · ${tokenText}`;
+}
 // 工作区布局：保留三列结构，让分隔线和面板宽度在收起时连续归零
 const workLayoutStyle = computed(() => {
   if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr) 0px 0px" };
@@ -243,14 +251,16 @@ function stepFor(event: RuntimeEvent): number {
 }
 function addUserMessage(content: string) {
   const step = Math.max(0, ...timeline.value.keys()) + 1;
-  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: new Date().toISOString() }));
+  const startedAt = new Date().toISOString();
+  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: startedAt, runStartedAt: startedAt }));
   return step;
 }
-function hydrateTimeline(messages: unknown[], runId?: string | null) {
+function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {}) {
   const next = new Map<number, TimelineStep>();
   let step = 0;
   for (const message of messages) {
     const role = entryRole(message);
+    const messageRunId = String((message as { run_id?: unknown })?.run_id ?? "") || undefined;
     const blocks = historyBlocks(message);
     const text = blocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
     const toolResults = blocks.filter((block) => String(block.type) === "tool_result");
@@ -261,7 +271,7 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
         const result = toolResults.find((item) => String(item.tool_use_id) === call.id);
         return result ? { ...call, status: result.is_error ? "failed" as const : "done" as const, output: blockOutput(result), error: result.is_error ? blockOutput(result) : undefined } : call;
       });
-      next.set(step, { ...current, status: "done", runId: runId ?? current.runId, toolCalls: completed });
+      next.set(step, { ...current, status: "done", runId: messageRunId ?? current.runId, toolCalls: completed });
       continue;
     }
     if (role === "user") {
@@ -269,7 +279,12 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
       next.set(step, {
         ...emptyStep(step),
         status: "done",
-        runId: runId ?? undefined,
+        runId: messageRunId,
+        runStats: messageRunId && runStats[messageRunId] ? {
+          inputTokens: Number(runStats[messageRunId].input_tokens ?? 0),
+          outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
+          elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
+        } : undefined,
         userMessage: text,
         userMessageTime: String((message as { ts?: unknown })?.ts ?? ""),
       });
@@ -287,7 +302,12 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
     next.set(step, {
       ...current,
       status: "done",
-      runId: runId ?? current.runId,
+      runId: messageRunId ?? current.runId,
+      runStats: messageRunId && runStats[messageRunId] ? {
+        inputTokens: Number(runStats[messageRunId].input_tokens ?? 0),
+        outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
+        elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
+      } : current.runStats,
       thinking: [current.thinking, thinking].filter(Boolean).join("\n\n") || undefined,
       finalText: [current.finalText, text].filter(Boolean).join("\n\n") || undefined,
       toolCalls: [...current.toolCalls, ...calls],
@@ -326,6 +346,12 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
   }
   // 运行事件没有 session_id，只消费由当前会话发送消息返回的 run_id，避免串到其他任务。
   if (!relatedRunId || relatedRunId !== activeRunId.value) return;
+  if (type === "run.started") {
+    const messageStep = Math.max(0, ...timeline.value.keys());
+    setStep(messageStep || 1, (current) => ({ ...current, status: "thinking", runId, runStartedAt: String(event.ts ?? new Date().toISOString()) }));
+    liveRunUsage.set(runId, { inputTokens: 0, outputTokens: 0 });
+    return;
+  }
   if (type === "step.started") {
     // 每个 run 的 step 从 1 编号，这里按 run 做偏移，保证跨 run 步号不冲突
     if (!runStepBase.has(runId)) runStepBase.set(runId, Math.max(0, ...timeline.value.keys()));
@@ -346,7 +372,16 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
   }
   if (type === "llm.usage") {
     const step = stepFor(timelineEvent);
-    setStep(step, (current) => ({ ...current, usage: { inputTokens: Number(event.input_tokens ?? 0), outputTokens: Number(event.output_tokens ?? 0), contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? "") } }));
+    const inputTokens = Number(event.input_tokens ?? 0);
+    const outputTokens = Number(event.output_tokens ?? 0);
+    const previous = liveRunUsage.get(relatedRunId) ?? { inputTokens: 0, outputTokens: 0 };
+    const cumulative = { inputTokens: previous.inputTokens + inputTokens, outputTokens: previous.outputTokens + outputTokens };
+    liveRunUsage.set(relatedRunId, cumulative);
+    setStep(step, (current) => ({
+      ...current,
+      usage: { inputTokens, outputTokens, contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? "") },
+      runStats: { ...cumulative, elapsedSeconds: 0 },
+    }));
     return;
   }
   if (type === "tool.call_started") {
@@ -413,9 +448,15 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
           status: runStatus === "interrupted" ? "interrupted" : (runStatus === "success" ? "success" : "failed"),
           reason: String(event.reason ?? "") || undefined,
         },
+        runStats: {
+          inputTokens: Number(event.total_input_tokens ?? 0),
+          outputTokens: Number(event.total_output_tokens ?? 0),
+          elapsedSeconds: Number(event.elapsed_s ?? 0),
+        },
       } : current);
     }
     if (runId === activeRunId.value) activeRunId.value = null;
+    liveRunUsage.delete(relatedRunId);
     return;
   }
 }
@@ -428,8 +469,8 @@ async function refreshIndex(loadHistory = false) {
   workspace.value ??= nextWorkspaces[0] ?? null;
   activeId.value ??= nextSessions.find((item) => !item.archived)?.session_id ?? null;
   if (loadHistory && activeId.value) {
-    const latestRunId = sessions.value.find((item) => item.session_id === activeId.value)?.latest_run_id ?? null;
-    hydrateTimeline(await sessionHistory(activeId.value), latestRunId);
+    const history = await sessionHistory(activeId.value);
+    hydrateTimeline(history.messages, history.run_stats);
   }
   loading.value = false;
 }
@@ -440,6 +481,7 @@ function beginTask(project: Workspace | null = workspace.value) {
   activeId.value = null;
   currentStepByRun.clear();
   runStepBase.clear();
+  liveRunUsage.clear();
   timeline.value = new Map();
   activeRunId.value = null;
   page.value = "work";
@@ -457,18 +499,21 @@ async function submitTask(content: string, project: Workspace | null = workspace
       activeId.value = sessionId;
       currentStepByRun.clear();
       runStepBase.clear();
+      liveRunUsage.clear();
       timeline.value = new Map();
       activeRunId.value = null;
       page.value = "work";
       prompt.value = "";
-      addUserMessage(trimmed);
+      const messageStep = addUserMessage(trimmed);
       activeRunId.value = await sendPrompt(sessionId, trimmed);
+      setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
       await refreshIndex(false);
     } else {
       if (active.value?.archived || active.value?.status === "closed") return;
       prompt.value = "";
-      addUserMessage(trimmed);
+      const messageStep = addUserMessage(trimmed);
       activeRunId.value = await sendPrompt(activeId.value, trimmed);
+      setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
     }
   } finally { sending.value = false; }
 }
@@ -476,9 +521,11 @@ async function chooseTask(id: string) {
   activeId.value = id;
   currentStepByRun.clear();
   runStepBase.clear();
+  liveRunUsage.clear();
   // 完整历史已含各轮内容，直接 hydrate 展示；replay 会与各 run 的 step 编号冲突导致旧日志混排
   const latestRunId = sessions.value.find((item) => item.session_id === id)?.latest_run_id ?? null;
-  hydrateTimeline(await sessionHistory(id), latestRunId);
+  const history = await sessionHistory(id);
+  hydrateTimeline(history.messages, history.run_stats);
   activeRunId.value = latestRunId;
   page.value = "work";
 }
@@ -920,7 +967,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <div class="task-state-heading"><span><ShieldCheck :size="14" />需要处理</span><b>{{ attentionTasks.length }}</b></div>
             <div v-for="task in attentionTasks" :key="`attention-${task.session_id}`" class="sidebar-session status-session">
               <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                <i /><span>{{ task.title || '未命名任务' }}</span><small>等待输入</small>
+                <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
               </button>
               <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
             </div>
@@ -929,7 +976,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <div class="task-state-heading"><span><RotateCcw :size="14" />运行中</span><b>{{ runningTasks.length }}</b></div>
             <div v-for="task in runningTasks" :key="`running-${task.session_id}`" class="sidebar-session status-session">
               <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                <i /><span>{{ task.title || '未命名任务' }}</span><small>执行中</small>
+                <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
               </button>
               <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
             </div>
@@ -940,7 +987,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
           <span class="side-label">搜索结果 <small>{{ visibleSessions.length }}</small></span>
           <div v-for="task in visibleSessions" :key="`search-${task.session_id}`" class="sidebar-session status-session">
             <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-              <i :class="task.status" /><span>{{ task.title || '未命名任务' }}</span><small>{{ taskStatusLabel(task) }}</small>
+              <i :class="task.status" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ taskStatusLabel(task) }} · {{ formatSessionUsage(task) }}</small></span>
             </button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
@@ -967,7 +1014,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
               <div class="project-task-list__inner">
                 <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session">
                   <button class="project-task" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                    <i :class="task.status" /><span>{{ task.title || '未命名任务' }}</span>
+                    <i :class="task.status" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
                   </button>
                   <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
                 </div>
@@ -981,7 +1028,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="temporaryTasks.length && !normalizedTaskQuery" class="side-section temporary-tasks">
           <span class="side-label">临时任务</span>
           <div v-for="task in temporaryTasks" :key="task.session_id" class="sidebar-session conversation-session">
-            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><i :class="{ running: task.status === 'active' }" /><span>{{ task.title || '未命名任务' }}</span></button>
+            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><i :class="{ running: task.status === 'active' }" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span></button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
         </section>

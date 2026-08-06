@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sztu_code.core.session.model import Session
+from sztu_code.core.session.model import RunStats, Session
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,36 @@ class SessionStore:
     def read_meta(self, sid: str) -> Session:
         data = json.loads((self.session_dir(sid) / "meta.json").read_text(encoding="utf-8"))
         return Session.from_dict(data)
+
+    def backfill_run_stats(self, session: Session) -> bool:
+        changed = False
+        for run_id in session.run_ids:
+            if run_id in session.run_stats:
+                continue
+            events_path = self.runs_dir(session.id) / run_id / "events.jsonl"
+            if not events_path.exists():
+                continue
+            try:
+                lines = events_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "run.finished":
+                    continue
+                session.run_stats[run_id] = RunStats(
+                    input_tokens=max(0, int(event.get("total_input_tokens", 0))),
+                    output_tokens=max(0, int(event.get("total_output_tokens", 0))),
+                    elapsed_s=max(0.0, float(event.get("elapsed_s", 0.0))),
+                )
+                changed = True
+                break
+        if changed:
+            self.write_meta(session)
+        return changed
 
     def delete(self, sid: str) -> None:
         path = self.session_dir(sid).resolve()
@@ -114,7 +144,7 @@ class SessionStore:
             )
 
     # 读取完整 thread 并返回可直接传给 Anthropic 的 messages
-    def read_messages(self, sid: str) -> list[dict[str, Any]]:
+    def read_messages(self, sid: str, *, include_run_id: bool = False) -> list[dict[str, Any]]:
         path = self.session_dir(sid) / "thread.jsonl"
         if not path.exists():
             return []
@@ -137,13 +167,14 @@ class SessionStore:
                     role,
                 )
                 continue
-            messages.append(
-                {
-                    "role": role,
-                    "content": row.get("content", ""),
-                    "ts": row.get("ts", ""),
-                }
-            )
+            message = {
+                "role": role,
+                "content": row.get("content", ""),
+                "ts": row.get("ts", ""),
+            }
+            if include_run_id and row.get("run_id") is not None:
+                message["run_id"] = str(row["run_id"])
+            messages.append(message)
 
         messages = self._trim_orphan_tool_use(messages)
         from sztu_code.core.compact.budget import truncate_tool_results
@@ -152,6 +183,9 @@ class SessionStore:
             limit=self._tool_result_limit,
             keep=self._tool_result_keep,
         )
+
+    def read_history(self, sid: str) -> list[dict[str, Any]]:
+        return self.read_messages(sid, include_run_id=True)
 
     # 裁掉尾部未配对 tool_use 以及其后的消息，避免 Anthropic messages.invalid
     def _trim_orphan_tool_use(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   Activity, Check, CheckCircle2, ChevronDown, CircleAlert, FileDiff,
   LoaderCircle, PauseCircle, Play, ShieldAlert, TestTube2,
@@ -10,7 +10,7 @@ import ThinkingPanel from "./ThinkingPanel.vue";
 import TokenStream from "./TokenStream.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import PermissionBadge from "./PermissionBadge.vue";
-import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry } from "./types";
+import type { PermissionDecision, PermissionState, PlanItem, RunStats, TimelineStep, ToolCallEntry } from "./types";
 
 const props = defineProps<{ steps: TimelineStep[]; workspaceId?: string }>();
 defineEmits<{
@@ -28,6 +28,8 @@ type TurnView = {
   userMessage?: string;
   userMessageTime?: string;
   model?: string;
+  runStats?: RunStats;
+  runStartedAt?: string;
   hasContent: boolean;
   hasActivity: boolean;
   pending?: PermissionState;
@@ -43,6 +45,11 @@ type TurnView = {
   completedPlan: number;
   planTotal: number;
 };
+
+const now = ref(Date.now());
+let clockTimer: number | undefined;
+onMounted(() => { clockTimer = window.setInterval(() => { now.value = Date.now(); }, 1000); });
+onBeforeUnmount(() => window.clearInterval(clockTimer));
 
 function thinkingTextOf(steps: TimelineStep[]): string {
   return [...new Set(steps.map((step) => step.thinking?.trim()).filter(Boolean))].join("\n\n");
@@ -76,7 +83,8 @@ function hasAssistantContent(step: TimelineStep): boolean {
   return Boolean(
     step.finalText || step.tokens.length || step.thinking || step.toolCalls.length ||
     step.plan?.length || step.tests?.length || step.changes?.length ||
-    step.logs?.length || step.subagents?.length || step.skills?.length,
+    step.logs?.length || step.subagents?.length || step.skills?.length ||
+    step.runStartedAt || step.runStats,
   );
 }
 
@@ -111,6 +119,27 @@ function formatTime(iso?: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 1) return `${Math.round(seconds * 1000)} ms`;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
+}
+
+function formatTokens(tokens: number): string {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k` : String(tokens);
+}
+
+function liveStatsLabel(turn: TurnView): string {
+  const startedAt = turn.runStartedAt ? new Date(turn.runStartedAt).getTime() : Number.NaN;
+  const elapsed = turn.state === "running" || turn.state === "waiting"
+    ? (Number.isNaN(startedAt) ? turn.runStats?.elapsedSeconds ?? 0 : Math.max(0, (now.value - startedAt) / 1000))
+    : turn.runStats?.elapsedSeconds ?? 0;
+  const totalTokens = (turn.runStats?.inputTokens ?? 0) + (turn.runStats?.outputTokens ?? 0);
+  return `${formatDuration(elapsed)} · ${formatTokens(totalTokens)} tokens`;
 }
 
 function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, calls: ToolCallEntry[], text: string) {
@@ -148,6 +177,8 @@ const turns = computed<TurnView[]>(() => {
   return groups.map((group, index) => {
     const steps = group.steps;
     const model = steps.find((step) => step.usage?.model)?.usage?.model ?? "";
+    const runStats = [...steps].reverse().find((step) => step.runStats)?.runStats;
+    const runStartedAt = steps.find((step) => step.runStartedAt)?.runStartedAt ?? group.userMessageTime;
     const text = steps.map((step) => step.finalText || step.tokens.join("")).filter(Boolean).join("\n\n");
     const allToolCalls = toolCallsOf(steps);
     const thinkingText = thinkingTextOf(steps);
@@ -168,6 +199,8 @@ const turns = computed<TurnView[]>(() => {
       userMessage: group.userMessage,
       userMessageTime: group.userMessageTime,
       model,
+      runStats,
+      runStartedAt,
       hasActivity,
       pending,
       text,
@@ -205,6 +238,7 @@ const turns = computed<TurnView[]>(() => {
         <div class="timeline-step__content">
           <div class="turn-status" :class="turn.state">
             <b>{{ turn.stateLabel }}</b>
+            <span v-if="turn.runStartedAt || turn.runStats" class="turn-status__usage">（{{ liveStatsLabel(turn) }}）</span>
             <span v-if="turn.state === 'running' && turn.planTotal">{{ turn.completedPlan }}/{{ turn.planTotal }} 项</span>
           </div>
 
@@ -213,6 +247,13 @@ const turns = computed<TurnView[]>(() => {
           <section v-if="turn.text" class="turn-result" aria-label="任务结果">
             <TokenStream :tokens="[]" :final-text="turn.text" />
           </section>
+
+          <div v-if="turn.runStats" class="turn-usage" aria-label="本轮耗时和 Token 消耗">
+            <span>{{ formatDuration(turn.runStats.elapsedSeconds) }}</span>
+            <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
+            <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
+            <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
+          </div>
 
           <section v-if="turn.text || turn.failedTests || turn.changePaths.length" class="evidence-strip" aria-label="验证与变更">
             <div v-if="turn.passedTests" class="evidence-item passed"><CheckCircle2 :size="15" /><span><b>{{ turn.passedTests }}</b> 项验证通过</span></div>

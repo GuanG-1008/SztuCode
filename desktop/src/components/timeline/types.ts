@@ -1,5 +1,6 @@
 export type TimelineStatus = "thinking" | "acting" | "observing" | "done" | "failed";
 export type RunOutcome = { status: "success" | "failed" | "interrupted"; reason?: string };
+export type RunStats = { inputTokens: number; outputTokens: number; elapsedSeconds: number };
 
 export type ToolCallEntry = {
   id: string;
@@ -53,6 +54,8 @@ export interface TimelineStep {
   userMessageTime?: string;
   finalText?: string;
   outcome?: RunOutcome;
+  runStats?: RunStats;
+  runStartedAt?: string;
   plan?: PlanItem[];
   tests?: TestEntry[];
   changes?: ChangeEntry[];

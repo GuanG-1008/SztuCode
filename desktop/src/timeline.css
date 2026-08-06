@@ -1,4 +1,7 @@
 .execution-timeline { display: grid; gap: 0; }
+.turn-usage { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 11px 0 3px; color: #7d838a; font: 11px/1.4 "Cascadia Mono", Consolas, monospace; }
+.turn-usage span, .turn-usage b { padding: 4px 7px; background: #f3f4f4; border: 1px solid #e8e9ea; border-radius: 5px; font-weight: 400; }
+.turn-usage b { color: #4d535a; background: #eef1f2; }
 .timeline-step { position: relative; padding: 0 0 28px; }
 .timeline-step:last-child { padding-bottom: 8px; }
 .timeline-assistant { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; }

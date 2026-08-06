@@ -114,13 +114,24 @@
 .reference-context small { overflow: hidden; color: #a1a5a2; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
 .browser-workspace { position: relative; isolation: isolate; display: grid; grid-template-rows: 49px minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; background: #f8f8f7; border-radius: 0 0 9px 9px; }
-.browser-toolbar { position: relative; z-index: 2; display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; align-items: center; gap: 6px; padding: 8px 9px; background: #fbfbfa; border-bottom: 1px solid #e7e8e6; }
-.browser-toolbar > button { display: grid; width: 28px; height: 28px; padding: 0; place-items: center; color: #727975; background: transparent; border-radius: 5px; }
-.browser-toolbar > button:hover:not(:disabled) { color: #315d49; background: #eaf0ec; }
-.browser-toolbar > button:disabled { opacity: .38; }
-.browser-toolbar label { display: grid; min-width: 0; height: 31px; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 6px; padding: 0 9px; color: #929793; background: #fff; border: 1px solid #dfe2df; border-radius: 6px; }
-.browser-toolbar label:focus-within { border-color: #9cb8aa; box-shadow: 0 0 0 3px rgb(69 119 94 / 8%); }
-.browser-toolbar input { min-width: 0; padding: 0; color: #424844; background: transparent; border: 0; outline: 0; font-size: 10px; }
+.browser-toolbar { position: relative; z-index: 2; display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px; align-items: center; gap: 7px; padding: 8px 10px; background: #f5f6f4; border-bottom: 1px solid #e2e5e2; }
+.browser-toolbar-action,
+.browser-toolbar-submit { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: #68716c; background: transparent; border: 1px solid transparent; border-radius: 7px; transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease, transform 120ms ease; }
+.browser-toolbar-action:hover:not(:disabled),
+.browser-toolbar-submit:hover:not(:disabled) { color: #244c3a; background: #e5eee8; border-color: #d4e2d9; }
+.browser-toolbar-action:active:not(:disabled),
+.browser-toolbar-submit:active:not(:disabled) { transform: translateY(1px); }
+.browser-toolbar-action:focus-visible,
+.browser-toolbar-submit:focus-visible,
+.browser-address-clear:focus-visible { outline: 2px solid #78a88d; outline-offset: 1px; }
+.browser-toolbar-action:disabled,
+.browser-toolbar-submit:disabled { color: #a8afaa; cursor: default; opacity: .58; }
+.browser-address { display: grid; min-width: 0; height: 32px; grid-template-columns: 16px minmax(0, 1fr) 22px; align-items: center; gap: 7px; padding: 0 6px 0 9px; color: #7c8780; background: #fff; border: 1px solid #d8ded9; border-radius: 9px; box-shadow: inset 0 1px 1px rgb(27 35 31 / 3%); transition: border-color 120ms ease, box-shadow 120ms ease; }
+.browser-address:focus-within { border-color: #8cb6a0; box-shadow: 0 0 0 3px rgb(69 119 94 / 11%), inset 0 1px 1px rgb(27 35 31 / 3%); }
+.browser-address input { min-width: 0; width: 100%; padding: 0; color: #354039; background: transparent; border: 0; outline: 0; font-size: 10px; line-height: 1; }
+.browser-address input::placeholder { color: #9ba39d; }
+.browser-address-clear { display: grid; width: 22px; height: 22px; padding: 0; place-items: center; color: #8a938d; background: transparent; border-radius: 5px; }
+.browser-address-clear:hover { color: #34473b; background: #edf2ee; }
 .browser-stage { position: relative; z-index: 0; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
 .browser-renderer,
 .browser-renderer iframe { position: relative; z-index: 0; width: 100%; height: 100%; border: 0; background: #fff; }
