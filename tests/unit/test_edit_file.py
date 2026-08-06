@@ -15,9 +15,9 @@ async def test_edit_file_single_replace(tmp_path: Path) -> None:
     path = tmp_path / "test.py"
     path.write_text("hello world\nhi again\n")
 
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     result = await tool.invoke({
-        "path": str(path),
+        "path": "test.py",
         "old_string": "hello world",
         "new_string": "hi world",
     })
@@ -33,9 +33,9 @@ async def test_edit_file_replace_all(tmp_path: Path) -> None:
     path = tmp_path / "test.py"
     path.write_text("TODO: fix\n# TODO: improve\nTODO: remove\n")
 
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     result = await tool.invoke({
-        "path": str(path),
+        "path": "test.py",
         "old_string": "TODO:",
         "new_string": "DONE:",
         "replace_all": True,
@@ -53,9 +53,9 @@ async def test_edit_file_old_string_not_found(tmp_path: Path) -> None:
     path = tmp_path / "test.py"
     path.write_text("hello world\n")
 
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     result = await tool.invoke({
-        "path": str(path),
+        "path": "test.py",
         "old_string": "nonexistent",
         "new_string": "replacement",
     })
@@ -70,9 +70,9 @@ async def test_edit_file_ambiguous_without_replace_all(tmp_path: Path) -> None:
     path = tmp_path / "test.py"
     path.write_text("x = 1\ny = x\nz = x\n")
 
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     result = await tool.invoke({
-        "path": str(path),
+        "path": "test.py",
         "old_string": "x",
         "new_string": "n",
     })
@@ -87,9 +87,9 @@ async def test_edit_file_identical_strings(tmp_path: Path) -> None:
     path = tmp_path / "test.py"
     path.write_text("hello\n")
 
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     result = await tool.invoke({
-        "path": str(path),
+        "path": "test.py",
         "old_string": "hello",
         "new_string": "hello",
     })
@@ -101,9 +101,9 @@ async def test_edit_file_identical_strings(tmp_path: Path) -> None:
 # 功能：验证文件不存在时返回错误
 # 设计：指定不存在的文件路径，断言返回错误
 async def test_edit_file_missing_file(tmp_path: Path) -> None:
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     result = await tool.invoke({
-        "path": str(tmp_path / "nonexistent.py"),
+        "path": "nonexistent.py",
         "old_string": "a",
         "new_string": "b",
     })
@@ -115,10 +115,10 @@ async def test_edit_file_missing_file(tmp_path: Path) -> None:
 # 功能：验证 .. 路径遍历被拒绝
 # 设计：路径中包含 .. 组件，断言抛出 PermissionError
 async def test_edit_file_rejects_traversal(tmp_path: Path) -> None:
-    tool = EditFileTool()
+    tool = EditFileTool(tmp_path)
     with pytest.raises(PermissionError):
         await tool.invoke({
-            "path": str(tmp_path / ".." / "outside.py"),
+            "path": "../outside.py",
             "old_string": "a",
             "new_string": "b",
         })

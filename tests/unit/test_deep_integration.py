@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from sztu_code.core.context import ExecutionContext
+from sztu_code.core.context import ExecutionContext, TerminationReason
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import LlmResponse, ToolCallBlock
 from sztu_code.core.loop import AgentLoop
@@ -172,7 +172,7 @@ class TestStepLimit:
         await loop.run(ctx)
         assert ctx.step == 2
         assert ctx.status == "success"
-        assert ctx.reason is None
+        assert ctx.reason == TerminationReason.SUCCESS
         assert ctx.result == "all done"
 
     # 功能：验证每步都发布 step.started 和 step.finished 事件，顺序正确
@@ -232,11 +232,19 @@ class TestStepLimit:
     # 功能：验证 max_steps 耗尽后循环不再调用 LLM
     # 设计：provider 包含 10 个响应但 max_steps=3，断言 call_count == 3
     async def test_max_steps_stops_calling_llm(self) -> None:
-        tc = _tc("unknown", {}, uid="t0")
+        tc = _tc("echo", uid="t0")
         provider = _MockProvider(
             [LlmResponse(stop_reason="tool_use", tool_calls=[tc])] * 10
         )
-        loop = AgentLoop(provider, ToolRegistry(), EventBus(), wrap_up_on_max_steps=False)
+        registry = ToolRegistry()
+        registry.register(_EchoTool())
+        loop = AgentLoop(
+            provider,
+            registry,
+            EventBus(),
+            wrap_up_on_max_steps=False,
+            grace_step_on_max_steps=False,
+        )
         ctx = _ctx(max_steps=3)
         await loop.run(ctx)
         assert ctx.status == "interrupted"

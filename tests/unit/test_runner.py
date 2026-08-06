@@ -186,8 +186,8 @@ async def test_run_finished_event_published_on_success(tmp_path: Path) -> None:
     assert finished.status == "success"  # type: ignore[attr-defined]
 
 
-# 功能：验证步数耗尽时 run.finished 携带 failed 状态和正确的失败原因
-# 设计：LoopingProvider + max_steps=2 触发失败路径，确认 runner 在失败终止路径同样发布 finished 事件
+# 功能：验证步数耗尽时 run.finished 携带 interrupted 状态和正确的中断原因
+# 设计：LoopingProvider + max_steps=2 触发可续跑的中断路径，确认 runner 发布 finished 事件
 async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None:
     events = await _run(
         provider=_LoopingProvider(),
@@ -195,7 +195,7 @@ async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None
         tmp_path=tmp_path,
     )
     finished = next(e for e in events if e.type == "run.finished")  # type: ignore[attr-defined]
-    assert finished.status == "failed"  # type: ignore[attr-defined]
+    assert finished.status == "interrupted"  # type: ignore[attr-defined]
     assert finished.reason == "exceeded_max_steps"  # type: ignore[attr-defined]
 
 
@@ -284,8 +284,8 @@ async def test_injected_bus_receives_events(tmp_path: Path) -> None:
     assert "run.finished" in types
 
 
-# 功能：验证 session run 会从 thread.jsonl 预填 messages，并把 notes 注入 system prompt
-# 设计：用 CapturingProvider 截获 LLM 入参，不触发真实 API；同时断言 run 目录写到 session/runs 下
+# 功能：验证 session run 会从 thread.jsonl 预填带时间戳的 messages，并把 notes 注入 system prompt
+# 设计：截获 LLM 入参并逐字段断言历史消息，同时确认 run 目录写到 session/runs 下
 async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
     from sztu_code.core.session.model import Session
     from sztu_code.core.session.store import SessionStore
@@ -308,7 +308,10 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
 
     await runner.run_and_capture("remember python", run_id="run-new", session=session, store=store)
 
-    assert provider.messages == [{"role": "user", "content": "remember python"}]
+    assert len(provider.messages) == 1
+    assert provider.messages[0]["role"] == "user"
+    assert provider.messages[0]["content"] == "remember python"
+    assert provider.messages[0]["ts"]
     assert provider.system is not None
     assert "Python 3.12" in provider.system
     assert (store.runs_dir("sess-1") / "run-new" / "events.jsonl").exists()
