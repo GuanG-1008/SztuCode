@@ -7,6 +7,22 @@
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-2F855A)](LICENSE)
 
+## 项目界面
+
+### 桌面工作台
+
+![SztuCode 桌面工作台首页](docs/images/image1.png)
+
+![SztuCode 桌面工作台任务界面](docs/images/image2.png)
+
+### TUI 终端界面
+
+![SztuCode TUI 欢迎界面](docs/images/image3.png)
+
+![SztuCode TUI 任务执行过程](docs/images/image4.png)
+
+![SztuCode TUI 任务结果](docs/images/image5.png)
+
 SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 CLI 提交任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。
 
 它既是一个持续完善的本地 AI 编程工具，也是一个用于学习 Agent 工程、软件协作与可信 AI Coding 的开放项目。
