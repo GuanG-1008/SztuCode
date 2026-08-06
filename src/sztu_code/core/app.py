@@ -202,6 +202,7 @@ class CoreApp:
     # 将内部 Session 转换为稳定的 IPC 摘要模型
     @staticmethod
     def _session_summary(session: Session) -> SessionSummary:
+        stats = list(session.run_stats.values())
         return SessionSummary(
             session_id=session.id,
             title=session.title,
@@ -213,6 +214,9 @@ class CoreApp:
             pinned=session.pinned,
             workspace_id=session.workspace_id,
             latest_run_id=session.run_ids[-1] if session.run_ids else None,
+            total_input_tokens=sum(item.input_tokens for item in stats),
+            total_output_tokens=sum(item.output_tokens for item in stats),
+            total_elapsed_s=sum(item.elapsed_s for item in stats),
         )
 
     # 将内部 Workspace 转换为客户端可渲染的稳定摘要
@@ -607,7 +611,10 @@ class CoreApp:
         assert self._sessions is not None
         cmd = SessionGetHistoryCommand.model_validate(params)
         messages = await self._sessions.get_history(cmd.session_id)
-        return SessionGetHistoryResult(messages=messages)
+        return SessionGetHistoryResult(
+            messages=messages,
+            run_stats=self._sessions.get_run_stats(cmd.session_id),
+        )
 
     # 接收客户端权限审批响应，resolve 对应挂起的 Future
     async def _permission_respond_handler(self, params: dict[str, Any]) -> PermissionRespondResult:

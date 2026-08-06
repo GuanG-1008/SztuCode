@@ -105,6 +105,8 @@ async def test_send_message_chat_enters_waiting_and_writes_thread(tmp_path: Path
     assert {k: v for k, v in messages[0].items() if k != "ts"} == {"role": "user", "content": "hello"}
     assert messages[0]["ts"]
     assert messages[1]["role"] == "assistant"
+    history = await manager.get_history(session.id)
+    assert history[0]["run_id"] == run_id
 
 
 # 功能：验证 one_shot session 在单次消息完成后自动 closed

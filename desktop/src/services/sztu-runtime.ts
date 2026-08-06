@@ -17,7 +17,10 @@ export type ChangeSummary = {
 export type Session = {
   session_id: string; title: string; status: string; updated_at: string;
   archived: boolean; pinned: boolean; workspace_id: string | null; latest_run_id?: string | null;
+  total_input_tokens: number; total_output_tokens: number; total_elapsed_s: number;
 };
+export type RunStats = { input_tokens: number; output_tokens: number; elapsed_s: number };
+export type SessionHistory = { messages: unknown[]; run_stats: Record<string, RunStats> };
 export type RuntimeSettings = { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
 export type RuntimeSettingsUpdate = Partial<RuntimeSettings> & { api_key?: string };
 export type ProviderStatus = { api_key_configured: boolean; ready_for_next_run: boolean; skills: Array<{ name: string; description: string }>; mcp_servers: Array<{ name: string; status: string; tool_count?: number }> };
@@ -120,9 +123,12 @@ export async function createSession(workspace: Workspace | null): Promise<string
   return String(result.session_id);
 }
 
-export async function sessionHistory(sessionId: string): Promise<unknown[]> {
+export async function sessionHistory(sessionId: string): Promise<SessionHistory> {
   const result = await client.request("session.get_history", { session_id: sessionId });
-  return (result.messages as unknown[] | undefined) ?? [];
+  return {
+    messages: (result.messages as unknown[] | undefined) ?? [],
+    run_stats: (result.run_stats as Record<string, RunStats> | undefined) ?? {},
+  };
 }
 
 export async function sendPrompt(sessionId: string, message: string): Promise<string> {

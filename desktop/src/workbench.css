@@ -142,6 +142,7 @@
 .turn-status { display: flex; min-height: 28px; align-items: center; gap: 8px; margin-bottom: 9px; }
 .turn-status b { color: #34383d; font-size: 13px; font-weight: 620; }
 .turn-status span { color: #92979d; font: 10px/1 Consolas, monospace; }
+.turn-status .turn-status__usage { min-width: 0; color: #747b83; font-size: 11px; white-space: nowrap; }
 .turn-status.running b { color: #2867a7; }
 .turn-status.waiting b { color: #80601d; }
 .turn-status.failed b { color: #a23b41; }
@@ -568,14 +569,16 @@
 @keyframes task-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .task-state-group.running .task-state-heading svg { animation: none; } }
 .status-session { min-height: 31px; }
-.status-task-row { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; gap: 7px; align-items: center; min-width: 0; min-height: 31px; width: auto; padding: 0 3px 0 9px; color: #4a4f56; background: transparent; border-radius: 6px; text-align: left; }
+.status-task-row { display: grid; grid-template-columns: 6px minmax(0, 1fr); gap: 7px; align-items: center; min-width: 0; min-height: 39px; width: auto; padding: 3px 3px 3px 9px; color: #4a4f56; background: transparent; border-radius: 6px; text-align: left; }
 .status-task-row > i { width: 5px; height: 5px; background: #aeb3b9; border-radius: 50%; }
 .task-state-group.attention .status-task-row > i { background: #d29225; box-shadow: 0 0 0 3px #d2922518; }
 .task-state-group.running .status-task-row > i { background: #3785dc; box-shadow: 0 0 0 3px #3785dc18; }
 .status-task-row > i.active { background: #3785dc; }
 .status-task-row > i.waiting_for_input { background: #d29225; }
-.status-task-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.status-task-row span, .agent-sidebar .project-task span, .agent-sidebar .conversation-row span { display: grid; min-width: 0; gap: 1px; }
+.status-task-row b, .agent-sidebar .project-task b, .agent-sidebar .conversation-row b { overflow: hidden; color: inherit; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .status-task-row small { color: #9a9fa5; font-size: 9px; white-space: nowrap; }
+.agent-sidebar .project-task small, .agent-sidebar .conversation-row small { overflow: hidden; color: #9a9fa5; font-size: 9px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-session:has(.status-task-row.active) { background: #e7effc; }
 .search-results .status-task-row { min-height: 34px; }
 .agent-sidebar .project-row-shell { min-height: 33px; border-radius: 6px; }
@@ -583,13 +586,13 @@
 .agent-sidebar .project-row svg { color: #718096; }
 .agent-sidebar .project-row-shell.active { background: #e8effa; }
 .agent-sidebar .project-collapse { width: 24px; }
-.agent-sidebar .project-task { display: grid; grid-template-columns: 6px minmax(0, 1fr); gap: 7px; align-items: center; min-height: 31px; padding: 5px 3px 5px 29px; }
+.agent-sidebar .project-task { display: grid; grid-template-columns: 6px minmax(0, 1fr); gap: 7px; align-items: center; min-height: 39px; padding: 4px 3px 4px 29px; }
 .agent-sidebar .project-task i { width: 5px; height: 5px; background: #b8bdc2; border-radius: 50%; }
 .agent-sidebar .project-task i.active { background: #3785dc; box-shadow: 0 0 0 3px #3785dc16; }
 .agent-sidebar .project-task i.waiting_for_input { background: #d29225; }
 .agent-sidebar .project-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-sidebar .project-empty, .agent-sidebar .side-empty { margin: 5px 8px; color: #9a9fa5; font-size: 11px; }
-.agent-sidebar .conversation-row { min-height: 31px; padding-left: 10px; font-size: 11px; }
+.agent-sidebar .conversation-row { min-height: 39px; padding: 4px 3px 4px 10px; font-size: 11px; }
 .archived-projects { margin: 15px 7px 0; }
 .archived-projects summary { display: flex; align-items: center; gap: 7px; min-height: 29px; color: #868b92; cursor: pointer; font-size: 11px; list-style: none; }
 .archived-projects summary::-webkit-details-marker { display: none; }

@@ -249,6 +249,9 @@ class SessionSummary(BaseModel):
     pinned: bool = False
     workspace_id: str | None = None
     latest_run_id: str | None = None
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_elapsed_s: float = 0.0
 
 
 class SessionListCommand(BaseModel):
@@ -318,6 +321,7 @@ class SessionGetHistoryCommand(BaseModel):
 
 class SessionGetHistoryResult(BaseModel):
     messages: list[dict[str, Any]]
+    run_stats: dict[str, dict[str, int | float]] = Field(default_factory=dict)
 
 
 class SessionCloseCommand(BaseModel):

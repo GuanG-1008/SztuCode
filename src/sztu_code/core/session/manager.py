@@ -52,6 +52,8 @@ class SessionManager:
         self._provider = provider
         self._workspace_resolver = workspace_resolver
         restored = self._store.list_sessions(include_archived=True)
+        for session in restored:
+            self._store.backfill_run_stats(session)
         self._sessions: dict[str, Session] = {session.id: session for session in restored}
         self._locks: dict[str, asyncio.Lock] = {
             session.id: asyncio.Lock() for session in restored
@@ -100,7 +102,8 @@ class SessionManager:
             if session.status == "waiting_for_input":
                 await self._bus.publish(SessionResumedEvent(session_id=sid, ts=_now()))
 
-            self._store.append_message(sid, "user", content)
+            run_id = run_id or new_run_id()
+            self._store.append_message(sid, "user", content, run_id=run_id)
             await self._bus.publish(
                 SessionMessageReceivedEvent(session_id=sid, content=content, ts=_now())
             )
@@ -108,7 +111,6 @@ class SessionManager:
             if not session.title:
                 session.title = content[:40]
 
-            run_id = run_id or new_run_id()
             session.run_ids.append(run_id)
             session.updated_at = _now()
             self._store.write_meta(session)
@@ -240,7 +242,11 @@ class SessionManager:
     # 读取指定 session 的完整 thread 历史
     async def get_history(self, sid: str) -> list[dict[str, Any]]:
         self._get_session(sid)
-        return self._store.read_messages(sid)
+        return self._store.read_history(sid)
+
+    def get_run_stats(self, sid: str) -> dict[str, dict[str, int | float]]:
+        session = self._get_session(sid)
+        return {run_id: stats.to_dict() for run_id, stats in session.run_stats.items()}
 
     # 返回稳定排序并支持 cursor 分页的 session 摘要列表
     async def list_sessions(

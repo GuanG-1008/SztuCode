@@ -22,7 +22,7 @@ from sztu_code.core.memory.loader import load_context_file
 from sztu_code.core.permissions.denial_tracker import DenialTracker
 from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.runs import RUNS_DIR, new_run_id
-from sztu_code.core.session.model import Session
+from sztu_code.core.session.model import RunStats, Session
 from sztu_code.core.session.store import SessionStore
 from sztu_code.core.stuck_tracker import StuckLoopTracker
 from sztu_code.core.subagent.registry import BackgroundTaskRegistry
@@ -335,6 +335,13 @@ class AgentRunner:
                     ts=_now(),
                 )
             )
+            if session is not None and store is not None:
+                session.run_stats[run_id] = RunStats(
+                    input_tokens=context.total_input_tokens,
+                    output_tokens=context.total_output_tokens,
+                    elapsed_s=context.elapsed_s(),
+                )
+                store.write_meta(session)
 
         if session is not None and store is not None:
             # Phase 3a: 等待后台异步压缩完成（compactor 为 None 时跳过）
