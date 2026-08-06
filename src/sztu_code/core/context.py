@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sztu_code.core.compact.canvas import TaskCanvas
 
 
 @dataclass
@@ -16,7 +20,7 @@ class ExecutionContext:
     base_system_prompt: str = ""  # 分层基础提示词（runner 构建），空则回退默认
     messages: list[dict[str, Any]] = field(default_factory=list)
     step: int = 0
-    status: str = "running"  # "running" | "success" | "failed"
+    status: str = "running"  # "running" | "success" | "failed" | "interrupted"
     reason: str | None = None
     result: str = ""
     # skill 或 subagent 角色可覆盖默认 system prompt
@@ -24,6 +28,14 @@ class ExecutionContext:
     # 本 run 派生的后台 subagent run_id 集合，结束回合前等待其全部落定
     pending_background_run_ids: set[str] = field(default_factory=set)
     compacted: bool = False
+    # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，注入 system prompt
+    canvas: TaskCanvas | None = None
+    # ---- agent run 预算 ----
+    max_tokens: int = 0           # 累计 input+output tokens 上限；0=不限
+    max_wall_clock_s: int = 0     # 累计墙钟秒数上限；0=不限
+    total_input_tokens: int = 0   # 已累计 input tokens（每步 LLM 调用后累加）
+    total_output_tokens: int = 0  # 已累计 output tokens
+    started_at: float = 0.0       # run 开始墙钟（time.monotonic()），loop 惰性初始化
 
     # 初始化消息历史，优先使用 session 完整回放内容
     def __post_init__(self) -> None:
@@ -44,6 +56,17 @@ class ExecutionContext:
                 "\n\n## Session Notes\n"
                 + self.session_notes.strip()
                 + "\n\nRemember important durable facts by calling note_save."
+            )
+        # Phase 2: 注入 Mermaid 任务画布 — Agent 每一步都能看到当前任务拓扑
+        if self.canvas is not None:
+            mermaid = self.canvas.render_mermaid()
+            summary = self.canvas.recent_summary()
+            parts.append("\n\n## Task Canvas\n" + mermaid)
+            if summary:
+                parts.append("\n最近完成:\n" + summary)
+            parts.append(
+                "\n画布展示了当前任务的执行进度。节点状态: ✅=完成 🔵=进行中 "
+                "⏳=待执行 ❌=失败。使用 read_ref 可查看卸载的完整工具输出。"
             )
         return "".join(parts)
 
@@ -87,3 +110,28 @@ class ExecutionContext:
     def mark_failed(self, reason: str) -> None:
         self.status = "failed"
         self.reason = reason
+
+    # 将 run 标记为中断（预算/上限耗尽但可续跑），区别于真正的失败
+    def mark_interrupted(self, reason: str) -> None:
+        self.status = "interrupted"
+        self.reason = reason
+
+    # 返回累计 token 总数（input + output）
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+    # 返回 token 预算是否已耗尽；max_tokens=0 视为不限
+    def token_budget_exhausted(self) -> bool:
+        return self.max_tokens > 0 and self.total_tokens() >= self.max_tokens
+
+    # 返回 run 已运行的墙钟秒数；started_at 未初始化时返回 0
+    def elapsed_s(self) -> float:
+        return time.monotonic() - self.started_at if self.started_at > 0 else 0.0
+
+    # 返回墙钟预算是否已超时；max_wall_clock_s=0 视为不限
+    def wall_clock_exceeded(self) -> bool:
+        return (
+            self.max_wall_clock_s > 0
+            and self.started_at > 0
+            and self.elapsed_s() >= self.max_wall_clock_s
+        )

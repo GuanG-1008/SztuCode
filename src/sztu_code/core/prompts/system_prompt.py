@@ -63,7 +63,31 @@ ACTIONS = (
     "authorized by the user or durable workspace instructions."
 )
 
-_STATIC_SECTIONS = (INTRO, SYSTEM_RULES, DOING_TASKS, ACTIONS)
+TOOL_GUIDE = (
+    "# Tool usage\n"
+    " - File paths must be relative to the working directory; do not use absolute paths.\n"
+    " - The shell is git-bash on Windows: use `ls`/`pwd`/`cat` (not `dir`), use forward "
+    "slashes (`src/foo.py`), and write `cd path` (the `cd /d X` cmd form is invalid).\n"
+    " - Do NOT install packages or modify the environment (pip/apt/brew) unless explicitly "
+    "required — assume dependencies are already available.\n"
+    " - Prefer the dedicated `grep_search` and `glob_search` tools over shell `grep`/`find` "
+    "for locating code.\n"
+    " - Prefer `edit_file` for targeted in-place edits; `write_file` rewrites whole files.\n"
+    " - When a tool fails, read the error, adjust the parameters, and retry — do not repeat "
+    "the exact same failing call."
+)
+
+WORK_PROTOCOL = (
+    "# Work protocol\n"
+    " - The environment is provisioned: install/update commands are blocked and will fail. "
+    "Never attempt pip/npm/apt/brew/conda/ensurepip.\n"
+    " - Finish by verifying: if a test or command can confirm your work, run it. Stop as "
+    "soon as the stated completion criterion is met — do not keep refining.\n"
+    " - Prefer a small, focused fix. If an approach fails a few times, re-plan instead of "
+    "retrying the same call with different wording."
+)
+
+_STATIC_SECTIONS = (INTRO, SYSTEM_RULES, DOING_TASKS, ACTIONS, TOOL_GUIDE, WORK_PROTOCOL)
 
 
 # 在指定目录执行 git 命令，失败或非 git 目录返回空字符串

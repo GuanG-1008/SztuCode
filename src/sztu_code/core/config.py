@@ -16,7 +16,11 @@ _DEFAULT_LOG_FILE = "~/.sztu/logs/core.log"
 _DEFAULT_LOG_FORMAT = "text"
 _DEFAULT_CONFIG_PATH = "~/.sztu/config.toml"
 _DEFAULT_CLIENT_SETTINGS_PATH = "~/.sztu/client-settings.json"
-_DEFAULT_MAX_STEPS = 20
+_DEFAULT_MAX_STEPS = 0  # 0 = 不限步数（预算驱动，由 token/墙钟兜底）
+_DEFAULT_WRAP_UP_ON_MAX_STEPS = True
+_DEFAULT_GRACE_STEP_ON_MAX_STEPS = True
+_DEFAULT_STUCK_MAX_FAILURES = 3
+_DEFAULT_STUCK_MAX_TOTAL = 0
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
 
 
@@ -29,7 +33,23 @@ class LoggingConfig:
 
 @dataclass
 class AgentConfig:
-    max_steps: int = _DEFAULT_MAX_STEPS
+    max_steps: int = _DEFAULT_MAX_STEPS  # 0 = 不限步数；预算由 budget.max_tokens / max_wall_clock_s 兜底
+    # max_steps 到达前给一次总结回合，避免裸失败
+    wrap_up_on_max_steps: bool = _DEFAULT_WRAP_UP_ON_MAX_STEPS
+    # max_steps 边界且最后一步工具全部成功时，追加一步无工具结语回合让模型正常收尾
+    grace_step_on_max_steps: bool = _DEFAULT_GRACE_STEP_ON_MAX_STEPS
+    # 同一操作连续失败达到该次数触发软干预；0=关闭
+    stuck_max_failures: int = _DEFAULT_STUCK_MAX_FAILURES
+    # 累计干预达到该次数硬停；0=永不硬停
+    stuck_max_total: int = _DEFAULT_STUCK_MAX_TOTAL
+
+
+@dataclass
+class BudgetConfig:
+    # 本 run 累计 input+output tokens 上限；0=不限
+    max_tokens: int = 0
+    # 本 run 累计墙钟秒数上限；0=不限
+    max_wall_clock_s: int = 0
 
 
 @dataclass
@@ -41,6 +61,8 @@ class LlmConfig:
     context_window: int = 0  # 0 = use provider's model-aware default
     base_url: str = ""  # 自定义端点，空表示使用官方默认地址
     api_key: str = ""  # 导入的凭证，优先于 .env 注入 provider 环境
+    api_key_env: str = ""  # 内置模型使用的凭证变量名，避免把密钥写入模型配置
+    keyless: bool = False  # 免 key 端点（如 opencode Zen 免费模型），跳过凭证校验
 
 
 @dataclass
@@ -61,6 +83,15 @@ class CompactionConfig:
     auto_threshold: float = 0.0  # 0 disables auto compaction; manual /compact remains available
     tool_result_limit: int = 8_000
     tool_result_keep: int = 4_000
+
+
+@dataclass
+class OffloadConfig:
+    enabled: bool = True  # 是否启用上下文卸载
+    min_chars: int = 2_000  # 触发卸载的最小字符数
+    min_lines: int = 50  # 触发卸载的最小行数
+    force_tools: list[str] = field(default_factory=lambda: ["bash", "grep", "glob"])
+    summary_max_chars: int = 300  # 摘要最大字符数
 
 
 @dataclass
@@ -89,6 +120,8 @@ class SztuConfig:
     trace: TraceConfig = field(default_factory=TraceConfig)
     permission: PermissionConfig = field(default_factory=PermissionConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
+    offload: OffloadConfig = field(default_factory=OffloadConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
 
 
@@ -130,16 +163,19 @@ def _client_settings_path() -> Path:
     ).expanduser()
 
 
-def _apply_client_settings(config: SztuConfig) -> None:
+def _read_client_settings() -> dict[str, Any]:
     path = _client_settings_path()
     if not path.exists():
-        return
+        return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
-        return
-    if not isinstance(value, dict):
-        return
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _apply_client_settings(config: SztuConfig) -> None:
+    value = _read_client_settings()
     provider = value.get("provider")
     model = value.get("model")
     permission_mode = value.get("permission_mode")
@@ -155,22 +191,53 @@ def _apply_client_settings(config: SztuConfig) -> None:
         config.llm.base_url = value["base_url"]
     if isinstance(value.get("api_key"), str):
         config.llm.api_key = value["api_key"]
+    if isinstance(value.get("api_key_env"), str):
+        config.llm.api_key_env = value["api_key_env"]
+    # 免 key 标志持久化：重启后仍能正确识别 Zen 等免 key 端点，避免泄漏环境里的通用 key
+    if isinstance(value.get("keyless"), bool):
+        config.llm.keyless = value["keyless"]
 
 
-def save_client_settings(config: SztuConfig) -> Path:
+def load_model_profiles() -> tuple[list[dict[str, Any]], str]:
+    value = _read_client_settings()
+    profiles = value.get("models")
+    return (
+        [item for item in profiles if isinstance(item, dict)]
+        if isinstance(profiles, list)
+        else [],
+        str(value.get("active_model_id", "") or ""),
+    )
+
+
+def save_client_settings(
+    config: SztuConfig,
+    *,
+    models: list[dict[str, Any]] | None = None,
+    active_model_id: str | None = None,
+) -> Path:
     """持久化桌面可编辑字段；base_url/api_key 为导入的本地凭证（与 cc-switch 同级明文存储）"""
     path = _client_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
+    value = _read_client_settings()
+    value.update(
+        {
+            "provider": config.llm.provider,
+            "model": config.llm.default_model,
+            "permission_mode": config.permission.mode,
+            "base_url": config.llm.base_url,
+            "api_key": config.llm.api_key,
+            "api_key_env": config.llm.api_key_env,
+            "keyless": config.llm.keyless,
+        }
+    )
+    if models is not None:
+        value["models"] = models
+    if active_model_id is not None:
+        value["active_model_id"] = active_model_id
     temporary.write_text(
         json.dumps(
-            {
-                "provider": config.llm.provider,
-                "model": config.llm.default_model,
-                "permission_mode": config.permission.mode,
-                "base_url": config.llm.base_url,
-                "api_key": config.llm.api_key,
-            },
+            value,
             ensure_ascii=False,
             indent=2,
         ) + "\n",
@@ -190,6 +257,8 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         "trace",
         "permission",
         "compaction",
+        "offload",
+        "budget",
         "mcp",
     }
     if unknown:
@@ -231,14 +300,47 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         agent = data["agent"]
         if not isinstance(agent, dict):
             raise SystemExit("Config error: [agent] must be a table")
-        unknown_agent: set[str] = set(agent.keys()) - {"max_steps"}
+        unknown_agent: set[str] = set(agent.keys()) - {
+            "max_steps", "wrap_up_on_max_steps", "grace_step_on_max_steps",
+            "stuck_max_failures", "stuck_max_total",
+        }
         if unknown_agent:
             raise SystemExit(f"Unknown [agent] keys: {', '.join(sorted(unknown_agent))}")
         if "max_steps" in agent:
             val = agent["max_steps"]
-            if not isinstance(val, int) or val <= 0:
-                raise SystemExit("Config error: agent.max_steps must be a positive integer")
+            if not isinstance(val, int) or val < 0:
+                raise SystemExit("Config error: agent.max_steps must be a non-negative integer (0 = unlimited)")
             config.agent.max_steps = val
+        if "wrap_up_on_max_steps" in agent:
+            val = agent["wrap_up_on_max_steps"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: agent.wrap_up_on_max_steps must be a boolean")
+            config.agent.wrap_up_on_max_steps = val
+        if "grace_step_on_max_steps" in agent:
+            val = agent["grace_step_on_max_steps"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: agent.grace_step_on_max_steps must be a boolean")
+            config.agent.grace_step_on_max_steps = val
+        for _key in ("stuck_max_failures", "stuck_max_total"):
+            if _key in agent:
+                val = agent[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(f"Config error: agent.{_key} must be a non-negative integer")
+                setattr(config.agent, _key, val)
+
+    if "budget" in data:
+        budget = data["budget"]
+        if not isinstance(budget, dict):
+            raise SystemExit("Config error: [budget] must be a table")
+        unknown_budget: set[str] = set(budget.keys()) - {"max_tokens", "max_wall_clock_s"}
+        if unknown_budget:
+            raise SystemExit(f"Unknown [budget] keys: {', '.join(sorted(unknown_budget))}")
+        for _key in ("max_tokens", "max_wall_clock_s"):
+            if _key in budget:
+                val = budget[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(f"Config error: budget.{_key} must be a non-negative integer")
+                setattr(config.budget, _key, val)
 
     if "llm" in data:
         llm = data["llm"]
@@ -347,6 +449,43 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                 )
             config.compaction.tool_result_keep = val
 
+    if "offload" in data:
+        off = data["offload"]
+        if not isinstance(off, dict):
+            raise SystemExit("Config error: [offload] must be a table")
+        unknown_off: set[str] = set(off.keys()) - {
+            "enabled", "min_chars", "min_lines", "force_tools", "summary_max_chars",
+        }
+        if unknown_off:
+            raise SystemExit(f"Unknown [offload] keys: {', '.join(sorted(unknown_off))}")
+        if "enabled" in off:
+            val = off["enabled"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: offload.enabled must be a boolean")
+            config.offload.enabled = val
+        if "min_chars" in off:
+            val = off["min_chars"]
+            if not isinstance(val, int) or val <= 0:
+                raise SystemExit("Config error: offload.min_chars must be a positive integer")
+            config.offload.min_chars = val
+        if "min_lines" in off:
+            val = off["min_lines"]
+            if not isinstance(val, int) or val <= 0:
+                raise SystemExit("Config error: offload.min_lines must be a positive integer")
+            config.offload.min_lines = val
+        if "force_tools" in off:
+            val = off["force_tools"]
+            if not isinstance(val, list) or not all(isinstance(t, str) for t in val):
+                raise SystemExit("Config error: offload.force_tools must be a list of strings")
+            config.offload.force_tools = val
+        if "summary_max_chars" in off:
+            val = off["summary_max_chars"]
+            if not isinstance(val, int) or val <= 0:
+                raise SystemExit(
+                    "Config error: offload.summary_max_chars must be a positive integer"
+                )
+            config.offload.summary_max_chars = val
+
     if "mcp" in data:
         mcp = data["mcp"]
         if not isinstance(mcp, dict):
@@ -426,16 +565,41 @@ def _apply_env(config: SztuConfig) -> None:
     if max_steps_str is not None:
         try:
             val = int(max_steps_str)
-            if val <= 0:
+            if val < 0:
                 raise SystemExit(
-                    "Config error: SZTU_MAX_STEPS must be a positive integer,"
-                    f" got: {max_steps_str!r}"
+                    "Config error: SZTU_MAX_STEPS must be a non-negative integer "
+                    f"(0 = unlimited), got: {max_steps_str!r}"
                 )
             config.agent.max_steps = val
         except ValueError:
             raise SystemExit(
                 f"Config error: SZTU_MAX_STEPS must be an integer, got: {max_steps_str!r}"
             )
+
+    # wrap-up / 结语宽限步 / stuck-loop 环境变量
+    wrap_up_str = os.environ.get("SZTU_WRAP_UP_ON_MAX_STEPS")
+    if wrap_up_str is not None:
+        config.agent.wrap_up_on_max_steps = wrap_up_str.lower() not in ("0", "false", "no")
+    grace_str = os.environ.get("SZTU_GRACE_STEP_ON_MAX_STEPS")
+    if grace_str is not None:
+        config.agent.grace_step_on_max_steps = grace_str.lower() not in ("0", "false", "no")
+    for _env, _attr in (
+        ("SZTU_STUCK_MAX_FAILURES", "stuck_max_failures"),
+        ("SZTU_STUCK_MAX_TOTAL", "stuck_max_total"),
+    ):
+        _str = os.environ.get(_env)
+        if _str is not None:
+            try:
+                val = int(_str)
+                if val < 0:
+                    raise SystemExit(
+                        f"Config error: {_env} must be a non-negative integer, got: {_str!r}"
+                    )
+                setattr(config.agent, _attr, val)
+            except ValueError:
+                raise SystemExit(
+                    f"Config error: {_env} must be an integer, got: {_str!r}"
+                )
 
     llm_provider = os.environ.get("SZTU_LLM_PROVIDER")
     if llm_provider is not None:
@@ -549,3 +713,59 @@ def _apply_env(config: SztuConfig) -> None:
                 "Config error: SZTU_COMPACT_TOOL_KEEP must be an integer, "
                 f"got: {compact_tool_keep!r}"
             )
+
+    # --- 上下文卸载环境变量 ---
+    offload_enabled = os.environ.get("SZTU_OFFLOAD_ENABLED")
+    if offload_enabled is not None:
+        config.offload.enabled = offload_enabled.lower() not in ("0", "false", "no")
+
+    offload_min_chars = os.environ.get("SZTU_OFFLOAD_MIN_CHARS")
+    if offload_min_chars is not None:
+        try:
+            offload_min_chars_val = int(offload_min_chars)
+            if offload_min_chars_val <= 0:
+                raise SystemExit(
+                    "Config error: SZTU_OFFLOAD_MIN_CHARS must be a positive integer, "
+                    f"got: {offload_min_chars!r}"
+                )
+            config.offload.min_chars = offload_min_chars_val
+        except ValueError:
+            raise SystemExit(
+                "Config error: SZTU_OFFLOAD_MIN_CHARS must be an integer, "
+                f"got: {offload_min_chars!r}"
+            )
+
+    offload_min_lines = os.environ.get("SZTU_OFFLOAD_MIN_LINES")
+    if offload_min_lines is not None:
+        try:
+            offload_min_lines_val = int(offload_min_lines)
+            if offload_min_lines_val <= 0:
+                raise SystemExit(
+                    "Config error: SZTU_OFFLOAD_MIN_LINES must be a positive integer, "
+                    f"got: {offload_min_lines!r}"
+                )
+            config.offload.min_lines = offload_min_lines_val
+        except ValueError:
+            raise SystemExit(
+                "Config error: SZTU_OFFLOAD_MIN_LINES must be an integer, "
+                f"got: {offload_min_lines!r}"
+            )
+
+    # --- 运行预算环境变量 ---
+    for _env, _attr in (
+        ("SZTU_BUDGET_MAX_TOKENS", "max_tokens"),
+        ("SZTU_BUDGET_MAX_WALL_CLOCK_S", "max_wall_clock_s"),
+    ):
+        _str = os.environ.get(_env)
+        if _str is not None:
+            try:
+                val = int(_str)
+                if val < 0:
+                    raise SystemExit(
+                        f"Config error: {_env} must be a non-negative integer, got: {_str!r}"
+                    )
+                setattr(config.budget, _attr, val)
+            except ValueError:
+                raise SystemExit(
+                    f"Config error: {_env} must be an integer, got: {_str!r}"
+                )

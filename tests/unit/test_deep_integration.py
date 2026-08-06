@@ -9,23 +9,14 @@
 """
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
 import pytest
 from pydantic import BaseModel
 
-from sztu_code.core.bus.events import (
-    DenialInterventionEvent,
-    StepFinishedEvent,
-    StepStartedEvent,
-)
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import LlmResponse, ToolCallBlock
 from sztu_code.core.loop import AgentLoop
 from sztu_code.core.permissions.denial_tracker import DenialTracker
-from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.permissions.policy import (
     PermissionDecision,
     ToolPolicy,
@@ -34,7 +25,6 @@ from sztu_code.core.permissions.policy import (
 )
 from sztu_code.core.tools.base import BaseTool, ToolResult
 from sztu_code.core.tools.registry import ToolRegistry
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Stub 工具
@@ -153,11 +143,17 @@ class TestStepLimit:
         ])
         registry = ToolRegistry()
         registry.register(_EchoTool())
-        loop = AgentLoop(provider, registry, EventBus())
+        # 关闭收尾回合与结语宽限步：本测试隔离验证 max_steps 语义，
+        # 避免收尾/结语各多一次调用干扰计数
+        loop = AgentLoop(
+            provider, registry, EventBus(),
+            wrap_up_on_max_steps=False,
+            grace_step_on_max_steps=False,
+        )
         ctx = _ctx(max_steps=1)
         await loop.run(ctx)
         assert ctx.step == 1
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         assert provider.call_count == 1
 
@@ -240,10 +236,10 @@ class TestStepLimit:
         provider = _MockProvider(
             [LlmResponse(stop_reason="tool_use", tool_calls=[tc])] * 10
         )
-        loop = AgentLoop(provider, ToolRegistry(), EventBus())
+        loop = AgentLoop(provider, ToolRegistry(), EventBus(), wrap_up_on_max_steps=False)
         ctx = _ctx(max_steps=3)
         await loop.run(ctx)
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         assert provider.call_count == 3
 
@@ -678,7 +674,7 @@ class TestStepLimitWithPermissions:
         ctx = _ctx(max_steps=3)
         await loop.run(ctx)
 
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         assert ctx.step == 3
         # 3 步全部被拒
@@ -698,11 +694,15 @@ class TestStepLimitWithPermissions:
         bus = EventBus()
 
         denial_tracker = DenialTracker(max_consecutive=2)
-        loop = AgentLoop(provider, registry, bus, denial_tracker=denial_tracker)
+        # 关闭收尾回合：本测试验证干预不额外消耗调用，排除收尾的一次调用
+        loop = AgentLoop(
+            provider, registry, bus,
+            denial_tracker=denial_tracker, wrap_up_on_max_steps=False,
+        )
         ctx = _ctx(max_steps=5)
         await loop.run(ctx)
 
-        assert ctx.status == "failed"
+        assert ctx.status == "interrupted"
         assert ctx.reason == "exceeded_max_steps"
         # call_count 应等于 max_steps（注入不额外消耗 API 调用）
         # 注入消息是直接 append 到 messages，不通过 LLM

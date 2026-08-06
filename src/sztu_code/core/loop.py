@@ -2,25 +2,43 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sztu_code.core.bus.events import StepFinishedEvent, StepStartedEvent
+from sztu_code.core.bus.events import (
+    StepFinishedEvent,
+    StepStartedEvent,
+    StuckLoopEvent,
+)
 from sztu_code.core.compact.budget import truncate_tool_results
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.base import LLMProvider
+from sztu_code.core.stuck_tracker import stuck_signature
 from sztu_code.core.tools.invocation import invoke_tool
 from sztu_code.core.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from sztu_code.core.compact.canvas import TaskCanvas
     from sztu_code.core.compact.compactor import Compactor
+    from sztu_code.core.compact.offload import OffloadManager
     from sztu_code.core.permissions.denial_tracker import DenialTracker
     from sztu_code.core.permissions.manager import PermissionManager
+    from sztu_code.core.stuck_tracker import StuckLoopTracker
     from sztu_code.core.subagent.registry import BackgroundTaskRegistry
 
 
 log = logging.getLogger(__name__)
+
+# 默认系统提示词，供主调用与收尾回合复用
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful AI assistant. "
+    "Use the available tools to complete the user's goal. "
+    "When the goal is fully achieved, respond with a final answer "
+    "and do not call any more tools."
+)
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -28,7 +46,7 @@ def _now() -> str:
 
 class AgentLoop:
     # 初始化循环所需依赖：LLM provider、工具注册表、事件总线、
-    # 以及可选的权限管理器、拒绝追踪器、压缩器和 session ID
+    # 以及可选的权限管理器、拒绝追踪器、压缩器、卸载管理器和 session ID
     def __init__(
         self,
         provider: LLMProvider,
@@ -43,6 +61,10 @@ class AgentLoop:
         tool_result_keep: int = 4_000,
         session_id: str = "",
         task_registry: BackgroundTaskRegistry | None = None,
+        offload_manager: OffloadManager | None = None,
+        wrap_up_on_max_steps: bool = True,
+        grace_step_on_max_steps: bool = True,
+        stuck_tracker: StuckLoopTracker | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
@@ -55,10 +77,29 @@ class AgentLoop:
         self._tool_result_keep = tool_result_keep
         self._session_id = session_id
         self._task_registry = task_registry
+        self._offload_manager = offload_manager
+        self._wrap_up_on_max_steps = wrap_up_on_max_steps
+        self._grace_step_on_max_steps = grace_step_on_max_steps
+        self._stuck_tracker = stuck_tracker
 
     # 驱动 plan→act→observe 循环直到上下文终止；CancelledError 向上传播
     async def run(self, context: ExecutionContext) -> None:
+        # Phase 2: 初始化任务画布（若未由外部注入）
+        from sztu_code.core.compact.canvas import TaskCanvas
+        if context.canvas is None:
+            context.canvas = TaskCanvas()
+        canvas: TaskCanvas = context.canvas
+
         while not context.is_done():
+            # 惰性记录 run 开始墙钟（runner/子 agent 都可能未设置）
+            if context.started_at <= 0.0:
+                context.started_at = time.monotonic()
+
+            # [budget] 墙钟上限预检：超时直接终止，不再发起 LLM 调用
+            if context.wall_clock_exceeded():
+                context.mark_interrupted("max_wall_clock_exceeded")
+                break
+
             context.step += 1
             await self._bus.publish(
                 StepStartedEvent(run_id=context.run_id, step=context.step, ts=_now())
@@ -89,6 +130,27 @@ class AgentLoop:
                 )
                 self._denial_tracker.reset_intervention()
 
+            # [intervene] 连续同签名失败达到阈值时注入卡死干预消息，强制 LLM 换策略
+            if self._stuck_tracker is not None and self._stuck_tracker.should_intervene():
+                msg = self._stuck_tracker.intervention_message()
+                context.messages.append({"role": "user", "content": msg})
+                snap = self._stuck_tracker.snapshot()
+                await self._bus.publish(
+                    StuckLoopEvent(
+                        run_id=context.run_id,
+                        signature=snap["worst_signature"],
+                        consecutive_count=snap["worst_count"],
+                        total_interventions=snap["interventions"],
+                        message=msg,
+                        ts=_now(),
+                    )
+                )
+                self._stuck_tracker.reset_intervention()
+                # 硬停：累计干预达到阈值直接终止
+                if self._stuck_tracker.hard_stop_reached():
+                    context.mark_failed("stuck_loop")
+                    break
+
             # [plan] call LLM — API errors terminate the run
             try:
                 response = await self._provider.chat(
@@ -102,13 +164,7 @@ class AgentLoop:
                     run_id=context.run_id,
                     step=context.step,
                     system=context.system_prompt(
-                        context.base_system_prompt
-                        or (
-                            "You are a helpful AI assistant. "
-                            "Use the available tools to complete the user's goal. "
-                            "When the goal is fully achieved, respond with a final answer "
-                            "and do not call any more tools."
-                        )
+                        context.base_system_prompt or _DEFAULT_SYSTEM_PROMPT
                     ),
                 )
             except asyncio.CancelledError:
@@ -120,6 +176,11 @@ class AgentLoop:
                 )
                 context.mark_failed("llm_error")
                 break
+
+            # [budget] 累计本步 LLM 用量
+            if response.usage is not None:
+                context.total_input_tokens += response.usage.input_tokens
+                context.total_output_tokens += response.usage.output_tokens
 
             # 在写入历史前补齐工具调用标题，确保回放与实时事件使用同一份参数
             for tool_call in response.tool_calls:
@@ -138,15 +199,47 @@ class AgentLoop:
 
             # [act] execute each requested tool; errors become tool results so loop continues
             added_estimate = 0
+            # 收集工具调用信息用于画布记录
+            canvas_tool_names: list[str] = []
+            canvas_summaries: list[str] = []
+            canvas_refs: list[str] = []
+            has_errors = False
             if response.stop_reason == "tool_use":
+                # Phase 2: 先创建 running 状态节点
+                if response.tool_calls:
+                    canvas.record_step(
+                        label=response.text.strip()[:80] if response.text else "",
+                        tool_names=[tc.name for tc in response.tool_calls],
+                        status="running",
+                    )
                 for tc in response.tool_calls:
+                    canvas_tool_names.append(tc.name)
                     result = await invoke_tool(
                         self._registry, tc, self._bus, context.run_id,
                         permission_manager=self._permission_manager,
                         session_id=self._session_id,
                     )
-                    added_estimate += max(1, len(str(result.content)) // 4)
-                    context.add_tool_result(tc.id, result.content, is_error=result.is_error)
+                    if result.is_error:
+                        has_errors = True
+                    # 上下文卸载：将超长工具结果写入外部 refs/*.md，上下文仅保留占位符
+                    # 参考 TencentDB Agent Memory Level 0-1 架构
+                    content = result.content
+                    if (
+                        self._offload_manager is not None
+                        and self._offload_manager.should_offload(tc.name, content)
+                    ):
+                        record = self._offload_manager.offload(
+                            tc.name, tc.id, content, context.run_id, result.is_error,
+                        )
+                        canvas_summaries.append(record.summary)
+                        canvas_refs.append(record.ref_path)
+                        content = self._offload_manager.placeholder(record)
+                    else:
+                        # 未卸载的工具结果：用内容首行作为摘要
+                        first_line = content.strip().split("\n")[0][:100] if content.strip() else ""
+                        canvas_summaries.append(first_line)
+                    added_estimate += max(1, len(content) // 4)
+                    context.add_tool_result(tc.id, content, is_error=result.is_error)
 
                     # [track] 追踪权限拒绝，触发熔断干预
                     if self._denial_tracker is not None:
@@ -154,6 +247,23 @@ class AgentLoop:
                             self._denial_tracker.record_denial(tc.name)
                         elif not result.is_error:
                             self._denial_tracker.record_success(tc.name)
+
+                    # [track] 追踪同签名失败，触发卡死干预/硬停
+                    if self._stuck_tracker is not None:
+                        if result.is_error:
+                            self._stuck_tracker.record_failure(stuck_signature(tc))
+                        else:
+                            self._stuck_tracker.record_success(stuck_signature(tc))
+
+                # Phase 2: 更新画布节点 — running → done/failed，补齐摘要和 refs
+                if canvas_tool_names:
+                    canvas.finalize_last(
+                        label=response.text.strip() if response.text else "",
+                        status="failed" if has_errors else "done",
+                        summary="; ".join(canvas_summaries[:3]),
+                        refs=canvas_refs,
+                    )
+
             elif response.stop_reason == "max_tokens" and response.tool_calls:
                 # Output token limit hit mid-tool-call; input is incomplete.
                 # Add synthetic error results so the conversation stays balanced.
@@ -174,7 +284,8 @@ class AgentLoop:
             # 避免中间 tool_use 步骤过早清空 pending 导致最终摘要丢失
             pending_summaries: list[str] = []
             if context.pending_background_run_ids and (
-                response.stop_reason == "end_turn" or context.step >= context.max_steps
+                response.stop_reason == "end_turn"
+                or (context.max_steps > 0 and context.step >= context.max_steps)
             ):
                 pending_summaries = await self._wait_for_background(context)
 
@@ -185,10 +296,39 @@ class AgentLoop:
                     base += "\n\n" + "\n".join(pending_summaries)
                 context.result = base
                 context.mark_success()
-            elif context.step >= context.max_steps:
-                if pending_summaries:
-                    context.result = "\n".join(pending_summaries)
-                context.mark_failed("exceeded_max_steps")
+            elif context.max_steps > 0 and context.step >= context.max_steps:
+                # 结语宽限步：最后一步工具全部成功时，追加一步无工具回合让模型正常收尾。
+                # 模型给出完成标记即记为 success；否则保留文本并按步数耗尽标记 interrupted
+                if (
+                    self._grace_step_on_max_steps
+                    and not context.token_budget_exhausted()
+                    and response.stop_reason == "tool_use"
+                    and not has_errors
+                ):
+                    concluded, conclusion_text = await self._conclude(
+                        context, pending_summaries
+                    )
+                    if concluded:
+                        context.result = conclusion_text
+                        context.mark_success()
+                    else:
+                        context.result = conclusion_text or context.result
+                        context.mark_interrupted("exceeded_max_steps")
+                else:
+                    # 收尾回合：步数到限且预算未耗尽时给一次总结，避免裸失败
+                    if self._wrap_up_on_max_steps and not context.token_budget_exhausted():
+                        summary = await self._wrap_up(context, pending_summaries)
+                        context.result = summary or (
+                            "\n".join(pending_summaries) if pending_summaries else ""
+                        )
+                    elif pending_summaries:
+                        context.result = "\n".join(pending_summaries)
+                    context.mark_interrupted("exceeded_max_steps")
+
+            # [budget] token 上限：run 仍需继续但累计已超限 → 直接终止（end_turn 成功优先）
+            if not context.is_done() and context.token_budget_exhausted():
+                context.mark_interrupted("max_tokens_exceeded")
+                break
 
             # 工具结果追加完毕（messages 末尾为 user）后检查压缩，仅在 run 继续时触发
             # 此时压缩结果 [user_summary, assistant_ack] 对下一次 LLM 调用是合法输入
@@ -207,11 +347,116 @@ class AgentLoop:
                         / response.usage.input_tokens
                     )
                 if trigger_pct >= self._compact_threshold:
-                    await self._compactor.compact(context, self._provider)
+                    # Phase 3a: 异步压缩 — 不阻塞 Agent 继续处理下一步
+                    self._compactor.compact_async(context, self._provider)
 
             await self._bus.publish(
                 StepFinishedEvent(run_id=context.run_id, step=context.step, ts=_now())
             )
+
+    # 收尾回合：max_steps 到达且预算未耗尽时，做一次无工具 LLM 调用，
+    # 让模型总结进度/状态/剩余工作，写入 context.result 后再标记失败
+    async def _wrap_up(
+        self, context: ExecutionContext, pending_summaries: list[str]
+    ) -> str:
+        instruction = (
+            "The agent run has reached its step limit and must stop now. "
+            "Provide a concise summary covering: (1) progress made so far, "
+            "(2) the current system/file state, and (3) remaining work, "
+            "so the task can be resumed or handed off later. Do not call any tools."
+        )
+        if pending_summaries:
+            instruction += "\n\nBackground subagent results:\n" + "\n".join(pending_summaries)
+        context.messages.append({"role": "user", "content": instruction})
+        try:
+            response = await self._provider.chat(
+                messages=truncate_tool_results(
+                    context.messages,
+                    limit=self._tool_result_limit,
+                    keep=self._tool_result_keep,
+                ),
+                tool_schemas=[],
+                bus=self._bus,
+                run_id=context.run_id,
+                step=context.step,
+                system=context.system_prompt(
+                    context.base_system_prompt or _DEFAULT_SYSTEM_PROMPT
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "wrap-up LLM call failed run_id=%s step=%d",
+                context.run_id, context.step,
+            )
+            return ""
+        if response.usage is not None:
+            context.total_input_tokens += response.usage.input_tokens
+            context.total_output_tokens += response.usage.output_tokens
+        summary = (response.text or "").strip()
+        # 保持消息配对：无论有无文本都追加 assistant 消息
+        context.messages.append(
+            {"role": "assistant", "content": [{"type": "text", "text": summary}]}
+        )
+        return summary
+
+    # 结语宽限步：max_steps 边界且最后一步工具成功时，做一次无工具 LLM 调用，
+    # 让模型给出最终答复；返回 (是否明确完成, 最终文本)
+    async def _conclude(
+        self, context: ExecutionContext, pending_summaries: list[str]
+    ) -> tuple[bool, str]:
+        instruction = (
+            "The agent run has reached its step limit and must stop now. "
+            "Give your final answer. If the goal is fully achieved, start your "
+            "response with the exact marker [COMPLETE] and state the result. "
+            "If there is still work left, start with the exact marker [INCOMPLETE] "
+            "and list what remains. Do not call any tools."
+        )
+        if pending_summaries:
+            instruction += "\n\nBackground subagent results:\n" + "\n".join(pending_summaries)
+        context.messages.append({"role": "user", "content": instruction})
+        try:
+            response = await self._provider.chat(
+                messages=truncate_tool_results(
+                    context.messages,
+                    limit=self._tool_result_limit,
+                    keep=self._tool_result_keep,
+                ),
+                tool_schemas=[],
+                bus=self._bus,
+                run_id=context.run_id,
+                step=context.step,
+                system=context.system_prompt(
+                    context.base_system_prompt or _DEFAULT_SYSTEM_PROMPT
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "conclude LLM call failed run_id=%s step=%d",
+                context.run_id, context.step,
+            )
+            return (False, "")
+        if response.usage is not None:
+            context.total_input_tokens += response.usage.input_tokens
+            context.total_output_tokens += response.usage.output_tokens
+        text = (response.text or "").strip()
+        # 保持消息配对：无论有无文本都追加 assistant 消息
+        context.messages.append(
+            {"role": "assistant", "content": [{"type": "text", "text": text}]}
+        )
+        if response.stop_reason != "end_turn":
+            return (False, text)
+        lowered = text.lower()
+        if lowered.startswith("[incomplete]"):
+            return (False, text)
+        if lowered.startswith("[complete]"):
+            stripped = text[len("[COMPLETE]"):].strip()
+            return (True, stripped if stripped else text)
+        # 未按标记作答但正常 end_turn：与普通回合一致，信任为完成
+        return (True, text)
 
     # 等待本 run 派生的后台 subagent 全部结束，返回每条的结果摘要
     async def _wait_for_background(

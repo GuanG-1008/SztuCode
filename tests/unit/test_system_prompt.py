@@ -90,3 +90,12 @@ def test_git_snapshot_renders(tmp_path: Path) -> None:
     assert "Git branch: main" in snapshot
     assert "Recent commits" in snapshot
     assert "Git diff snapshot" in snapshot
+
+
+# 功能：验证系统提示包含工作协议段（禁止安装/先验证后停）
+# 设计：检查静态基座是否包含 Work protocol 段及关键约束短语
+def test_static_base_contains_work_protocol() -> None:
+    base = build_static_base()
+    assert "# Work protocol" in base
+    assert "install/update commands are blocked" in base
+    assert "verify" in base

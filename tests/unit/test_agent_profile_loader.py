@@ -56,6 +56,7 @@ allowed_tools = ["read_file", "bash"]
 model = "test-model-id"
 permission_mode = "plan"
 skill = "orchestrate"
+max_steps = 7
 """
     p = tmp_path / "tester.toml"
     p.write_text(content, encoding="utf-8")
@@ -69,6 +70,17 @@ skill = "orchestrate"
     assert profile.model == "test-model-id"
     assert profile.permission_mode == "plan"
     assert profile.skill == "orchestrate"
+    assert profile.max_steps == 7
+
+
+# 功能：内建角色（coder/explore/plan）配置了角色级步数上限
+# 设计：参数化断言三个新角色的 max_steps 默认值
+@pytest.mark.parametrize("role,expected", [("coder", 40), ("explore", 10), ("plan", 15)])
+def test_builtin_role_max_steps(role: str, expected: int) -> None:
+    loader = AgentProfileLoader()
+    profile = loader.load(role)
+    assert profile is not None
+    assert profile.max_steps == expected
 
 
 # 功能：项目本地角色配置应覆盖内建同名配置

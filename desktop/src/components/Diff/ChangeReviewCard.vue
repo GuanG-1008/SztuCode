@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { FileText, RotateCcw, Search } from "@lucide/vue";
+import { FileDiff, RotateCcw, Search } from "@lucide/vue";
 import { listChanges, revertChanges, type ChangeSummary } from "../../services/sztu-runtime";
 
 const props = defineProps<{ workspaceId: string; runId: string; paths: string[] }>();
@@ -50,8 +50,8 @@ function openReview() {
   <section class="change-review-card">
     <header class="change-review-card__head">
       <div class="change-review-card__title">
-        <span class="change-review-card__icon"><FileText :size="16" /></span>
-        <b>已编辑 {{ changes.length }} 个文件</b>
+        <span class="change-review-card__icon"><FileDiff :size="16" /></span>
+        <b>变更证据 · {{ changes.length }} 个文件</b>
         <span v-if="loading" class="change-review-card__loading">加载中…</span>
         <span v-else class="change-review-card__totals">
           <em class="add">+{{ totalAdd }}</em>
@@ -60,10 +60,10 @@ function openReview() {
       </div>
       <div class="change-review-card__actions">
         <button type="button" class="change-review-card__revert" :disabled="reverting || !changes.length" @click="revertAll">
-          <RotateCcw :size="13" />撤销
+          <RotateCcw :size="13" />回滚
         </button>
         <button type="button" class="change-review-card__review" :disabled="!changes.length" @click="openReview">
-          <Search :size="13" />审核
+          <Search :size="13" />查看 Diff
         </button>
       </div>
     </header>

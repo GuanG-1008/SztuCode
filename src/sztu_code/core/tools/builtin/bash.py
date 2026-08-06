@@ -41,6 +41,25 @@ _DANGEROUS_PATH_PATTERNS: list[str] = [
 ]
 _DANGEROUS_RE: list[re.Pattern[str]] = [re.compile(p) for p in _DANGEROUS_PATH_PATTERNS]
 
+# 环境安装命令——直接拦截：环境已就绪，安装必然失败且烧掉大量步骤
+_BLOCKED_INSTALL_RE = re.compile(
+    r"(^|;|&&|\|\|)\s*(?:"
+    r"python(\d|3)?\s+-m\s+pip\s+install|"
+    r"pip(\d|3)?\s+install|"
+    r"uv\s+pip\s+install|"
+    r"pipenv\s+install|"
+    r"poetry\s+install|"
+    r"npm\s+(?:install|i|add)\b|"
+    r"yarn\s+(?:install|add)\b|"
+    r"pnpm\s+(?:install|add)\b|"
+    r"apt(-get)?\s+(?:install|update)|"
+    r"brew\s+install|"
+    r"conda\s+install|"
+    r"python(\d|3)?\s+-m\s+ensurepip|"
+    r"ensurepip"
+    r")(?=\s|$)"
+)
+
 
 def _extract_cmd_name(command: str) -> str:
     """提取命令的第一个单词（去除路径前缀和引号）"""
@@ -61,6 +80,23 @@ def _extract_cmd_name(command: str) -> str:
 def _has_dangerous_paths(command: str) -> bool:
     """检测命令是否包含危险路径模式"""
     return any(pat.search(command) for pat in _DANGEROUS_RE)
+
+
+# 预处理 agent 常见的 Windows 风格命令，让其在 git-bash 下可用
+def _preprocess_command(command: str) -> str:
+    # cmd 风格 `cd /d X` → `cd X`（/d 是 cmd 切换盘符的标志，bash 不认）
+    cmd = re.sub(r"\bcd\s+/d\b", "cd", command)
+    # 前导 `dir` → `ls`（git-bash 下无 dir 命令）
+    cmd = re.sub(r"^\s*dir(?=\s|$)", "ls", cmd)
+    # 含 Windows 盘符路径（C:\a\b 或 C:/a/b）时转成 git-bash 风格 /c/a/b，并把反斜杠转正斜杠
+    if re.search(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]", cmd):
+        cmd = re.sub(
+            r"(?<![A-Za-z0-9])([A-Za-z]):([\\/])",
+            lambda m: f"/{m.group(1).lower()}/",
+            cmd,
+        )
+        cmd = cmd.replace("\\", "/")
+    return cmd
 
 
 class BashTool(BaseTool):
@@ -95,8 +131,20 @@ class BashTool(BaseTool):
     # 在子进程中执行 shell 命令，合并 stdout/stderr，超时或非零退出码时返回错误
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         p = BashParams.model_validate(params)
-        command = p.command
+        command = _preprocess_command(p.command)
         timeout = p.timeout
+
+        # 安装/更新依赖命令直接拦截，不执行：环境已就绪，安装必然失败并浪费步骤
+        if _BLOCKED_INSTALL_RE.search(command):
+            return ToolResult(
+                content=(
+                    "[blocked] Installing/updating packages is not allowed in this "
+                    "environment — dependencies are already provisioned. Do not run "
+                    "install/update commands; use the existing packages directly."
+                ),
+                is_error=True,
+                error_type="runtime_error",
+            )
 
         try:
             proc = await asyncio.create_subprocess_shell(

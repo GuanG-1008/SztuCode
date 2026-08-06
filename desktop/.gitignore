@@ -3,3 +3,10 @@ dist/
 src-tauri/target/
 test-results/
 playwright-report/
+.mypy_cache/
+.cache/
+coverage/
+*.log
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

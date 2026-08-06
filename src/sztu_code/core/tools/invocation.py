@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 _DEFAULT_TIMEOUT: float = 120.0
 _MAX_RETRIES: int = 2
 _RETRY_BASE_S: float = 2.0  # backoff base; tests can monkeypatch to 0
-_RETRYABLE: frozenset[str] = frozenset({"runtime_error", "rate_limited"})
+# 可重试错误：瞬时失败（超时/限流/偶发运行时错误）值得再试，其余直接失败
+_RETRYABLE: frozenset[str] = frozenset({"runtime_error", "rate_limited", "timeout"})
 
 
 def _now() -> str:
@@ -220,10 +221,10 @@ async def invoke_tool(
             error_class = "rate_limited"
             error_message = str(exc)
         except TimeoutError:
-            return await _fail(
-                bus, run_id, tool_call,
-                "timeout", f"tool timed out after {timeout}s", elapsed(),
-                attempt=attempt,
+            error_class = "timeout"
+            error_message = (
+                f"tool timed out after {timeout}s; the operation may still be running. "
+                "Retry the call, increase the timeout, or break it into smaller steps."
             )
         except Exception as exc:
             error_class = "runtime_error"

@@ -70,7 +70,9 @@ def test_thread_message_roundtrip_with_tool_blocks(tmp_path: Path) -> None:
     )
 
     messages = store.read_messages("sess-1")
-    assert messages == [
+    # read_messages 现在会透出 ts 时间戳，比较时忽略它
+    stripped = [{k: v for k, v in m.items() if k != "ts"} for m in messages]
+    assert stripped == [
         {"role": "user", "content": "read file"},
         {
             "role": "assistant",
@@ -83,6 +85,7 @@ def test_thread_message_roundtrip_with_tool_blocks(tmp_path: Path) -> None:
             "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
         },
     ]
+    assert all(m["ts"] for m in messages)  # 每条消息都带时间戳
 
 
 # 功能：验证 thread 尾部孤儿 tool_use 会被裁掉
@@ -96,7 +99,11 @@ def test_read_messages_trims_orphan_tool_use_tail(tmp_path: Path) -> None:
         [{"type": "tool_use", "id": "orphan", "name": "read_file", "input": {}}],
         run_id="run-1",
     )
-    assert store.read_messages("sess-1") == [{"role": "user", "content": "hello"}]
+    messages = store.read_messages("sess-1")
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "hello"
+    assert messages[0]["ts"]
 
 
 # 功能：验证 notes.md 不存在时读为空，追加笔记后能读到内容和 run_id

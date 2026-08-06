@@ -1,0 +1,82 @@
+<script setup lang="ts">
+import { Check, ChevronDown, LoaderCircle, Settings2 } from "@lucide/vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  getProviderStatus,
+  listModelProfiles,
+  selectModelProfile,
+  type ModelProfile,
+  type ProviderStatus,
+  type RuntimeSettings,
+} from "../../services/sztu-runtime";
+
+const props = defineProps<{ settings: RuntimeSettings | null; status: ProviderStatus | null }>();
+const emit = defineEmits<{
+  updated: [settings: RuntimeSettings, status: ProviderStatus | null];
+  manage: [];
+}>();
+
+const root = ref<HTMLElement | null>(null);
+const open = ref(false);
+const loading = ref(false);
+const selecting = ref("");
+const models = ref<ModelProfile[]>([]);
+const error = ref("");
+const activeModelName = computed(() =>
+  models.value.find((item) => item.is_current)?.name || props.settings?.model || "配置模型"
+);
+
+async function loadModels() {
+  loading.value = true;
+  error.value = "";
+  try { models.value = await listModelProfiles(); }
+  catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  finally { loading.value = false; }
+}
+
+async function toggle() {
+  open.value = !open.value;
+  if (open.value) await loadModels();
+}
+
+async function choose(item: ModelProfile) {
+  if (item.is_current) { open.value = false; return; }
+  selecting.value = item.id;
+  error.value = "";
+  try {
+    const result = await selectModelProfile(item.id);
+    models.value = result.models;
+    emit("updated", result.settings, await getProviderStatus());
+    open.value = false;
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  finally { selecting.value = ""; }
+}
+
+function openManager() { open.value = false; emit("manage"); }
+function closeOnOutsideClick(event: PointerEvent) { if (open.value && !root.value?.contains(event.target as Node)) open.value = false; }
+function closeOnEscape(event: KeyboardEvent) { if (event.key === "Escape") open.value = false; }
+
+watch(() => props.settings?.model, () => { if (open.value) void loadModels(); });
+onMounted(() => { void loadModels(); document.addEventListener("pointerdown", closeOnOutsideClick); document.addEventListener("keydown", closeOnEscape); });
+onBeforeUnmount(() => { document.removeEventListener("pointerdown", closeOnOutsideClick); document.removeEventListener("keydown", closeOnEscape); });
+</script>
+
+<template>
+  <div ref="root" class="model-config-control">
+    <button type="button" class="model-config-trigger" aria-haspopup="menu" :aria-expanded="open" @click.stop="toggle">
+      <i :class="{ online: status?.ready_for_next_run }" /><span>{{ activeModelName }}</span><ChevronDown :size="13" />
+    </button>
+    <section v-if="open" class="model-picker-popover" role="menu" aria-label="选择模型" @click.stop>
+      <header><span>模型</span><small>{{ models.length }} 个配置</small></header>
+      <div class="model-picker-list">
+        <button v-for="item in models" :key="item.id" type="button" role="menuitemradio" :aria-checked="item.is_current" @click="choose(item)">
+          <span class="model-name-cell"><b>{{ item.name }}</b><small>{{ item.vendor }}</small></span>
+          <LoaderCircle v-if="selecting === item.id" class="spin" :size="14" /><Check v-else-if="item.is_current" :size="14" />
+        </button>
+        <p v-if="loading">正在加载模型</p><p v-else-if="!models.length">暂无模型配置</p>
+      </div>
+      <p v-if="error" class="model-picker-error">{{ error }}</p>
+      <footer><button type="button" role="menuitem" @click="openManager"><Settings2 :size="15" />添加和管理模型</button></footer>
+    </section>
+  </div>
+</template>

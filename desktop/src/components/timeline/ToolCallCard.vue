@@ -21,8 +21,8 @@ const isFileTool = computed(() => /read|file|dir|search/i.test(props.call.name))
       <ChevronDown :size="14" />
     </button>
     <div v-if="open" class="tool-call-event__details">
-      <b>Request</b><pre>{{ request }}</pre>
-      <template v-if="call.output || call.error"><b>Response</b><pre>{{ call.error || call.output }}</pre></template>
+      <b>输入</b><pre>{{ request }}</pre>
+      <template v-if="call.output || call.error"><b>{{ call.error ? '错误' : '输出' }}</b><pre>{{ call.error || call.output }}</pre></template>
     </div>
   </section>
 </template>

@@ -37,6 +37,17 @@ OPENAI_API_KEY=<your-api-key>
 OPENAI_BASE_URL=https://api.example.com
 ```
 
+opencode Zen 免费模型（**免 key**，OpenAI 兼容端点 `https://opencode.ai/zen/v1`）：
+
+```dotenv
+SZTU_LLM_PROVIDER=openai
+SZTU_LLM_DEFAULT_MODEL=deepseek-v4-flash-free
+OPENAI_BASE_URL=https://opencode.ai/zen/v1
+# 免 key：不要设置 OPENAI_API_KEY
+```
+
+可选免费模型（实测可用）：`deepseek-v4-flash-free`、`ling-3.0-flash-free`、`nemotron-3-ultra-free`、`north-mini-code-free`、`longcat-2.0-free`、`mimo-v2.5-free`、`laguna-s-2.1-free`。端点直接可达（无需代理），支持流式与工具调用；注意有速率限制，适合个人日常使用。
+
 SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必须与实际服务商一致。
 
 ## 环境变量
@@ -75,7 +86,15 @@ file = "~/.sztu/logs/core.log"
 format = "text"
 
 [agent]
-max_steps = 20
+max_steps = 0          # 0 = 不限步数（预算驱动）；到达上限时标 interrupted 而非 failed，可续跑
+wrap_up_on_max_steps = true
+grace_step_on_max_steps = true
+stuck_max_failures = 3
+stuck_max_total = 0
+
+[budget]
+max_tokens = 0
+max_wall_clock_s = 0
 
 [llm]
 provider = "anthropic"

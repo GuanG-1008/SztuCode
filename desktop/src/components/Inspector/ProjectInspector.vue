@@ -1,28 +1,47 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  ArrowDownAZ, Braces, Check, ChevronDown, ChevronLeft, ChevronRight, File, FileCode2,
-  FileDiff, FileText, ListFilter, RefreshCw, RotateCcw, Search, X,
+  BookOpen, Check, ChevronDown, Circle, ExternalLink, FileCode2, FileText, Globe2,
+  ListChecks, LoaderCircle, Maximize2, Minimize2, PackageOpen, PanelRightClose,
+  Plus, RefreshCw, RotateCw, Send, SquareTerminal, X,
 } from "@lucide/vue";
 import {
-  changeDiff, listChanges, readFile, revertChanges, searchFiles, workspaceTree,
-  type ChangeSummary, type FileSearchMatch, type WorkspaceNode,
+  changeDiff, listChanges, readFile,
+  type ChangeSummary,
 } from "../../services/sztu-runtime";
+import BrowserWebview from "./BrowserWebview.vue";
 import CodePreview from "./CodePreview.vue";
+import type { TimelineStep } from "../timeline/types";
 
-const props = defineProps<{ workspaceId: string; runId?: string | null }>();
-type FlatNode = WorkspaceNode & { depth: number };
-type SortMode = "name" | "type";
-type InspectorView = "files" | "search" | "changes";
+const SandboxTerminal = defineAsyncComponent(() => import("./SandboxTerminal.vue"));
 
-const view = ref<InspectorView>("files");
-const nodes = ref<WorkspaceNode[]>([]);
-const matches = ref<FileSearchMatch[]>([]);
+const props = defineProps<{
+  workspaceId: string;
+  runId?: string | null;
+  steps?: TimelineStep[];
+  attachments?: string[];
+  workspaceName?: string;
+  workspacePath?: string;
+  obscured?: boolean;
+}>();
+
+const emit = defineEmits<{ close: [] }>();
+
+type SectionKey = "todo" | "artifacts" | "references";
+type BrowserTab = { id: number; label: string; input: string; url: string; frameKey: number; loading: boolean };
+type ActiveTab = "summary" | `sandbox-${number}` | `browser-${number}` | "";
+type WorkspaceTab = { key: ActiveTab; kind: "summary" | "browser" | "sandbox" };
+type Artifact = { path: string; source: "change" | "attachment"; change?: ChangeSummary; previewPath?: string };
+
+const activeTab = ref<ActiveTab>("summary");
+const browserSequence = ref(0);
+const sandboxSequence = ref(0);
+const browserTabs = ref<BrowserTab[]>([]);
+const workspaceTabs = ref<WorkspaceTab[]>([{ key: "summary", kind: "summary" }]);
+const openSections = ref<Set<SectionKey>>(new Set(["todo", "artifacts", "references"]));
 const changes = ref<ChangeSummary[]>([]);
-const filterQuery = ref("");
-const searchQuery = ref("");
-const sortMode = ref<SortMode>("type");
-const collapsedPaths = ref(new Set<string>());
+const loadingArtifacts = ref(false);
+const notice = ref("");
 const selectedPath = ref("");
 const preview = ref("");
 const previewEncoding = ref("UTF-8");
@@ -31,277 +50,344 @@ const previewTruncated = ref(false);
 const previewMediaBase64 = ref<string | null>(null);
 const previewMimeType = ref<string | null>(null);
 const previewLanguage = ref("");
-const loading = ref(false);
-const notice = ref("");
-const menuOpen = ref(false);
-const treeInitialized = ref(false);
-const directoryLoading = ref(new Set<string>());
-const toolbar = ref<HTMLElement | null>(null);
+const expandedPanel = ref(false);
+const toolMenuOpen = ref(false);
+const toolMenuRoot = ref<HTMLElement | null>(null);
 
-const fileNameCollator = new Intl.Collator("zh-CN", {
-  sensitivity: "base",
-  numeric: true,
+const plan = computed(() => [...(props.steps ?? [])].reverse().find((step) => step.plan?.length)?.plan ?? []);
+const completed = computed(() => plan.value.filter((item) => item.status === "completed").length);
+const progress = computed(() => plan.value.length ? Math.round((completed.value / plan.value.length) * 100) : 0);
+const selectedName = computed(() => selectedPath.value.split(/[\\/]/).filter(Boolean).pop() ?? selectedPath.value);
+const usedSkills = computed(() => {
+  const skills = (props.steps ?? []).flatMap((step) => step.skills ?? []);
+  return [...new Map(skills.map((skill) => [skill.name, skill])).values()];
 });
 
-function sortNodes(items: WorkspaceNode[]): WorkspaceNode[] {
-  return [...items].sort((left, right) => {
-    if (sortMode.value === "type" && left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
-    return fileNameCollator.compare(left.name, right.name);
-  });
-}
-
-function matchesFilter(node: WorkspaceNode): boolean {
-  const query = filterQuery.value.trim().toLowerCase();
-  return !query || node.name.toLowerCase().includes(query) || Boolean(node.children?.some(matchesFilter));
-}
-
-function flatten(items: WorkspaceNode[], depth = 0): FlatNode[] {
-  return sortNodes(items).flatMap((node) => {
-    const result: FlatNode[] = [{ ...node, depth }];
-    const expandedForFilter = Boolean(filterQuery.value.trim());
-    if (node.children?.length && (expandedForFilter || !collapsedPaths.value.has(node.path))) {
-      result.push(...flatten(node.children.filter(matchesFilter), depth + 1));
-    }
-    return result;
-  });
-}
-
-function collectDirectoryPaths(items: WorkspaceNode[]): string[] {
-  return items.flatMap((node) => node.kind === "directory"
-    ? [node.path, ...collectDirectoryPaths(node.children ?? [])]
-    : []);
-}
-
-function collectInitiallyCollapsedPaths(items: WorkspaceNode[], depth = 0): string[] {
-  return items.flatMap((node) => node.kind === "directory"
-    ? [(depth > 0 ? node.path : ""), ...collectInitiallyCollapsedPaths(node.children ?? [], depth + 1)].filter(Boolean)
-    : []);
-}
-
-const flatNodes = computed(() => flatten(nodes.value.filter(matchesFilter)));
-const selectedName = computed(() => selectedPath.value.split(/[\\/]/).filter(Boolean).pop() ?? selectedPath.value);
-
-function replaceDirectoryChildren(items: WorkspaceNode[], path: string, children: WorkspaceNode[]): WorkspaceNode[] {
-  return items.map((node) => {
-    if (node.path === path) return { ...node, children };
-    if (!node.children) return node;
-    return { ...node, children: replaceDirectoryChildren(node.children, path, children) };
-  });
-}
-
-async function toggleDirectory(node: WorkspaceNode) {
-  if (node.children === undefined) {
-    directoryLoading.value = new Set(directoryLoading.value).add(node.path);
-    notice.value = "";
-    try {
-      const children = await workspaceTree(props.workspaceId, node.path);
-      nodes.value = replaceDirectoryChildren(nodes.value, node.path, children);
-      const next = new Set(collapsedPaths.value);
-      next.delete(node.path);
-      collapsedPaths.value = next;
-    } catch (error) {
-      notice.value = error instanceof Error ? error.message : String(error);
-    } finally {
-      const nextLoading = new Set(directoryLoading.value);
-      nextLoading.delete(node.path);
-      directoryLoading.value = nextLoading;
-    }
-    return;
+const artifacts = computed<Artifact[]>(() => {
+  const items: Artifact[] = changes.value.map((change) => ({
+    path: change.path,
+    previewPath: change.path,
+    source: "change",
+    change,
+  }));
+  for (const attachment of props.attachments ?? []) {
+    const normalized = attachment.replace(/\\/g, "/");
+    const workspace = props.workspacePath?.replace(/\\/g, "/").replace(/\/$/, "");
+    const previewPath = workspace && normalized.toLowerCase().startsWith(`${workspace.toLowerCase()}/`)
+      ? normalized.slice(workspace.length + 1)
+      : /^[a-z]:\//i.test(normalized) ? undefined : normalized;
+    items.push({ path: attachment, previewPath, source: "attachment" });
   }
-  const next = new Set(collapsedPaths.value);
-  if (next.has(node.path)) next.delete(node.path);
-  else next.add(node.path);
-  collapsedPaths.value = next;
+  return [...new Map(items.map((item) => [item.path.toLowerCase(), item])).values()];
+});
+
+const currentBrowser = computed(() => {
+  if (!activeTab.value.startsWith("browser-")) return null;
+  const id = Number(activeTab.value.slice(8));
+  return browserTabs.value.find((tab) => tab.id === id) ?? null;
+});
+const sandboxTabs = computed(() => workspaceTabs.value.filter((tab) => tab.kind === "sandbox"));
+
+function basename(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
-function isCollapsed(node: WorkspaceNode) { return node.children === undefined || collapsedPaths.value.has(node.path); }
-function collapseAll() { collapsedPaths.value = new Set(collectDirectoryPaths(nodes.value)); menuOpen.value = false; }
-async function expandAll() {
-  menuOpen.value = false;
-  loading.value = true;
+function toggleSection(section: SectionKey) {
+  const next = new Set(openSections.value);
+  if (next.has(section)) next.delete(section);
+  else next.add(section);
+  openSections.value = next;
+}
+
+function activateBrowser(id: number) {
+  activeTab.value = `browser-${id}`;
+  selectedPath.value = "";
+}
+
+function createBrowserTab() {
+  const id = ++browserSequence.value;
+  const key = `browser-${id}` as const;
+  browserTabs.value.push({ id, label: "新标签页", input: "", url: "", frameKey: 0, loading: false });
+  workspaceTabs.value.push({ key, kind: "browser" });
+  activateBrowser(id);
+  toolMenuOpen.value = false;
+}
+
+function closeWorkspaceTab(key: ActiveTab) {
+  if (!key) return;
+  const index = workspaceTabs.value.findIndex((tab) => tab.key === key);
+  if (key.startsWith("browser-")) {
+    const id = Number(key.slice(8));
+    browserTabs.value = browserTabs.value.filter((tab) => tab.id !== id);
+  }
+  workspaceTabs.value = workspaceTabs.value.filter((tab) => tab.key !== key);
+  if (activeTab.value !== key) return;
+  const fallback = workspaceTabs.value[Math.min(index, workspaceTabs.value.length - 1)] ?? workspaceTabs.value[0];
+  activeTab.value = fallback?.key ?? "";
+  selectedPath.value = "";
+}
+
+function browserForKey(key: ActiveTab) {
+  if (!key.startsWith("browser-")) return null;
+  return browserTabs.value.find((tab) => tab.id === Number(key.slice(8))) ?? null;
+}
+
+function openSummary() {
+  if (!workspaceTabs.value.some((tab) => tab.kind === "summary")) workspaceTabs.value.push({ key: "summary", kind: "summary" });
+  activeTab.value = "summary";
+  selectedPath.value = "";
+  toolMenuOpen.value = false;
+}
+
+function openBrowser() {
+  const tab = browserTabs.value[0];
+  if (tab) {
+    activateBrowser(tab.id);
+    toolMenuOpen.value = false;
+  } else createBrowserTab();
+}
+
+function openTerminal() {
+  const id = ++sandboxSequence.value;
+  const key = `sandbox-${id}` as const;
+  workspaceTabs.value.push({ key, kind: "sandbox" });
+  activeTab.value = key;
+  selectedPath.value = "";
+  toolMenuOpen.value = false;
+}
+
+function sandboxLabel(key: ActiveTab) {
+  if (!key.startsWith("sandbox-")) return "沙盒";
+  const id = Number(key.slice(8));
+  return id > 1 ? `沙盒 ${id}` : "沙盒";
+}
+
+function normalizedUrl(value: string) {
+  const input = value.trim();
+  if (!input) return "";
+  return /^[a-z][a-z\d+.-]*:\/\//i.test(input) ? input : `https://${input}`;
+}
+
+function navigateBrowser(tab: BrowserTab) {
+  const url = normalizedUrl(tab.input);
+  if (!url) return;
   try {
-    nodes.value = await workspaceTree(props.workspaceId, "", 3);
-    collapsedPaths.value = new Set();
-  } finally {
-    loading.value = false;
+    const parsed = new URL(url);
+    tab.url = parsed.toString();
+    tab.input = tab.url;
+    tab.label = parsed.hostname.replace(/^www\./, "") || "新标签页";
+    tab.loading = true;
+    tab.frameKey += 1;
+  } catch {
+    notice.value = "请输入有效的网址";
   }
 }
-function setSort(mode: SortMode) { sortMode.value = mode; menuOpen.value = false; }
-function openView(next: InspectorView) { view.value = next; menuOpen.value = false; }
 
-function fileKind(name: string) {
-  const extension = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["ts", "tsx", "js", "jsx", "vue", "py", "rs", "go", "java", "c", "cpp", "h", "sh", "ps1"].includes(extension)) return "code";
-  if (["json", "toml", "yaml", "yml", "env", "lock"].includes(extension) || name.startsWith(".")) return "config";
-  if (["md", "txt", "rst", "pdf"].includes(extension)) return "document";
-  return "file";
+function reloadBrowser(tab: BrowserTab) {
+  if (!tab.url) return;
+  tab.loading = true;
+  tab.frameKey += 1;
 }
 
-async function refresh() {
-  loading.value = true;
+function browserLoadError(tab: BrowserTab, message: string) {
+  tab.loading = false;
+  notice.value = `网页加载失败：${message}`;
+}
+
+async function refreshArtifacts() {
+  loadingArtifacts.value = true;
   notice.value = "";
   try {
-    const [nextNodes, nextChanges] = await Promise.all([workspaceTree(props.workspaceId), listChanges(props.workspaceId, props.runId)]);
-    nodes.value = nextNodes;
-    changes.value = nextChanges;
-    if (!treeInitialized.value) {
-      collapsedPaths.value = new Set(collectInitiallyCollapsedPaths(nextNodes));
-      treeInitialized.value = true;
-    }
+    changes.value = await listChanges(props.workspaceId, props.runId);
   } catch (error) {
     notice.value = error instanceof Error ? error.message : String(error);
   } finally {
-    loading.value = false;
+    loadingArtifacts.value = false;
   }
 }
 
-async function selectFile(path: string) {
-  selectedPath.value = path;
+async function openArtifact(artifact: Artifact) {
+  if (!artifact.previewPath) {
+    notice.value = "该附件不在当前项目内，暂不支持直接预览";
+    return;
+  }
+  selectedPath.value = artifact.path;
   preview.value = "";
-  notice.value = "";
-  previewLanguage.value = "";
-  previewBinary.value = false;
-  previewTruncated.value = false;
-  previewMediaBase64.value = null;
-  previewMimeType.value = null;
-  try {
-    const result = await readFile(props.workspaceId, path);
-    preview.value = result.content;
-    previewEncoding.value = result.encoding;
-    previewBinary.value = result.binary;
-    previewTruncated.value = result.truncated;
-    previewMediaBase64.value = result.media_base64 ?? null;
-    previewMimeType.value = result.mime_type ?? null;
-  }
-  catch (error) { notice.value = error instanceof Error ? error.message : String(error); }
-}
-
-async function search() {
-  if (!searchQuery.value.trim()) { matches.value = []; return; }
-  loading.value = true;
-  try { matches.value = await searchFiles(props.workspaceId, searchQuery.value.trim()); }
-  finally { loading.value = false; }
-}
-
-async function showDiff(change: ChangeSummary) {
-  selectedPath.value = change.path;
-  previewLanguage.value = "diff";
+  previewLanguage.value = artifact.change ? "diff" : "";
   previewEncoding.value = "UTF-8";
   previewBinary.value = false;
   previewTruncated.value = false;
   previewMediaBase64.value = null;
   previewMimeType.value = null;
-  preview.value = await changeDiff(props.workspaceId, change.path);
+  notice.value = "";
+  try {
+    if (artifact.change) {
+      preview.value = await changeDiff(props.workspaceId, artifact.previewPath);
+    } else {
+      const result = await readFile(props.workspaceId, artifact.previewPath);
+      preview.value = result.content;
+      previewEncoding.value = result.encoding;
+      previewBinary.value = result.binary;
+      previewTruncated.value = result.truncated;
+      previewMediaBase64.value = result.media_base64 ?? null;
+      previewMimeType.value = result.mime_type ?? null;
+    }
+  } catch (error) {
+    notice.value = error instanceof Error ? error.message : String(error);
+  }
 }
 
-async function revert(change: ChangeSummary) {
-  const runId = change.run_id ?? props.runId;
-  if (!runId || !change.revertible) return;
-  if (!window.confirm("回滚 " + change.path + " 到本次 Agent 运行前的状态？")) return;
-  const result = await revertChanges(props.workspaceId, runId, [change.path]);
-  notice.value = result.reverted_paths.length ? "已回滚 " + result.reverted_paths.join(", ") : Object.values(result.blocked_paths).join("\n");
-  await refresh();
+function closeToolMenu(event: PointerEvent) {
+  if (toolMenuOpen.value && !toolMenuRoot.value?.contains(event.target as Node)) toolMenuOpen.value = false;
 }
 
-function handleOutside(event: PointerEvent) {
-  if (menuOpen.value && !toolbar.value?.contains(event.target as Node)) menuOpen.value = false;
+function closeToolMenuOnEscape(event: KeyboardEvent) {
+  if (event.key === "Escape") toolMenuOpen.value = false;
 }
 
 watch(() => [props.workspaceId, props.runId], () => {
-  treeInitialized.value = false;
-  directoryLoading.value = new Set();
+  activeTab.value = "summary";
+  browserSequence.value = 0;
+  sandboxSequence.value = 0;
+  browserTabs.value = [];
+  workspaceTabs.value = [{ key: "summary", kind: "summary" }];
   selectedPath.value = "";
-  preview.value = "";
-  filterQuery.value = "";
-  view.value = "files";
-  void refresh();
+  void refreshArtifacts();
 }, { immediate: true });
 
-onMounted(() => document.addEventListener("pointerdown", handleOutside));
-onBeforeUnmount(() => document.removeEventListener("pointerdown", handleOutside));
+onMounted(() => {
+  document.addEventListener("pointerdown", closeToolMenu);
+  document.addEventListener("keydown", closeToolMenuOnEscape);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", closeToolMenu);
+  document.removeEventListener("keydown", closeToolMenuOnEscape);
+});
 </script>
 
 <template>
-  <aside class="project-inspector file-rail">
-    <header ref="toolbar" class="file-rail-toolbar">
-      <label class="file-filter">
-        <Search :size="15" />
-        <input v-model="filterQuery" aria-label="筛选文件" placeholder="筛选文件..." @focus="view = 'files'" />
-        <button v-if="filterQuery" type="button" title="清除筛选" @click="filterQuery = ''"><X :size="13" /></button>
-      </label>
-      <button class="file-rail-menu-trigger" type="button" title="文件栏选项" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen">
-        <ListFilter :size="15" /><ChevronDown :size="12" />
-      </button>
-      <div v-if="menuOpen" class="file-rail-menu">
-        <span>排序</span>
-        <button @click="setSort('name')"><ArrowDownAZ :size="14" />按名称<Check v-if="sortMode === 'name'" :size="13" /></button>
-        <button @click="setSort('type')"><File :size="14" />文件夹优先<Check v-if="sortMode === 'type'" :size="13" /></button>
-        <i />
-        <button @click="refresh"><RefreshCw :size="14" :class="{ spin: loading }" />刷新</button>
-        <button @click="expandAll"><ChevronRight :size="14" class="expanded" />全部展开</button>
-        <button @click="collapseAll"><ChevronRight :size="14" />全部收起</button>
-        <i />
-        <button @click="openView('search')"><Search :size="14" />搜索文件内容</button>
-        <button @click="openView('changes')"><FileDiff :size="14" />查看变更<span v-if="changes.length" class="file-rail-count">{{ changes.length }}</span></button>
+  <aside class="project-inspector file-rail" :class="{ 'is-expanded': expandedPanel }">
+    <header class="workspace-tab-strip">
+      <div ref="toolMenuRoot" class="workspace-tool-menu-root">
+        <button type="button" class="workspace-tool-menu-trigger" :class="{ active: toolMenuOpen }" aria-label="打开功能" aria-haspopup="menu" :aria-expanded="toolMenuOpen" @click="toolMenuOpen = !toolMenuOpen"><Plus :size="16" /></button>
+        <nav v-if="toolMenuOpen" class="workspace-tool-menu" aria-label="选择功能" role="menu">
+          <button type="button" role="menuitem" :class="{ active: activeTab === 'summary' }" @click="openSummary"><ListChecks :size="15" /><span>任务摘要</span></button>
+          <button type="button" role="menuitem" :class="{ active: currentBrowser }" @click="openBrowser"><Globe2 :size="15" /><span>浏览器</span></button>
+          <button type="button" role="menuitem" :class="{ active: activeTab.startsWith('sandbox-') }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
+        </nav>
       </div>
+      <nav class="workspace-open-tabs" aria-label="已打开功能">
+        <div v-for="tab in workspaceTabs" :key="tab.key" class="workspace-open-tab" :class="{ active: activeTab === tab.key }">
+          <button type="button" :aria-pressed="activeTab === tab.key" @click="activeTab = tab.key">
+            <span class="workspace-tab-icon">
+              <ListChecks v-if="tab.kind === 'summary'" class="workspace-tab-kind-icon" :size="14" />
+              <Globe2 v-else-if="tab.kind === 'browser'" class="workspace-tab-kind-icon" :size="14" />
+              <SquareTerminal v-else class="workspace-tab-kind-icon" :size="14" />
+            </span>
+            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
+          </button>
+          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
+        </div>
+      </nav>
+      <button type="button" class="workspace-browser-add" aria-label="新建浏览器标签页" @click="createBrowserTab"><Plus :size="16" /></button>
+      <span class="workspace-header-divider" />
+      <button type="button" class="workspace-expand" :aria-label="expandedPanel ? '还原功能区' : '展开功能区'" @click="expandedPanel = !expandedPanel"><Minimize2 v-if="expandedPanel" :size="15" /><Maximize2 v-else :size="15" /></button>
+      <button type="button" class="workspace-panel-close" aria-label="退出分屏布局" @click="emit('close')"><PanelRightClose :size="16" /></button>
     </header>
 
-    <div v-if="view === 'files'" class="file-rail-browser">
-      <div class="file-tree" role="tree" aria-label="项目文件">
-        <button
-          v-for="node in flatNodes"
-          :key="node.path"
-          class="file-tree-row"
-          :class="[{ directory: node.kind === 'directory', selected: node.path === selectedPath }, node.kind === 'file' ? 'kind-' + fileKind(node.name) : '']"
-          :style="{ paddingLeft: (10 + node.depth * 16) + 'px' }"
-          :aria-expanded="node.kind === 'directory' ? !isCollapsed(node) : undefined"
-          :disabled="loading || directoryLoading.has(node.path)"
-          role="treeitem"
-          @click="node.kind === 'directory' ? toggleDirectory(node) : selectFile(node.path)"
-        >
-          <RefreshCw v-if="node.kind === 'directory' && directoryLoading.has(node.path)" :size="13" class="spin" />
-          <ChevronRight v-else-if="node.kind === 'directory'" :size="14" :class="{ expanded: !isCollapsed(node) }" />
-          <FileCode2 v-else-if="fileKind(node.name) === 'code'" :size="15" />
-          <Braces v-else-if="fileKind(node.name) === 'config'" :size="15" />
-          <FileText v-else-if="fileKind(node.name) === 'document'" :size="15" />
-          <File v-else :size="15" />
-          <span>{{ node.name }}</span>
+    <main v-if="activeTab === 'summary'" class="task-summary-view">
+      <section class="summary-section" :class="{ collapsed: !openSections.has('todo') }">
+        <button type="button" class="summary-section-trigger" :aria-expanded="openSections.has('todo')" @click="toggleSection('todo')">
+          <b>待办</b><ChevronDown :size="13" /><small v-if="plan.length">{{ completed }}/{{ plan.length }}</small>
         </button>
-        <div v-if="loading" class="file-tree-skeleton" aria-label="正在加载文件"><i v-for="index in 9" :key="index" :style="{ width: (58 + (index % 3) * 12) + '%' }" /></div>
-        <p v-if="!flatNodes.length && !loading" class="inspector-empty">{{ filterQuery ? '没有匹配的文件' : '项目中没有可显示的文件' }}</p>
-      </div>
-    </div>
+        <div v-if="openSections.has('todo')" class="summary-section-body todo-section-body">
+          <template v-if="plan.length">
+            <div class="summary-progress"><i :style="{ width: progress + '%' }" /></div>
+            <ol class="summary-plan-list">
+              <li v-for="item in plan" :key="item.id" :class="item.status">
+                <span><Check v-if="item.status === 'completed'" :size="11" /><LoaderCircle v-else-if="item.status === 'in_progress'" :size="12" /><Circle v-else :size="9" /></span>
+                <p>{{ item.subject }}</p>
+              </li>
+            </ol>
+          </template>
+          <div v-else class="summary-empty">
+            <span class="summary-empty-icon"><ListChecks :size="15" /></span>
+            <b>暂无待办</b>
+            <p>复杂任务的进展会显示在这里</p>
+          </div>
+        </div>
+      </section>
 
-    <section v-else-if="view === 'search'" class="file-rail-view">
-      <header><button title="返回文件树" @click="openView('files')"><ChevronLeft :size="16" /></button><b>搜索文件内容</b></header>
-      <form class="file-content-search" @submit.prevent="search"><Search :size="15" /><input v-model="searchQuery" aria-label="搜索项目文件" placeholder="输入关键词..." /><button :disabled="loading">搜索</button></form>
-      <div class="file-rail-results">
-        <button v-for="match in matches" :key="match.path + ':' + match.line" class="search-match" @click="selectFile(match.path)"><b>{{ match.path }}:{{ match.line }}</b><span>{{ match.preview }}</span></button>
-        <p v-if="searchQuery && !matches.length && !loading" class="inspector-empty">没有匹配结果</p>
-      </div>
-    </section>
+      <section class="summary-section" :class="{ collapsed: !openSections.has('artifacts') }">
+        <button type="button" class="summary-section-trigger" :aria-expanded="openSections.has('artifacts')" @click="toggleSection('artifacts')">
+          <b>任务产物</b><ChevronDown :size="13" /><small v-if="artifacts.length">{{ artifacts.length }} 项</small>
+        </button>
+        <div v-if="openSections.has('artifacts')" class="summary-section-body">
+          <div v-if="artifacts.length" class="artifact-list">
+            <button v-for="artifact in artifacts" :key="artifact.path" type="button" :title="artifact.path" @click="openArtifact(artifact)">
+              <span><FileCode2 v-if="artifact.source === 'change'" :size="15" /><FileText v-else :size="15" /></span>
+              <span><b>{{ basename(artifact.path) }}</b><small>{{ artifact.source === 'change' ? '代码变更' : '任务附件' }}</small></span>
+              <code v-if="artifact.change">{{ artifact.change.index_status }}{{ artifact.change.worktree_status }}</code>
+              <ExternalLink v-else :size="13" />
+            </button>
+          </div>
+          <div v-else class="summary-empty">
+            <span class="summary-empty-icon"><PackageOpen :size="15" /></span>
+            <b>暂无产物</b>
+            <p>任务完成后，生成的文件将展示在这里</p>
+          </div>
+          <button v-if="artifacts.length" type="button" class="summary-refresh" :disabled="loadingArtifacts" @click="refreshArtifacts"><RefreshCw :size="13" :class="{ spin: loadingArtifacts }" />刷新产物</button>
+        </div>
+      </section>
 
-    <section v-else class="file-rail-view">
-      <header><button title="返回文件树" @click="openView('files')"><ChevronLeft :size="16" /></button><b>本次运行的变更</b><button title="刷新变更" :disabled="loading" @click="refresh"><RefreshCw :size="14" :class="{ spin: loading }" /></button></header>
-      <div class="change-list file-rail-results">
-        <article v-for="change in changes" :key="change.path"><button class="change-path" @click="showDiff(change)"><FileDiff :size="14" /><span>{{ change.path }}</span><code>{{ change.index_status }}{{ change.worktree_status }}</code></button><button v-if="change.revertible" class="revert-change" title="回滚此变更" @click="revert(change)"><RotateCcw :size="14" /></button></article>
-        <p v-if="!changes.length && !loading" class="inspector-empty">没有待处理变更</p>
+      <section class="summary-section" :class="{ collapsed: !openSections.has('references') }">
+        <button type="button" class="summary-section-trigger" :aria-expanded="openSections.has('references')" @click="toggleSection('references')">
+          <b>参考信息</b><ChevronDown :size="13" />
+        </button>
+        <div v-if="openSections.has('references')" class="summary-section-body reference-body">
+          <div class="reference-row">
+            <span>技能</span>
+            <div v-if="usedSkills.length" class="skill-list"><span v-for="skill in usedSkills" :key="skill.name"><BookOpen :size="14" />{{ skill.name }}</span></div>
+            <small v-else>本轮任务暂未加载技能</small>
+          </div>
+          <div class="reference-context">
+            <span>上下文</span>
+            <p><b>{{ workspaceName || '当前项目' }}</b><small :title="workspacePath">{{ workspacePath }}</small></p>
+            <p v-if="attachments?.length || changes.length"><b>{{ (attachments?.length ?? 0) + changes.length }} 项关联内容</b><small>{{ attachments?.length ?? 0 }} 个附件 · {{ changes.length }} 个文件变更</small></p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <main v-else-if="currentBrowser" class="browser-workspace">
+      <form class="browser-toolbar" @submit.prevent="navigateBrowser(currentBrowser)">
+        <button type="button" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url" @click="reloadBrowser(currentBrowser)"><RotateCw :size="14" /></button>
+        <label><Globe2 :size="14" /><input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入网址" spellcheck="false" /></label>
+        <button type="submit" title="访问" aria-label="访问网页"><Send :size="14" /></button>
+      </form>
+      <div class="browser-stage">
+        <BrowserWebview
+          v-if="currentBrowser.url"
+          :key="currentBrowser.id"
+          :tab-id="currentBrowser.id"
+          :url="currentBrowser.url"
+          :reload-key="currentBrowser.frameKey"
+          :visible="!toolMenuOpen && !currentBrowser.loading && !obscured"
+          @loaded="currentBrowser.loading = false"
+          @error="browserLoadError(currentBrowser, $event)"
+        />
+        <div v-else class="browser-empty"><Globe2 :size="28" /><p>暂无网页预览，让AI生成一些内容看看吧！</p></div>
+        <div v-if="currentBrowser.loading" class="browser-loading"><LoaderCircle :size="20" /><span>正在载入网页</span></div>
       </div>
-    </section>
+    </main>
+
+    <main v-for="tab in sandboxTabs" v-show="activeTab === tab.key" :key="`${workspacePath}-${tab.key}`" class="sandbox-workspace"><SandboxTerminal :workspace-path="workspacePath || ''" /></main>
+    <main v-if="!activeTab" class="workspace-empty-view" />
 
     <section v-if="selectedPath" class="file-preview file-preview--flyout">
-      <header><FileText :size="16" /><b>{{ selectedName }}</b><button title="关闭预览" @click="selectedPath = ''; preview = ''"><X :size="17" /></button></header>
-      <CodePreview
-        :content="preview"
-        :path="selectedPath"
-        :encoding="previewEncoding"
-        :binary="previewBinary"
-        :truncated="previewTruncated"
-        :force-language="previewLanguage"
-        :media-base64="previewMediaBase64"
-        :mime-type="previewMimeType"
-      />
+      <header><span class="preview-tab"><FileText :size="15" /><b>{{ selectedName }}</b><i /></span><button title="关闭预览" @click="selectedPath = ''; preview = ''"><X :size="17" /></button></header>
+      <CodePreview :content="preview" :path="selectedPath" :encoding="previewEncoding" :binary="previewBinary" :truncated="previewTruncated" :force-language="previewLanguage" :media-base64="previewMediaBase64" :mime-type="previewMimeType" />
     </section>
-    <p v-if="notice" class="inspector-notice">{{ notice }}</p>
+    <p v-if="notice" class="inspector-notice"><span>{{ notice }}</span><button type="button" aria-label="关闭提示" @click="notice = ''"><X :size="13" /></button></p>
   </aside>
 </template>

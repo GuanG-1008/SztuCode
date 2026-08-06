@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { Beaker, Bot, CheckCircle2, ChevronDown, CircleX, FileDiff, ListChecks, ScrollText, Sparkles } from "@lucide/vue";
 import type { TimelineStep } from "./types";
 
-const props = defineProps<{ step: TimelineStep }>();
+const props = defineProps<{ step: TimelineStep; hideEvidence?: boolean }>();
 const logsOpen = ref(false);
 const completedPlans = computed(() => props.step.plan?.filter((item) => item.status === "completed").length ?? 0);
 </script>
@@ -18,7 +18,7 @@ const completedPlans = computed(() => props.step.plan?.filter((item) => item.sta
     </ol>
   </section>
 
-  <section v-if="step.tests?.length" class="timeline-activity">
+  <section v-if="!hideEvidence && step.tests?.length" class="timeline-activity">
     <header><Beaker :size="15" /><b>测试</b></header>
     <div v-for="(test, index) in step.tests" :key="index" class="activity-row" :class="test.status">
       <CheckCircle2 v-if="test.status === 'passed'" :size="14" />
@@ -27,7 +27,7 @@ const completedPlans = computed(() => props.step.plan?.filter((item) => item.sta
     </div>
   </section>
 
-  <section v-if="step.changes?.length" class="timeline-activity">
+  <section v-if="!hideEvidence && step.changes?.length" class="timeline-activity">
     <header><FileDiff :size="15" /><b>变更</b></header>
     <div v-for="(change, index) in step.changes" :key="index" class="activity-files">
       <code v-for="path in change.paths" :key="path">{{ path }}</code>

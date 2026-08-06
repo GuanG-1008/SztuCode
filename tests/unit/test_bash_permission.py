@@ -78,3 +78,37 @@ def test_dangerous_path_detection() -> None:
     assert not _has_dangerous_paths("ls -la")
     assert not _has_dangerous_paths("cat file.txt")
     assert not _has_dangerous_paths("git status")
+
+
+# 功能：验证 Windows 风格命令被预处理为 git-bash 可用形式
+# 设计：覆盖 cd /d、前导 dir、Windows 盘符路径三种常见误用（raw 字符串保证反斜杠字面量）
+def test_preprocess_windows_commands() -> None:
+    from sztu_code.core.tools.builtin.bash import _preprocess_command
+
+    assert _preprocess_command(r"cd /d C:\repo\src && pwd") == "cd /c/repo/src && pwd"
+    assert _preprocess_command("dir") == "ls"
+    assert _preprocess_command(r"cd /d D:\data") == "cd /d/data"
+    # 不含盘符的命令保持原样（避免破坏正则转义）
+    assert _preprocess_command(r"grep '\d+' file") == r"grep '\d+' file"
+    # cd 不带 /d 不受影响
+    assert _preprocess_command("cd src && ls") == "cd src && ls"
+
+
+# 功能：验证安装/更新依赖命令被 bash 工具直接拦截不执行
+# 设计：pip/npm/apt/ensurepip 等命令应返回 is_error 且内容含 blocked，不触发子进程
+async def test_install_commands_blocked() -> None:
+    from sztu_code.core.tools.builtin.bash import _BLOCKED_INSTALL_RE, BashTool
+
+    assert _BLOCKED_INSTALL_RE.search("pip install requests")
+    assert _BLOCKED_INSTALL_RE.search("python -m pip install -e .")
+    assert _BLOCKED_INSTALL_RE.search("npm install")
+    assert _BLOCKED_INSTALL_RE.search("apt-get update && apt-get install curl")
+    assert _BLOCKED_INSTALL_RE.search("ensurepip")
+    assert _BLOCKED_INSTALL_RE.search("conda install numpy")
+    assert not _BLOCKED_INSTALL_RE.search("git status")
+    assert not _BLOCKED_INSTALL_RE.search("pytest tests/foo.py")
+    assert not _BLOCKED_INSTALL_RE.search("echo hello world")
+
+    result = await BashTool().invoke({"command": "pip install requests"})
+    assert result.is_error
+    assert "blocked" in result.content.lower()

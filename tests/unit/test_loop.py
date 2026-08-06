@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -177,17 +178,35 @@ async def test_end_turn_marks_success() -> None:
     assert ctx.step == 1
 
 
-# 功能：验证达到 max_steps 时 loop 以 exceeded_max_steps 原因将 context 标记为 failed
-# 设计：设置 max_steps=2 + 无限 tool_use provider，同时验证 step 数量和失败原因，确认计数器与终止逻辑联动正确
-async def test_max_steps_marks_failed() -> None:
+# 功能：验证达到 max_steps 时 loop 以 exceeded_max_steps 原因将 context 标记为 interrupted
+# 设计：设置 max_steps=2 + 无限 tool_use provider，同时验证 step 数量和中断原因，确认计数器与终止逻辑联动正确
+async def test_max_steps_marks_interrupted() -> None:
     tc = _tc("unknown", {})
     provider = _MockProvider([LlmResponse(stop_reason="tool_use", tool_calls=[tc])] * 10)
     loop, _ = _make_loop(provider)
     ctx = _ctx(max_steps=2)
     await loop.run(ctx)
-    assert ctx.status == "failed"
+    assert ctx.status == "interrupted"
     assert ctx.reason == "exceeded_max_steps"
     assert ctx.step == 2
+
+
+# 功能：验证 max_steps=0 表示不限步数，run 一直走到 end_turn 才结束
+# 设计：max_steps=0 + 两步 tool_use 后 end_turn，断言 step 完整走完且 success
+#       （回归：此前 0 会被 step>=0 误判为第 1 步立即终止）
+async def test_max_steps_zero_means_unlimited() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="done"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=0)
+    loop = AgentLoop(provider, registry, EventBus(), wrap_up_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.status == "success"
+    assert ctx.step == 3
 
 
 # 功能：验证"调工具 → end_turn"的两步路径最终标记为 success
@@ -278,6 +297,8 @@ async def test_loop_auto_compacts_on_high_water_tool_use(tmp_path: Path) -> None
     ctx = _ctx(max_steps=5)
 
     await loop.run(ctx)
+    # Phase 3a: 异步压缩在后台执行，等待完成
+    await asyncio.sleep(0.1)
 
     assert ctx.compacted is True
     assert ctx.messages[0]["role"] == "user"
@@ -305,6 +326,8 @@ async def test_loop_auto_compacts_on_max_tokens(tmp_path: Path) -> None:
     ctx = _ctx(max_steps=5)
 
     await loop.run(ctx)
+    # Phase 3a: 等待异步压缩完成
+    await asyncio.sleep(0.1)
 
     assert ctx.compacted is True
     assert ctx.status == "success"
@@ -528,7 +551,7 @@ async def test_loop_background_already_done() -> None:
     assert "already done" in ctx.result
 
 
-# 功能：max_steps 触发失败时同样等待后台任务落定
+# 功能：max_steps 触发中断时同样等待后台任务落定
 # 设计：max_steps=1 + 阻塞后台任务，断言 loop 等后台结束才标记 exceeded_max_steps，摘要仍写入 result
 async def test_loop_max_steps_still_waits() -> None:
     gate = asyncio.Event()
@@ -553,7 +576,7 @@ async def test_loop_max_steps_still_waits() -> None:
 
     gate.set()
     await asyncio.wait_for(run_task, 2.0)
-    assert ctx.status == "failed"
+    assert ctx.status == "interrupted"
     assert ctx.reason == "exceeded_max_steps"
     assert "bg result" in ctx.result
 
@@ -568,3 +591,240 @@ async def test_loop_no_registry_no_wait() -> None:
 
     await asyncio.wait_for(loop.run(ctx), 2.0)
     assert ctx.status == "success"
+
+
+# ── token / 墙钟预算 ──────────────────────────────────────────────────────────
+
+# 功能：累计 token 超过 max_tokens 且 run 仍要继续时标记为 interrupted，不再发起额外 LLM 调用
+# 设计：provider 返回 tool_use（usage 超限），断言 status=interrupted、reason=max_tokens_exceeded 且只调用 1 次 LLM
+async def test_token_budget_exhaustion_marks_interrupted() -> None:
+    tc = _tc("unknown", {})
+    provider = _MockProvider([LlmResponse(
+        stop_reason="tool_use", tool_calls=[tc], text="",
+        usage=UsageStats(input_tokens=100, output_tokens=0, context_pct=0.5),
+    )])
+    ctx = _ctx(max_steps=5)
+    ctx.max_tokens = 50
+    loop = AgentLoop(provider, ToolRegistry(), EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "max_tokens_exceeded"
+    assert ctx.step == 1
+
+
+# 功能：恰好超限但已 end_turn 成功完成的 run 记为 success（end_turn 优先于 token 上限）
+# 设计：end_turn + usage 超限，断言 status=success 而非失败
+async def test_token_budget_end_turn_preserves_success() -> None:
+    provider = _MockProvider([LlmResponse(
+        stop_reason="end_turn", text="done",
+        usage=UsageStats(input_tokens=100, output_tokens=0, context_pct=0.5),
+    )])
+    ctx = _ctx()
+    ctx.max_tokens = 50
+    loop = AgentLoop(provider, ToolRegistry(), EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "success"
+
+
+# 功能：墙钟超时后 run 立即终止且不发起任何 LLM 调用
+# 设计：started_at 设为 10 秒前、max_wall_clock_s=1，断言 status=interrupted、step=0（未进入任何迭代）
+async def test_wall_clock_exceeded_stops_without_llm_call() -> None:
+    provider = _MockProvider([LlmResponse(stop_reason="end_turn", text="done")])
+    ctx = _ctx()
+    ctx.max_wall_clock_s = 1
+    ctx.started_at = time.monotonic() - 10.0
+    loop = AgentLoop(provider, ToolRegistry(), EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "max_wall_clock_exceeded"
+    assert ctx.step == 0
+
+
+# ── 收尾回合 ──────────────────────────────────────────────────────────────────
+
+# 功能：max_steps 到达且未端终时，先做一次收尾总结调用再标记失败
+# 设计：max_steps=2 + 两个 tool_use + 收尾 end_turn，断言 reason=exceeded_max_steps 且 result 含摘要
+async def test_wrap_up_turn_on_max_steps() -> None:
+    tc = _tc("unknown", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="end_turn", text="progress summary"),
+    ])
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, ToolRegistry(), EventBus())
+    await loop.run(ctx)
+    assert ctx.reason == "exceeded_max_steps"
+    assert "progress summary" in ctx.result
+
+
+# 功能：token 预算已耗尽时跳过收尾回合
+# 设计：max_tokens 很小 + tool_use 超限，断言 reason=max_tokens_exceeded 且只 1 次 LLM 调用
+async def test_wrap_up_skipped_when_token_budget_exhausted() -> None:
+    tc = _tc("unknown", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text="",
+                   usage=UsageStats(input_tokens=100, output_tokens=0, context_pct=0.5)),
+    ])
+    ctx = _ctx(max_steps=10)
+    ctx.max_tokens = 50
+    loop = AgentLoop(provider, ToolRegistry(), EventBus())
+    await loop.run(ctx)
+    assert ctx.reason == "max_tokens_exceeded"
+    assert ctx.step == 1
+
+
+# 功能：关闭收尾回合时不产生额外 LLM 调用
+# 设计：wrap_up_on_max_steps=False，断言 reason=exceeded_max_steps 且调用数等于 max_steps
+async def test_wrap_up_disabled_no_extra_call() -> None:
+    tc = _tc("unknown", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+    ])
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, ToolRegistry(), EventBus(), wrap_up_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.reason == "exceeded_max_steps"
+
+
+# ── 结语宽限步 ────────────────────────────────────────────────────────────────
+
+# 功能：max_steps 边界最后一步工具成功时，结语回合给出 [COMPLETE] 则记为成功
+# 设计：max_steps=2 + 两步成功 echo + [COMPLETE] 结语，断言 status=success 且 result 去掉标记
+async def test_grace_step_completes_on_max_steps() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="[COMPLETE] all done"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "success"
+    assert ctx.reason is None
+    assert ctx.result == "all done"
+    assert ctx.step == 2
+
+
+# 功能：结语回合给出 [INCOMPLETE] 时标记为中断（可续跑），并保留剩余工作描述
+# 设计：最后一步工具成功 + [INCOMPLETE] 结语，断言 status=interrupted 且 result 含说明
+async def test_grace_step_incomplete_marks_interrupted() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="[INCOMPLETE] need one more step"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+    assert "need one more step" in ctx.result
+
+
+# 功能：最后一步工具失败时跳过结语宽限步，即使后续响应是完成标记
+# 设计：max_steps=2 + 两步失败工具 + [COMPLETE] 响应，断言仍为 interrupted，
+#       证明 has_errors 阻止了宽限步（若误触发会消费第三个响应并成功）
+async def test_grace_step_skipped_on_tool_error() -> None:
+    tc = _tc("fail", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="end_turn", text="[COMPLETE] done"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_FailTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus(), wrap_up_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+
+
+# 功能：关闭结语宽限步时回退到原收尾回合路径，不因工具成功而升级为 success
+# 设计：grace_step_on_max_steps=False + 成功工具，断言走收尾总结并标记 interrupted
+async def test_grace_step_disabled_falls_back_to_wrap_up() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="end_turn", text="progress summary"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus(), grace_step_on_max_steps=False)
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+    assert "progress summary" in ctx.result
+
+
+# 功能：结语回合未以 end_turn 结束（输出截断）时不视为完成
+# 设计：结语返回 max_tokens，断言标记 interrupted 且保留截断文本
+async def test_grace_step_non_end_turn_marks_interrupted() -> None:
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[_tc()], text=""),
+        LlmResponse(stop_reason="max_tokens", text="partial"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_EchoTool())
+    ctx = _ctx(max_steps=2)
+    loop = AgentLoop(provider, registry, EventBus())
+    await loop.run(ctx)
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "exceeded_max_steps"
+
+
+# ── 卡死检测 ──────────────────────────────────────────────────────────────────
+
+# 功能：同一签名连续失败达到阈值时注入卡死干预消息并发布事件
+# 设计：FailTool 反复失败 2 次（阈值=2），断言 context.messages 含干预、事件流含 stuck.loop
+async def test_stuck_loop_injects_intervention_and_event() -> None:
+    from sztu_code.core.bus.events import StuckLoopEvent
+    from sztu_code.core.stuck_tracker import StuckLoopTracker
+
+    tc = _tc("fail", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+        LlmResponse(stop_reason="end_turn", text="switched approach"),
+    ])
+    registry = ToolRegistry()
+    registry.register(_FailTool())
+    bus = EventBus()
+    events = await _events(bus)
+    loop = AgentLoop(
+        provider, registry, bus,
+        stuck_tracker=StuckLoopTracker(max_failures=2, max_total=0),
+    )
+    ctx = _ctx(max_steps=5)
+    await loop.run(ctx)
+    assert ctx.status == "success"  # 软干预后模型换策略成功
+    assert any("stuck" in str(m.get("content", "")) for m in ctx.messages)
+    assert any(isinstance(e, StuckLoopEvent) for e in events)
+
+
+# 功能：累计干预达到 stuck_max_total 时硬停
+# 设计：max_failures=2 + max_total=1，断言 reason=stuck_loop
+async def test_stuck_loop_hard_stop() -> None:
+    from sztu_code.core.stuck_tracker import StuckLoopTracker
+
+    tc = _tc("fail", {})
+    provider = _MockProvider([
+        LlmResponse(stop_reason="tool_use", tool_calls=[tc], text=""),
+    ] * 6)
+    registry = ToolRegistry()
+    registry.register(_FailTool())
+    loop = AgentLoop(
+        provider, registry, EventBus(),
+        stuck_tracker=StuckLoopTracker(max_failures=2, max_total=1),
+    )
+    ctx = _ctx(max_steps=20)
+    await loop.run(ctx)
+    assert ctx.reason == "stuck_loop"

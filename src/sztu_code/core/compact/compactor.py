@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -91,6 +92,8 @@ class Compactor:
         self._bus = bus
         self._session_dir = session_dir
         self._session_id = session_id
+        # 跟踪后台压缩任务，供 runner 收尾时等待
+        self._pending_tasks: list[asyncio.Task[None]] = []
 
     # 压缩 ExecutionContext.messages，就地替换消息列表并写 summary 文件
     async def compact(
@@ -116,6 +119,56 @@ class Compactor:
             result.original_token_estimate, result.summary_tokens,
         )
         return result
+
+    # 异步压缩：在后台执行压缩，不阻塞 AgentLoop
+    # 借鉴 Hy-Memory System2 理念 — 耗时记忆操作不应阻塞对话
+    def compact_async(
+        self,
+        context: ExecutionContext,
+        provider: LLMProvider,
+        focus: str = "",
+    ) -> asyncio.Task[None] | None:
+        # 对当前消息做快照（浅拷贝列表，消息 dict 本身不变）
+        snapshot = list(context.messages)
+
+        async def _run() -> None:
+            await self.notify_compacting(context.run_id)
+            result = await self.compact_messages(snapshot, provider, focus=focus)
+            if result is None:
+                return
+
+            # 检查快照后是否有新消息追加
+            if len(context.messages) > len(snapshot):
+                # 有新消息：仅压缩快照部分，保留新增消息
+                new_messages = context.messages[len(snapshot):]
+                context.messages = [
+                    {"role": "user", "content": _continuation_message(result.summary_text)},
+                    {"role": "assistant", "content": "Understood, I'll continue from this summary."},
+                ] + new_messages
+            else:
+                # 无新增：全量替换
+                context.messages = [
+                    {"role": "user", "content": _continuation_message(result.summary_text)},
+                    {"role": "assistant", "content": "Understood, I'll continue from this summary."},
+                ]
+            context.compacted = True
+            await self.record_compaction(context.run_id, result)
+            logger.info(
+                "context compacted (async) session=%s run=%s original≈%d summary=%d tokens",
+                self._session_id, context.run_id,
+                result.original_token_estimate, result.summary_tokens,
+            )
+
+        task = asyncio.create_task(_run())
+        self._pending_tasks.append(task)
+        return task
+
+    # 等待所有后台压缩任务完成（runner 收尾时调用）
+    async def wait_pending(self) -> None:
+        if self._pending_tasks:
+            tasks = self._pending_tasks[:]
+            self._pending_tasks.clear()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def notify_compacting(self, run_id: str) -> None:
         await self._bus.publish(
@@ -145,10 +198,12 @@ class Compactor:
         provider: LLMProvider,
         focus: str = "",
     ) -> CompactionResult | None:
+        from sztu_code.core.compact.token_counter import TokenCounter
         from sztu_code.core.events.bus import EventBus as _Bus
 
+        counter = TokenCounter()
         history_text = _messages_to_text(messages)
-        original_estimate = max(1, len(history_text) // 4)
+        original_estimate = counter.count(history_text)
         prompt = _COMPACT_PROMPT
         if focus.strip():
             prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
@@ -180,7 +235,11 @@ class Compactor:
             logger.warning("compactor: LLM returned invalid summary, skipping compaction")
             return None
 
-        summary_tokens = response.usage.output_tokens if response.usage else len(summary_text) // 4
+        summary_tokens = (
+            response.usage.output_tokens
+            if response.usage
+            else counter.count(summary_text)
+        )
         if summary_tokens >= original_estimate:
             logger.warning(
                 "compactor: summary not beneficial original=%d summary=%d, skipping compaction",

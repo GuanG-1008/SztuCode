@@ -102,7 +102,8 @@ async def test_send_message_chat_enters_waiting_and_writes_thread(tmp_path: Path
     assert loaded.status == "waiting_for_input"
     assert loaded.run_ids == [run_id]
     messages = store.read_messages(session.id)
-    assert messages[0] == {"role": "user", "content": "hello"}
+    assert {k: v for k, v in messages[0].items() if k != "ts"} == {"role": "user", "content": "hello"}
+    assert messages[0]["ts"]
     assert messages[1]["role"] == "assistant"
 
 

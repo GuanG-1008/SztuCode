@@ -16,6 +16,8 @@ class AgentProfile:
     permission_mode: str = "normal"
     # 可选：spawn 时应用的 Agent Skill 名称
     skill: str = ""
+    # 角色步数上限；0=继承全局 agent.max_steps
+    max_steps: int = 0
 
 
 # 按两级优先级（项目本地 > 用户全局 > 内建）查找并解析角色配置
@@ -52,4 +54,5 @@ class AgentProfileLoader:
             model=agent.get("model", ""),
             permission_mode=agent.get("permission_mode", "normal"),
             skill=agent.get("skill", ""),
+            max_steps=agent.get("max_steps", 0),
         )

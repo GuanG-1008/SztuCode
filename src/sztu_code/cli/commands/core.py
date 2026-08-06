@@ -19,17 +19,33 @@ async def _ping_check(config: SztuConfig) -> None:
     await w.wait_closed()
 
 
+# Windows 上 os.kill(pid,0) 对活进程也可能抛错（权限/完整性级别差异），改用 tasklist 判断存活
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True
+        )
+        return str(pid) in result.stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 # 读取 PID 文件并确认进程存活，进程已消失则删除文件并返回 None
 def _running_pid() -> int | None:
     if not _PID_FILE.exists():
         return None
     try:
         pid = int(_PID_FILE.read_text().strip())
-        os.kill(pid, 0)
-        return pid
-    except (ValueError, ProcessLookupError, PermissionError):
+    except ValueError:
         _PID_FILE.unlink(missing_ok=True)
         return None
+    if _pid_alive(pid):
+        return pid
+    _PID_FILE.unlink(missing_ok=True)
+    return None
 
 
 # 打印 daemon 当前状态（running / not running）

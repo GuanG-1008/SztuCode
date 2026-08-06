@@ -1,4 +1,5 @@
 export type TimelineStatus = "thinking" | "acting" | "observing" | "done" | "failed";
+export type RunOutcome = { status: "success" | "failed" | "interrupted"; reason?: string };
 
 export type ToolCallEntry = {
   id: string;
@@ -49,7 +50,9 @@ export interface TimelineStep {
   permission?: PermissionState;
   usage?: LlmUsage;
   userMessage?: string;
+  userMessageTime?: string;
   finalText?: string;
+  outcome?: RunOutcome;
   plan?: PlanItem[];
   tests?: TestEntry[];
   changes?: ChangeEntry[];

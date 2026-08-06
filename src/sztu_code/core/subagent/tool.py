@@ -9,12 +9,14 @@ from pydantic import BaseModel, ConfigDict
 
 from sztu_code.core.agents.loader import AgentProfile, AgentProfileLoader
 from sztu_code.core.bus.events import SubagentFinishedEvent, SubagentStartedEvent
+from sztu_code.core.config import BudgetConfig
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.events.writer import EventWriter
 from sztu_code.core.loop import AgentLoop
 from sztu_code.core.runs import new_run_id
 from sztu_code.core.skills.loader import SkillLoader
+from sztu_code.core.stuck_tracker import StuckLoopTracker
 from sztu_code.core.subagent.registry import BackgroundTaskRegistry
 from sztu_code.core.tools.base import BaseTool, ToolResult
 from sztu_code.core.tools.builtin.bash import BashTool
@@ -111,6 +113,11 @@ class SpawnAgentTool(BaseTool):
         parent_context: ExecutionContext | None = None,
         session: Session | None = None,
         store: SessionStore | None = None,
+        budget: BudgetConfig | None = None,
+        wrap_up_on_max_steps: bool = True,
+        grace_step_on_max_steps: bool = True,
+        stuck_max_failures: int = 3,
+        stuck_max_total: int = 0,
     ) -> None:
         self._provider = provider
         self._parent_bus = parent_bus
@@ -125,6 +132,11 @@ class SpawnAgentTool(BaseTool):
         self._parent_context = parent_context
         self._session = session
         self._store = store
+        self._budget = budget
+        self._wrap_up_on_max_steps = wrap_up_on_max_steps
+        self._grace_step_on_max_steps = grace_step_on_max_steps
+        self._stuck_max_failures = stuck_max_failures
+        self._stuck_max_total = stuck_max_total
 
     # 派生子 agent，前台时阻塞直到完成并返回结果，后台时立即返回 run_id
     async def invoke(self, params: dict[str, object]) -> ToolResult:
@@ -140,6 +152,10 @@ class SpawnAgentTool(BaseTool):
         # 空 subagent_type 默认使用 coder 角色
         subagent_type = p.subagent_type or "coder"
         profile: AgentProfile | None = _profile_loader.load(subagent_type)
+        # 子 agent 步数：角色显式配置优先，否则继承父传入值
+        child_max_steps = self._max_steps
+        if profile is not None and profile.max_steps > 0:
+            child_max_steps = profile.max_steps
 
         # 解析并合并 skill：角色白名单非空时 union，否则只合并系统提示不缩窄工具集
         skill_name = (p.skill or (profile.skill if profile else "")).strip()
@@ -170,8 +186,10 @@ class SpawnAgentTool(BaseTool):
         child_context = ExecutionContext(
             run_id=child_run_id,
             goal=p.prompt,
-            max_steps=self._max_steps,
+            max_steps=child_max_steps,
             system_prompt_override=system_prompt_override,
+            max_tokens=self._budget.max_tokens if self._budget else 0,
+            max_wall_clock_s=self._budget.max_wall_clock_s if self._budget else 0,
         )
 
         child_bus = EventBus()
@@ -196,6 +214,7 @@ class SpawnAgentTool(BaseTool):
             allowed_tools=allowed_tools,
             child_context=child_context,
             permission_manager=child_permission_manager,
+            child_max_steps=child_max_steps,
         )
         # 子 agent 使用独立的 DenialTracker，避免父子 agent 拒绝计数互相干扰
         from sztu_code.core.permissions.denial_tracker import DenialTracker
@@ -207,6 +226,12 @@ class SpawnAgentTool(BaseTool):
             denial_tracker=DenialTracker(),
             session_id=self._session_id,
             task_registry=self._task_registry,
+            wrap_up_on_max_steps=self._wrap_up_on_max_steps,
+            grace_step_on_max_steps=self._grace_step_on_max_steps,
+            stuck_tracker=StuckLoopTracker(
+                max_failures=self._stuck_max_failures,
+                max_total=self._stuck_max_total,
+            ),
         )
 
         await self._parent_bus.publish(
@@ -295,6 +320,7 @@ class SpawnAgentTool(BaseTool):
         allowed_tools: set[str] | None = None,
         child_context: ExecutionContext | None = None,
         permission_manager: PermissionManager | None = None,
+        child_max_steps: int = 0,
     ) -> ToolRegistry:
         from sztu_code.core.task.manager import TaskManager
 
@@ -338,7 +364,7 @@ class SpawnAgentTool(BaseTool):
                 parent_bus=child_bus,
                 parent_run_id=child_run_id,
                 permission_manager=permission_manager,
-                max_steps=self._max_steps,
+                max_steps=child_max_steps if child_max_steps > 0 else self._max_steps,
                 task_registry=self._task_registry,
                 runs_dir=self._runs_dir,
                 session_id=self._session_id,
@@ -347,6 +373,11 @@ class SpawnAgentTool(BaseTool):
                 parent_context=child_context,
                 session=self._session,
                 store=self._store,
+                budget=self._budget,
+                wrap_up_on_max_steps=self._wrap_up_on_max_steps,
+                grace_step_on_max_steps=self._grace_step_on_max_steps,
+                stuck_max_failures=self._stuck_max_failures,
+                stuck_max_total=self._stuck_max_total,
             )
             if _allowed("spawn_agent"):
                 registry.register(nested)

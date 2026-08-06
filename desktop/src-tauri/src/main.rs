@@ -1,13 +1,16 @@
 use std::{
+    collections::HashMap,
+    io::{Read, Write},
     path::PathBuf,
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, OnceLock,
+        mpsc, Arc, Mutex as StdMutex, OnceLock,
     },
 };
 
-use serde::Serialize;
+use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State, Window};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -59,6 +62,41 @@ struct NativeSettingsResult {
     autostart: bool,
     stay_awake: bool,
     supported: bool,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceRecord {
+    path: String,
+}
+
+struct PtySession {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+struct PtySessions {
+    sessions: StdMutex<HashMap<String, PtySession>>,
+}
+
+impl PtySessions {
+    fn new() -> Self {
+        Self {
+            sessions: StdMutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct PtyOutput {
+    session_id: String,
+    data: Vec<u8>,
 }
 
 static STAY_AWAKE: AtomicBool = AtomicBool::new(false);
@@ -181,6 +219,176 @@ fn native_settings_update(
         STAY_AWAKE.store(enabled, Ordering::Relaxed);
     }
     Ok(native_settings_get())
+}
+
+fn registered_workspace(requested: &str) -> Result<PathBuf, String> {
+    let canonical = PathBuf::from(requested)
+        .canonicalize()
+        .map_err(|error| format!("无法访问当前项目目录：{error}"))?;
+    if !canonical.is_dir() {
+        return Err("当前项目路径不是目录".into());
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| "无法确定用户目录".to_string())?;
+    let registry_path = PathBuf::from(home).join(".sztu").join("workspaces.json");
+    let registry = std::fs::read_to_string(&registry_path)
+        .map_err(|error| format!("无法读取项目登记信息：{error}"))?;
+    let records: Vec<WorkspaceRecord> = serde_json::from_str(&registry)
+        .map_err(|error| format!("项目登记信息格式无效：{error}"))?;
+    let registered = records.into_iter().any(|record| {
+        PathBuf::from(record.path)
+            .canonicalize()
+            .is_ok_and(|path| path == canonical)
+    });
+    if !registered {
+        return Err("仅允许在已登记的当前项目目录中执行命令".into());
+    }
+    #[cfg(windows)]
+    {
+        let path = canonical.to_string_lossy();
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+            return Ok(PathBuf::from(format!(r"\\{unc}")));
+        }
+        if let Some(local) = path.strip_prefix(r"\\?\") {
+            return Ok(PathBuf::from(local));
+        }
+    }
+    Ok(canonical)
+}
+
+fn pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows: rows.clamp(1, 500),
+        cols: cols.clamp(1, 500),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
+#[tauri::command]
+fn sandbox_pty_start(
+    session_id: String,
+    workspace_path: String,
+    cols: u16,
+    rows: u16,
+    window: Window,
+    state: State<'_, PtySessions>,
+) -> Result<(), String> {
+    if session_id.is_empty() || session_id.len() > 128 {
+        return Err("Invalid terminal session ID".into());
+    }
+    let workspace = registered_workspace(&workspace_path)?;
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "Terminal session manager is unavailable".to_string())?;
+    if sessions.contains_key(&session_id) {
+        return Err("Terminal session already exists".into());
+    }
+
+    let pair = NativePtySystem::default()
+        .openpty(pty_size(cols, rows))
+        .map_err(|error| format!("Unable to create terminal: {error}"))?;
+    let mut command = CommandBuilder::new("powershell.exe");
+    command.args(["-NoLogo", "-NoProfile"]);
+    command.cwd(&workspace);
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| format!("Unable to start PowerShell: {error}"))?;
+    drop(pair.slave);
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|error| format!("Unable to read terminal output: {error}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|error| format!("Unable to open terminal input: {error}"))?;
+
+    let output_session_id = session_id.clone();
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(length) => {
+                    let payload = PtyOutput {
+                        session_id: output_session_id.clone(),
+                        data: buffer[..length].to_vec(),
+                    };
+                    if window.emit("sandbox:pty-output", payload).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    sessions.insert(
+        session_id,
+        PtySession {
+            master: pair.master,
+            writer,
+            child,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn sandbox_pty_write(
+    session_id: String,
+    data: String,
+    state: State<'_, PtySessions>,
+) -> Result<(), String> {
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "Terminal session manager is unavailable".to_string())?;
+    let session = sessions
+        .get_mut(&session_id)
+        .ok_or_else(|| "Terminal session is not running".to_string())?;
+    session
+        .writer
+        .write_all(data.as_bytes())
+        .and_then(|_| session.writer.flush())
+        .map_err(|error| format!("Unable to write to terminal: {error}"))
+}
+
+#[tauri::command]
+fn sandbox_pty_resize(
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    state: State<'_, PtySessions>,
+) -> Result<(), String> {
+    let sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "Terminal session manager is unavailable".to_string())?;
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| "Terminal session is not running".to_string())?;
+    session
+        .master
+        .resize(pty_size(cols, rows))
+        .map_err(|error| format!("Unable to resize terminal: {error}"))
+}
+
+#[tauri::command]
+fn sandbox_pty_close(session_id: String, state: State<'_, PtySessions>) -> Result<(), String> {
+    let mut session = state
+        .sessions
+        .lock()
+        .map_err(|_| "Terminal session manager is unavailable".to_string())?
+        .remove(&session_id);
+    if let Some(session) = session.as_mut() {
+        let _ = session.child.kill();
+    }
+    Ok(())
 }
 
 fn daemon_candidates() -> Vec<(PathBuf, Vec<String>, Option<PathBuf>)> {
@@ -369,19 +577,150 @@ fn main() {
     tauri::Builder::default()
         .manage(IpcConnection::new())
         .manage(DaemonProcess::new())
+        .manage(PtySessions::new())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             ipc_connect,
             ipc_send,
             daemon_start,
             native_settings_get,
-            native_settings_update
+            native_settings_update,
+            sandbox_pty_start,
+            sandbox_pty_write,
+            sandbox_pty_resize,
+            sandbox_pty_close
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window exists");
+            if let Some(icon) = app.default_window_icon() {
+                window.set_icon(icon.clone())?;
+            }
             window.set_focus().expect("focus main window");
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running SztuCode desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::{self, Receiver};
+
+    struct TestPty {
+        _master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+        output: Receiver<Vec<u8>>,
+    }
+
+    impl TestPty {
+        fn start(cwd: &std::path::Path) -> Self {
+            let pair = NativePtySystem::default()
+                .openpty(pty_size(100, 30))
+                .expect("create test PTY");
+            let mut command = CommandBuilder::new("powershell.exe");
+            command.args(["-NoLogo", "-NoProfile"]);
+            command.cwd(cwd);
+            let child = pair
+                .slave
+                .spawn_command(command)
+                .expect("start test PowerShell");
+            drop(pair.slave);
+            let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+            let writer = pair.master.take_writer().expect("take PTY writer");
+            let (sender, output) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut buffer = [0_u8; 4096];
+                while let Ok(length) = reader.read(&mut buffer) {
+                    if length == 0 || sender.send(buffer[..length].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            });
+            Self {
+                _master: pair.master,
+                writer,
+                child,
+                output,
+            }
+        }
+
+        fn send(&mut self, input: &str) {
+            self.writer
+                .write_all(input.as_bytes())
+                .expect("write PTY input");
+            self.writer.flush().expect("flush PTY input");
+        }
+
+        fn read_until(&self, marker: &str) -> String {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut output = String::new();
+            while std::time::Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                match self.output.recv_timeout(remaining) {
+                    Ok(bytes) => {
+                        output.push_str(&String::from_utf8_lossy(&bytes));
+                        if output.contains(marker) {
+                            return output;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            panic!("PTY output did not contain {marker:?}: {output:?}");
+        }
+    }
+
+    impl Drop for TestPty {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+        }
+    }
+
+    #[test]
+    fn sandbox_rejects_unregistered_workspace() {
+        let temporary =
+            std::env::temp_dir().join(format!("sztucode-sandbox-test-{}", std::process::id()));
+        std::fs::create_dir_all(&temporary).expect("temporary directory");
+        let result = registered_workspace(temporary.to_string_lossy().as_ref());
+        let _ = std::fs::remove_dir(&temporary);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn pty_sessions_are_interactive_and_independent() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("desktop directory")
+            .parent()
+            .expect("workspace directory")
+            .canonicalize()
+            .expect("canonical workspace");
+        let workspace_text = workspace.to_string_lossy();
+        let expected_path = workspace_text
+            .strip_prefix(r"\\?\")
+            .unwrap_or(workspace_text.as_ref());
+        let shell_workspace = PathBuf::from(expected_path);
+        let mut first = TestPty::start(&shell_workspace);
+        let mut second = TestPty::start(&shell_workspace);
+
+        first.send("\x1b[1;1R");
+        second.send("\x1b[1;1R");
+        first.send("$terminalValue='one'\r");
+        second.send("$terminalValue='two'\r");
+        first.send("[Console]::Out.WriteLine(\"PTY_FIRST:$terminalValue\")\r");
+        second.send("[Console]::Out.WriteLine(\"PTY_SECOND:$terminalValue\")\r");
+        first.send("[Console]::Out.WriteLine(\"PTY_CWD:$((Get-Location).Path)\")\r");
+
+        assert!(first.read_until("PTY_FIRST:one").contains("PTY_FIRST:one"));
+        assert!(second
+            .read_until("PTY_SECOND:two")
+            .contains("PTY_SECOND:two"));
+        let expected_cwd = format!("PTY_CWD:{expected_path}");
+        let cwd_output = first.read_until(&expected_cwd);
+        assert!(cwd_output.contains(&expected_cwd));
+    }
 }

@@ -1427,6 +1427,11 @@ class KamaTuiApp(App[None]):
                     f"[dim]└─[/dim] [bold green]✓[/bold green] {desc_part}",
                     classes="log-line",
                 ))
+            elif status == "interrupted":
+                self._append(Static(
+                    f"[dim]└─[/dim] [bold yellow]⏸[/bold yellow] {desc_part}",
+                    classes="log-line",
+                ))
             else:
                 self._append(Static(
                     f"[dim]└─[/dim] [bold red]✗[/bold red] {desc_part}",
@@ -1479,6 +1484,14 @@ class KamaTuiApp(App[None]):
                     self._run_block.mount(Static(
                         f"[bold green]✓ completed[/bold green]  [dim]{steps} steps[/dim]",
                         classes="run-ok",
+                    ))
+                elif status == "interrupted":
+                    # 预算/上限耗尽：区别于失败，提示用户可发送消息续跑
+                    detail = f"  [dim]{reason}[/dim]" if reason else ""
+                    self._run_block.mount(Static(
+                        f"[bold yellow]⏸ 预算用尽，可继续[/bold yellow]{detail}"
+                        f"  [dim]{steps} steps[/dim]  （发送『继续』可续跑）",
+                        classes="run-interrupted",
                     ))
                 else:
                     detail = f"  [dim]{reason}[/dim]" if reason else ""

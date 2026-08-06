@@ -9,6 +9,7 @@ from pathlib import Path
 from sztu_code.core.bus.events import ChangeAppliedEvent, RunFinishedEvent, RunStartedEvent
 from sztu_code.core.changes import WorkspaceChangeTracker
 from sztu_code.core.compact.compactor import Compactor
+from sztu_code.core.compact.offload import OffloadManager
 from sztu_code.core.config import SztuConfig
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus, EventHandler
@@ -23,6 +24,7 @@ from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.runs import RUNS_DIR, new_run_id
 from sztu_code.core.session.model import Session
 from sztu_code.core.session.store import SessionStore
+from sztu_code.core.stuck_tracker import StuckLoopTracker
 from sztu_code.core.subagent.registry import BackgroundTaskRegistry
 from sztu_code.core.subagent.tool import AgentResultTool, SpawnAgentTool
 from sztu_code.core.task.manager import TaskManager
@@ -31,7 +33,9 @@ from sztu_code.core.tools.builtin import (
     EditFileTool,
     ListDirTool,
     NoteSaveTool,
+    NoteUpdateTool,
     ReadFileTool,
+    ReadRefTool,
     TaskCreateTool,
     TaskGetTool,
     TaskListTool,
@@ -94,6 +98,7 @@ class AgentRunner:
         tool_whitelist: list[str] | None = None,
         workspace_root: Path | None = None,
         parent_context: ExecutionContext | None = None,
+        offload_manager: OffloadManager | None = None,
     ) -> ToolRegistry:
         allowed: set[str] | None = set(tool_whitelist) if tool_whitelist else None
 
@@ -119,6 +124,14 @@ class AgentRunner:
             note_tool = NoteSaveTool(store, session.id, run_id)
             if _ok(note_tool.name):
                 registry.register(note_tool)
+            # Phase 3b: 记忆版本化 — 支持更新旧笔记（supersedes 链）
+            update_tool = NoteUpdateTool(store, session.id, run_id)
+            if _ok(update_tool.name):
+                registry.register(update_tool)
+        # 上下文卸载回读工具：Agent 可按需获取完整工具输出（TencentDB Level 0 追溯）
+        # 仅在卸载启用时注册，否则没有 ref 文件可读
+        if offload_manager is not None and offload_manager.enabled and _ok("read_ref"):
+            registry.register(ReadRefTool(offload_manager))
         if provider is not None and bus is not None and run_id is not None:
             runs_dir = child_runs_dir or self._runs_dir
             if _ok("spawn_agent"):
@@ -137,6 +150,11 @@ class AgentRunner:
                         parent_context=parent_context,
                         session=session,
                         store=store,
+                        budget=self._config.budget,
+                        wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                        grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
+                        stuck_max_failures=self._config.agent.stuck_max_failures,
+                        stuck_max_total=self._config.agent.stuck_max_total,
                     )
                 )
             if _ok("agent_result"):
@@ -204,8 +222,11 @@ class AgentRunner:
             project_context=project_ctx,
             base_system_prompt=base_prompt,
             system_prompt_override=system_prompt_override,
+            max_tokens=self._config.budget.max_tokens,
+            max_wall_clock_s=self._config.budget.max_wall_clock_s,
         )
         prefill_len = len(history)
+        compactor = None  # 在 try 块外初始化，避免 UnboundLocalError
 
         async with EventWriter(run_path / "events.jsonl") as writer:
             writer.subscribe(bus)
@@ -229,6 +250,21 @@ class AgentRunner:
                     if session is not None and store is not None
                     else self._runs_dir
                 )
+                session_dir = (
+                    store.session_dir(session.id)
+                    if session is not None and store is not None
+                    else run_path
+                )
+                # 上下文卸载管理器：TencentDB Agent Memory 风格的四层递进存储
+                # Level 0: refs/*.md — 完整工具输出 | Level 1: offload.jsonl — 摘要索引
+                offload_manager = OffloadManager(
+                    session_dir,
+                    enabled=self._config.offload.enabled,
+                    min_chars=self._config.offload.min_chars,
+                    min_lines=self._config.offload.min_lines,
+                    force_tools=frozenset(self._config.offload.force_tools),
+                    summary_max_chars=self._config.offload.summary_max_chars,
+                )
                 registry = self._build_registry(
                     task_manager,
                     session=session,
@@ -241,11 +277,7 @@ class AgentRunner:
                     tool_whitelist=tool_whitelist,
                     workspace_root=workspace_root,
                     parent_context=context,
-                )
-                session_dir = (
-                    store.session_dir(session.id)
-                    if session is not None and store is not None
-                    else run_path
+                    offload_manager=offload_manager,
                 )
                 compactor = Compactor(bus, session_dir, session_id_str)
                 denial_tracker = DenialTracker()
@@ -259,6 +291,13 @@ class AgentRunner:
                     tool_result_keep=self._config.compaction.tool_result_keep,
                     session_id=session_id_str,
                     task_registry=self._task_registry,
+                    offload_manager=offload_manager,
+                    wrap_up_on_max_steps=self._config.agent.wrap_up_on_max_steps,
+                    grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
+                    stuck_tracker=StuckLoopTracker(
+                        max_failures=self._config.agent.stuck_max_failures,
+                        max_total=self._config.agent.stuck_max_total,
+                    ),
                 )
                 await loop.run(context)
             except asyncio.CancelledError:
@@ -289,11 +328,17 @@ class AgentRunner:
                     status=context.status,
                     reason=context.reason,
                     steps=context.step,
+                    total_input_tokens=context.total_input_tokens,
+                    total_output_tokens=context.total_output_tokens,
+                    elapsed_s=context.elapsed_s(),
                     ts=_now(),
                 )
             )
 
         if session is not None and store is not None:
+            # Phase 3a: 等待后台异步压缩完成（compactor 为 None 时跳过）
+            if compactor is not None:
+                await compactor.wait_pending()
             if context.compacted:
                 store.write_compacted(session.id, context.messages)
             else:

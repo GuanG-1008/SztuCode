@@ -1,18 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  Archive, ArrowLeft, Bot, CalendarClock, ChevronDown, ChevronRight, CirclePlus, CircleUserRound, Ellipsis, Folder, FolderOpen, FolderSearch,
-  Globe2, LayoutDashboard, MessageCircle, Minimize2, Monitor, PanelLeftClose, PanelLeftOpen, Plug,
-  Plus, Puzzle, RotateCcw, Settings, ShieldCheck, Square, Trash2, Wrench, X,
+  AlertTriangle, Archive, ArrowLeft, BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
+  Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
-import WorkContextPanel from "./components/Inspector/WorkContextPanel.vue";
+import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
+import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
 import DiffReview from "./components/Diff/DiffReview.vue";
 import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
+import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
+import SkillCenter from "./components/Skills/SkillCenter.vue";
+import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry } from "./components/timeline/types";
 import {
   applyCcswitchProvider, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
@@ -24,9 +28,23 @@ import {
 type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "settings" | "diff";
 type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
 type RuntimeEvent = Record<string, unknown>;
+const FULL_SIDEBAR_MIN_WIDTH = 952;
+const FULL_SIDEBAR_MIN_HEIGHT = 640;
+const SIDEBAR_MIN_WIDTH = 224;
+const SIDEBAR_MAX_WIDTH = 360;
+const SIDEBAR_COLLAPSE_PULL = 48;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
-const sidebarCollapsed = ref(window.innerWidth <= 620);
+// 暂时隐藏"通用问答"入口；恢复时改为 true 即可（按钮模板在 sidebar-more-tools 中保留）
+const chatEntryVisible = false;
+const sidebarCollapsed = ref(window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT);
+let sidebarAutoCollapsed = sidebarCollapsed.value;
+const storedSidebarWidth = Number(localStorage.getItem("sztu.sidebarWidth"));
+const sidebarWidth = ref(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, storedSidebarWidth || 268)));
+const sidebarResizing = ref(false);
+const sidebarCollapseArmed = ref(false);
+const sidebarPull = ref(0);
+let stopSidebarDragListeners: (() => void) | undefined;
 const connected = ref(false);
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
@@ -36,12 +54,30 @@ const activeId = ref<string | null>(null);
 const timeline = ref<Map<number, TimelineStep>>(new Map());
 const activeRunId = ref<string | null>(null);
 const prompt = ref("");
+const activePrompt = ref<HTMLTextAreaElement | null>(null);
+const launcherPrompt = ref<HTMLTextAreaElement | null>(null);
+const slashMenuActiveIndex = ref(0);
+const slashMenuDismissed = ref(false);
+const selectedStarterTask = ref("");
 const sending = ref(false);
 const projectMenuOpen = ref(false);
+const launcherProjectMenuOpen = ref(false);
+const launcherProjectQuery = ref("");
+const launcherPermissionMenuOpen = ref(false);
+const permissionConfirmOpen = ref(false);
+const permissionSaving = ref(false);
+const permissionSettingsError = ref("");
 const projectActionsOpen = ref<string | null>(null);
+const sidebarToolsExpanded = ref(false);
 const collapsedProjects = ref(new Set<string>());
+const taskQuery = ref("");
+const taskSearchOpen = ref(false);
+const taskSearchInput = ref<HTMLInputElement | null>(null);
 const inspectorOpen = ref(true);
-const inspectorWidth = ref(Math.min(720, Math.max(280, Number(localStorage.getItem("sztu.inspectorWidth")) || 355)));
+const inspectorRendered = ref(true);
+const inspectorWidth = ref(Math.min(720, Math.max(340, Number(localStorage.getItem("sztu.inspectorWidth")) || 390)));
+let inspectorCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let inspectorOpenFrame: number | undefined;
 const attachedFiles = ref<string[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
@@ -61,6 +97,7 @@ const ccswitchLoading = ref(false);
 const ccswitchApplying = ref<string | null>(null);
 const ccswitchError = ref("");
 const ccswitchProviders = ref<CcswitchProvider[]>([]);
+const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
 const activeWorkspace = computed(() => workspaces.value.find((item) => item.workspace_id === active.value?.workspace_id) ?? workspace.value);
@@ -69,21 +106,78 @@ const archivedProjects = computed(() => workspaces.value.filter((item) => item.a
 const liveSessions = computed(() => sessions.value.filter((item) => !item.archived));
 const archivedSessions = computed(() => sessions.value.filter((item) => item.archived));
 const recentSessions = computed(() => liveSessions.value.filter((item) => !item.workspace_id).slice(0, 6));
-const projects = computed(() => activeWorkspaces.value.map((item) => ({ ...item, tasks: liveSessions.value.filter((task) => task.workspace_id === item.workspace_id).slice(0, 5) })));
+const normalizedTaskQuery = computed(() => taskQuery.value.trim().toLocaleLowerCase());
+const matchesTaskQuery = (item: Session) => !normalizedTaskQuery.value || item.title.toLocaleLowerCase().includes(normalizedTaskQuery.value);
+const visibleSessions = computed(() => liveSessions.value.filter(matchesTaskQuery));
+const attentionTasks = computed(() => visibleSessions.value.filter((item) => item.status === "waiting_for_input").slice(0, 4));
+const runningTasks = computed(() => visibleSessions.value.filter((item) => item.status === "active").slice(0, 4));
+const temporaryTasks = computed(() => visibleSessions.value.filter((item) => !item.workspace_id).slice(0, 5));
+const projects = computed(() => activeWorkspaces.value
+  .map((item) => {
+    const projectMatches = item.name.toLocaleLowerCase().includes(normalizedTaskQuery.value);
+    const candidates = normalizedTaskQuery.value && !projectMatches ? visibleSessions.value : liveSessions.value;
+    return { ...item, tasks: candidates.filter((task) => task.workspace_id === item.workspace_id).slice(0, 6), projectMatches };
+  })
+  .filter((item) => !normalizedTaskQuery.value || item.projectMatches || item.tasks.length));
+const filteredLauncherWorkspaces = computed(() => {
+  const query = launcherProjectQuery.value.trim().toLocaleLowerCase();
+  if (!query) return activeWorkspaces.value.slice(0, 6);
+  return activeWorkspaces.value.filter((item) => `${item.name} ${item.path}`.toLocaleLowerCase().includes(query)).slice(0, 8);
+});
 const orderedTimeline = computed(() => [...timeline.value.values()].sort((left, right) => left.step - right.step));
-// 工作区布局：右侧文件面板宽度走可拖拽的 CSS 变量，收起时退化为单列
+const permissionModeLabel = computed(() => ({
+  normal: "标准审批",
+  plan: "计划模式",
+  accept_edits: "允许编辑",
+  auto: "全部允许",
+}[runtimeSettings.value?.permission_mode ?? "normal"]));
+const taskStatusLabel = (item: Session) => item.status === "active" ? "运行中" : item.status === "waiting_for_input" ? "等待输入" : "已完成";
+// 工作区布局：保留三列结构，让分隔线和面板宽度在收起时连续归零
 const workLayoutStyle = computed(() => {
-  if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr)" };
+  if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr) 0px 0px" };
   return { gridTemplateColumns: `minmax(0, 1fr) 6px ${inspectorWidth.value}px` };
 });
+
+async function toggleTaskSearch() {
+  taskSearchOpen.value = !taskSearchOpen.value;
+  if (taskSearchOpen.value) {
+    await nextTick();
+    taskSearchInput.value?.focus();
+  }
+}
+
+function clearTaskSearch() {
+  taskQuery.value = "";
+  taskSearchOpen.value = false;
+}
+// 延迟卸载工作区面板，保证关闭动画完整播放
+function setInspectorOpen(next: boolean) {
+  if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
+  if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
+  if (next) {
+    inspectorRendered.value = true;
+    inspectorOpenFrame = requestAnimationFrame(() => {
+      inspectorOpen.value = true;
+      inspectorOpenFrame = undefined;
+    });
+    return;
+  }
+  inspectorOpenFrame = undefined;
+  inspectorOpen.value = false;
+  inspectorCloseTimer = setTimeout(() => {
+    inspectorRendered.value = false;
+    inspectorCloseTimer = undefined;
+  }, 240);
+}
+function toggleInspector() { setInspectorOpen(!inspectorOpen.value); }
 // 拖拽分割线调整左右面板宽度比，并限制最小/最大宽度
 function startDividerDrag(event: MouseEvent) {
   event.preventDefault();
   const startX = event.clientX;
   const startWidth = inspectorWidth.value;
   const container = (event.currentTarget as HTMLElement).parentElement;
-  const maxWidth = Math.max(280, (container?.clientWidth ?? 1200) - 320); // 左侧对话区至少保留 320
-  const minWidth = 280;
+  const maxWidth = Math.max(340, (container?.clientWidth ?? 1200) - 360); // 左侧对话区至少保留 360
+  const minWidth = 340;
   function onMove(ev: MouseEvent) {
     inspectorWidth.value = Math.min(maxWidth, Math.max(minWidth, startWidth + (startX - ev.clientX)));
   }
@@ -97,12 +191,12 @@ function startDividerDrag(event: MouseEvent) {
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
 }
-const skillSuggestions = computed(() => {
+const slashQuery = computed(() => {
   const match = prompt.value.match(/^\/([^\s]*)$/);
-  if (!match) return [];
-  const query = match[1].toLowerCase();
-  return (providerStatus.value?.skills ?? []).filter((skill) => skill.name.toLowerCase().includes(query)).slice(0, 8);
+  return match ? match[1] : null;
 });
+const slashMenuOpen = computed(() => slashQuery.value !== null && !slashMenuDismissed.value);
+const slashItems = computed(() => slashQuery.value === null ? [] : slashMenuItems(slashQuery.value, providerStatus.value?.skills ?? []));
 
 type HistoryBlock = Record<string, unknown>;
 
@@ -149,7 +243,7 @@ function stepFor(event: RuntimeEvent): number {
 }
 function addUserMessage(content: string) {
   const step = Math.max(0, ...timeline.value.keys()) + 1;
-  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content }));
+  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: new Date().toISOString() }));
   return step;
 }
 function hydrateTimeline(messages: unknown[], runId?: string | null) {
@@ -172,7 +266,13 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
     }
     if (role === "user") {
       step += 1;
-      next.set(step, { ...emptyStep(step), status: "done", runId: runId ?? undefined, userMessage: text });
+      next.set(step, {
+        ...emptyStep(step),
+        status: "done",
+        runId: runId ?? undefined,
+        userMessage: text,
+        userMessageTime: String((message as { ts?: unknown })?.ts ?? ""),
+      });
       continue;
     }
     if (!step) step = 1;
@@ -303,7 +403,18 @@ function hydrateTimeline(messages: unknown[], runId?: string | null) {
     return;
   }
   if (type === "run.finished") {
-    for (const step of timeline.value.keys()) setStep(step, (current) => current.status === "done" ? current : { ...current, status: String(event.status) === "success" ? "done" : "failed", finalText: current.finalText || current.tokens.join("") });
+    const runStatus = String(event.status);
+    for (const step of timeline.value.keys()) {
+      setStep(step, (current) => current.runId === relatedRunId || !current.runId ? {
+        ...current,
+        status: runStatus === "success" ? "done" : "failed",
+        finalText: current.finalText || current.tokens.join(""),
+        outcome: {
+          status: runStatus === "interrupted" ? "interrupted" : (runStatus === "success" ? "success" : "failed"),
+          reason: String(event.reason ?? "") || undefined,
+        },
+      } : current);
+    }
     if (runId === activeRunId.value) activeRunId.value = null;
     return;
   }
@@ -323,8 +434,8 @@ async function refreshIndex(loadHistory = false) {
   loading.value = false;
 }
 function beginTask(project: Workspace | null = workspace.value) {
-  if (!connected.value || sending.value) return;
   projectActionsOpen.value = null;
+  closeLauncherMenus();
   workspace.value = project;
   activeId.value = null;
   currentStepByRun.clear();
@@ -333,6 +444,8 @@ function beginTask(project: Workspace | null = workspace.value) {
   activeRunId.value = null;
   page.value = "work";
   prompt.value = "";
+  selectedStarterTask.value = "";
+  void nextTick(() => launcherPrompt.value?.focus());
 }
 async function submitTask(content: string, project: Workspace | null = workspace.value) {
   const trimmed = content.trim();
@@ -384,7 +497,7 @@ async function createProjectTask(item: Workspace) {
 }
 async function showProjectFiles(item: Workspace) {
   projectActionsOpen.value = null;
-  inspectorOpen.value = true;
+  setInspectorOpen(true);
   workspace.value = item;
   const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id);
   if (matching) await chooseTask(matching.session_id);
@@ -423,10 +536,36 @@ async function submit() {
   const content = prompt.value.trim();
   if (!content || sending.value) return;
   if (activeId.value && (active.value?.archived || active.value?.status === "closed")) return;
+  const mode = ({ "/plan": "plan", "/edits": "accept_edits", "/auto": "auto" } as const)[content as "/plan" | "/edits" | "/auto"];
+  if (mode) {
+    await choosePermissionMode(mode);
+    prompt.value = "";
+    slashMenuDismissed.value = false;
+    void nextTick(() => (activeId.value ? activePrompt.value : launcherPrompt.value)?.focus());
+    return;
+  }
   await submitTask(content, workspace.value);
 }
 // 回车直接发送；Ctrl/Shift/Alt + 回车保留默认换行行为，且忽略中文输入法候选确认
 function onComposerKeydown(event: KeyboardEvent) {
+  if (slashMenuOpen.value && !event.isComposing) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const count = slashItems.value.length;
+      if (count) slashMenuActiveIndex.value = (slashMenuActiveIndex.value + (event.key === "ArrowDown" ? 1 : -1) + count) % count;
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      slashMenuDismissed.value = true;
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && slashItems.value.length) {
+      event.preventDefault();
+      chooseSkill(slashItems.value[Math.min(slashMenuActiveIndex.value, slashItems.value.length - 1)].name);
+      return;
+    }
+  }
   if (event.key !== "Enter" || event.isComposing) return;
   if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
   event.preventDefault();
@@ -442,6 +581,10 @@ function handleReverted(runId: string) {
   timeline.value = next;
   void refreshIndex(false);
 }
+// 中断任务的"继续执行"：向当前会话补发一条续跑消息，复用交接摘要作为上下文
+function handleContinue() {
+  void submitTask("继续", null);
+}
 // 进入代码变更审核页
 function handleReview(ctx: ReviewContext) {
   reviewCtx.value = ctx;
@@ -453,7 +596,40 @@ function closeReview() {
   void refreshIndex(false);
 }
 async function openLocalProject() {
+  closeLauncherMenus();
   const selected = await openDialog({ directory: true, multiple: false, title: "打开本地项目" });
+  if (typeof selected !== "string") return;
+  workspace.value = await openWorkspace(selected);
+  await refreshIndex(false);
+  beginTask(workspace.value);
+}
+function closeLauncherMenus() {
+  launcherProjectMenuOpen.value = false;
+  launcherPermissionMenuOpen.value = false;
+}
+function toggleLauncherProjectMenu() {
+  launcherProjectMenuOpen.value = !launcherProjectMenuOpen.value;
+  launcherPermissionMenuOpen.value = false;
+  if (!launcherProjectMenuOpen.value) launcherProjectQuery.value = "";
+}
+function toggleLauncherPermissionMenu() {
+  launcherPermissionMenuOpen.value = !launcherPermissionMenuOpen.value;
+  launcherProjectMenuOpen.value = false;
+  permissionSettingsError.value = "";
+}
+function chooseLauncherWorkspace(item: Workspace) {
+  workspace.value = item;
+  closeLauncherMenus();
+  launcherProjectQuery.value = "";
+}
+function clearLauncherWorkspace() {
+  workspace.value = null;
+  closeLauncherMenus();
+  launcherProjectQuery.value = "";
+}
+async function createLocalWorkspace() {
+  closeLauncherMenus();
+  const selected = await openDialog({ directory: true, multiple: false, title: "新建工作空间：选择一个空文件夹" });
   if (typeof selected !== "string") return;
   workspace.value = await openWorkspace(selected);
   await refreshIndex(false);
@@ -465,7 +641,21 @@ async function selectAttachments() {
   attachedFiles.value = [...new Set([...attachedFiles.value, ...paths])];
   if (paths.length) prompt.value += (prompt.value ? "\n\n" : "") + "附件：\n" + paths.map((path) => "- " + path).join("\n");
 }
-function chooseSkill(name: string) { prompt.value = "/" + name + " "; }
+function chooseSkill(name: string) {
+  prompt.value = "/" + name + " ";
+  slashMenuDismissed.value = false;
+  void nextTick(() => (activeId.value ? activePrompt.value : launcherPrompt.value)?.focus());
+}
+function handlePromptInput() {
+  selectedStarterTask.value = "";
+  slashMenuDismissed.value = false;
+  slashMenuActiveIndex.value = 0;
+}
+function chooseStarterTask(id: string, value: string) {
+  selectedStarterTask.value = id;
+  prompt.value = value;
+  void nextTick(() => launcherPrompt.value?.focus());
+}
 function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; void refreshIndex(false); }
 async function loadNativeSettings() {
   try {
@@ -500,9 +690,36 @@ async function toggleStayAwake(event: Event) {
     (event.target as HTMLInputElement).checked = stayAwake.value;
   }
 }
-async function choosePermissionMode(value: RuntimeSettings["permission_mode"]) { const result = await setRuntimeSettings({ permission_mode: value }); if (result) runtimeSettings.value = result; }
-async function chooseModel(event: Event) { const model = (event.target as HTMLInputElement).value.trim(); if (!model) return; const result = await setRuntimeSettings({ model }); if (result) runtimeSettings.value = result; }
-async function chooseProvider(event: Event) { const provider = (event.target as HTMLSelectElement).value as RuntimeSettings["provider"]; const result = await setRuntimeSettings({ provider }); if (result) runtimeSettings.value = result; }
+async function applyPermissionMode(value: RuntimeSettings["permission_mode"]) {
+  permissionSaving.value = true;
+  permissionSettingsError.value = "";
+  try {
+    const result = await setRuntimeSettings({ permission_mode: value });
+    if (result) runtimeSettings.value = result;
+    launcherPermissionMenuOpen.value = false;
+  } catch (error) {
+    permissionSettingsError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    permissionSaving.value = false;
+  }
+}
+async function choosePermissionMode(value: RuntimeSettings["permission_mode"]) {
+  if (value === "auto" && runtimeSettings.value?.permission_mode !== "auto") {
+    launcherPermissionMenuOpen.value = false;
+    permissionConfirmOpen.value = true;
+    return;
+  }
+  await applyPermissionMode(value);
+}
+async function confirmFullAccess() {
+  await applyPermissionMode("auto");
+  if (!permissionSettingsError.value) permissionConfirmOpen.value = false;
+}
+function handleModelConfigUpdated(settings: RuntimeSettings, status: ProviderStatus | null) {
+  runtimeSettings.value = settings;
+  providerStatus.value = status;
+}
+function openModelManager() { modelManagerOpen.value = true; }
 // 加载本机 cc-switch 中可导入的供应商列表并展开面板
 async function loadCcswitchProviders() {
   ccswitchLoading.value = true;
@@ -530,25 +747,111 @@ async function useCcswitchProvider(providerId: string) {
     ccswitchApplying.value = null;
   }
 }
-function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; if (next === "chat") chatView.value = "home"; }
+function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; closeLauncherMenus(); if (next === "chat") chatView.value = "home"; }
 async function submitChat(content: string) { await submitTask(content, null); page.value = "chat"; chatView.value = "home"; }
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
 async function toggleMaximizeWindow() { await getCurrentWindow().toggleMaximize(); }
 async function closeWindow() { await getCurrentWindow().close(); }
-function toggleSidebar() { sidebarCollapsed.value = !sidebarCollapsed.value; }
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  sidebarAutoCollapsed = false;
+}
+// 拖动边界调整导航宽度，越过最小宽度后的折叠阈值才收起导航
+function startSidebarDrag(event: PointerEvent) {
+  if (sidebarCollapsed.value || event.button !== 0) return;
+  event.preventDefault();
+  stopSidebarDragListeners?.();
+  const startX = event.clientX;
+  const startWidth = sidebarWidth.value;
+  sidebarResizing.value = true;
+  sidebarAutoCollapsed = false;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  const onMove = (moveEvent: PointerEvent) => {
+    const rawWidth = startWidth + moveEvent.clientX - startX;
+    const overPull = Math.max(0, SIDEBAR_MIN_WIDTH - rawWidth);
+    sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, rawWidth));
+    sidebarPull.value = -Math.min(14, overPull * .28);
+    sidebarCollapseArmed.value = overPull >= SIDEBAR_COLLAPSE_PULL;
+  };
+  const finish = () => {
+    stopSidebarDragListeners?.();
+    sidebarResizing.value = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (sidebarCollapseArmed.value) sidebarCollapsed.value = true;
+    else localStorage.setItem("sztu.sidebarWidth", String(Math.round(sidebarWidth.value)));
+    sidebarCollapseArmed.value = false;
+    sidebarPull.value = 0;
+  };
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", finish, { once: true });
+  document.addEventListener("pointercancel", finish, { once: true });
+  stopSidebarDragListeners = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", finish);
+    document.removeEventListener("pointercancel", finish);
+    stopSidebarDragListeners = undefined;
+  };
+}
+// 支持键盘在限定范围内调整导航宽度
+function resizeSidebarWithKeyboard(event: KeyboardEvent) {
+  let nextWidth = sidebarWidth.value;
+  if (event.key === "ArrowLeft") nextWidth -= 16;
+  else if (event.key === "ArrowRight") nextWidth += 16;
+  else if (event.key === "Home") nextWidth = SIDEBAR_MIN_WIDTH;
+  else if (event.key === "End") nextWidth = SIDEBAR_MAX_WIDTH;
+  else return;
+  event.preventDefault();
+  sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth));
+  localStorage.setItem("sztu.sidebarWidth", String(sidebarWidth.value));
+}
+function handleWindowResize() {
+  const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
+  if (belowFullSidebarSize) {
+    if (!sidebarCollapsed.value) {
+      sidebarCollapsed.value = true;
+      sidebarAutoCollapsed = true;
+    }
+    return;
+  }
+  if (sidebarAutoCollapsed) {
+    sidebarCollapsed.value = false;
+    sidebarAutoCollapsed = false;
+  }
+}
 function handleGlobalShortcut(event: KeyboardEvent) {
   if (event.ctrlKey && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); beginTask(); }
+  if (event.key === "Escape") {
+    if (permissionConfirmOpen.value) permissionConfirmOpen.value = false;
+    else closeLauncherMenus();
+  }
+}
+function handleDocumentPointerDown(event: PointerEvent) {
+  const target = event.target as HTMLElement | null;
+  if (!target?.closest(".launcher-project-control")) launcherProjectMenuOpen.value = false;
+  if (!target?.closest(".launcher-permission-control")) launcherPermissionMenuOpen.value = false;
 }
 let stopEvents: (() => void) | undefined;
 let stopDisconnect: (() => void) | undefined;
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
+  window.addEventListener("resize", handleWindowResize);
+  document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
   void loadNativeSettings();
   void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
 });
 onBeforeUnmount(() => {
+  stopSidebarDragListeners?.();
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
+  if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
   window.removeEventListener("keydown", handleGlobalShortcut);
+  window.removeEventListener("resize", handleWindowResize);
+  document.removeEventListener("pointerdown", handleDocumentPointerDown);
   stopEvents?.();
   stopDisconnect?.();
 });
@@ -557,7 +860,11 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 </script>
 
 <template>
-  <div class="kimi-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+  <div
+    class="kimi-shell"
+    :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-collapse-armed': sidebarCollapseArmed }"
+    :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
+  >
     <header class="kimi-titlebar">
       <div class="nav-toggle-wrap">
         <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
@@ -568,148 +875,247 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       </div>
       <div class="titlebar-drag-region" data-tauri-drag-region @dblclick="toggleMaximizeWindow" />
       <div class="window-actions" aria-label="Window controls">
-        <button class="window-action" type="button" title="Minimize" aria-label="Minimize window" @click="minimizeWindow"><Minimize2 :size="15" :stroke-width="1.8" /></button>
+        <button class="window-action" type="button" title="Minimize" aria-label="Minimize window" @click="minimizeWindow"><Minus :size="15" :stroke-width="1.8" /></button>
         <button class="window-action" type="button" title="Maximize or restore" aria-label="Maximize or restore window" @click="toggleMaximizeWindow"><Square :size="13" :stroke-width="1.8" /></button>
         <button class="window-action window-action--close" type="button" title="Close" aria-label="Close window" @click="closeWindow"><X :size="17" :stroke-width="1.8" /></button>
       </div>
     </header>
 
-    <aside id="primary-navigation" class="kimi-sidebar" :class="{ 'chat-sidebar': page === 'chat' }">
-      <div class="mode-switch" role="tablist" aria-label="工作模式">
-        <button :class="{ active: page !== 'chat' }" @click="openPage('work')"><Monitor :size="15" />Work</button>
-        <button :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="15" />Chat</button>
+    <div class="sidebar-viewport">
+      <aside id="primary-navigation" class="kimi-sidebar agent-sidebar">
+      <header class="sidebar-brand">
+        <h1>SztuCode</h1>
+        <button class="task-search-toggle" type="button" title="搜索任务或项目" aria-label="搜索任务或项目" :aria-expanded="taskSearchOpen" aria-controls="task-search-field" @click="toggleTaskSearch">
+          <Search :size="16" aria-hidden="true" />
+        </button>
+      </header>
+
+      <label v-if="taskSearchOpen || taskQuery" id="task-search-field" class="task-search">
+        <Search :size="15" aria-hidden="true" />
+        <input ref="taskSearchInput" v-model="taskQuery" type="search" placeholder="搜索任务或项目" aria-label="搜索任务或项目" @keydown.esc="clearTaskSearch" />
+        <button v-if="taskQuery" type="button" title="清除搜索" aria-label="清除搜索" @click="clearTaskSearch"><X :size="14" /></button>
+      </label>
+
+      <div class="sidebar-command">
+        <button class="new-task-button" @click="beginTask()"><CirclePlus :size="18" />新建任务 <kbd>Ctrl K</kbd></button>
       </div>
 
-      <template v-if="page === 'chat'">
-        <nav class="primary-nav" aria-label="Chat navigation">
-          <button :class="{ active: chatView === 'home' }" @click="chatView = 'home'"><CirclePlus :size="18" />新建会话 <kbd>Ctrl</kbd><kbd>K</kbd></button>
-          <button :class="{ active: chatView === 'plugins' }" @click="chatView = 'plugins'"><Plug :size="17" />插件</button>
-          <button :class="{ active: chatView === 'automations' }" @click="chatView = 'automations'"><CalendarClock :size="17" />定时任务</button>
-          <button :class="{ active: chatView === 'ppt' }" @click="chatView = 'ppt'"><LayoutDashboard :size="17" />PPT</button>
-          <button :class="{ active: chatView === 'cluster' }" @click="chatView = 'cluster'"><Bot :size="17" />集群</button>
-          <button :class="{ active: chatView === 'research' }" @click="chatView = 'research'"><FolderSearch :size="17" />深度研究</button>
-          <button :class="{ active: chatView === 'document' }" @click="chatView = 'document'"><Folder :size="17" />文档</button>
-          <button :class="{ active: chatView === 'website' }" @click="chatView = 'website'"><Globe2 :size="17" />网站</button>
-          <button :class="{ active: chatView === 'sheet' }" @click="chatView = 'sheet'"><LayoutDashboard :size="17" />表格</button>
-          <button @click="chatView = 'plugins'"><Ellipsis :size="17" />更多</button>
-        </nav>
-        <section class="side-section chat-project-new"><span class="side-label">项目</span><button class="project-row" @click="chatView = 'project'"><Plus :size="17" />新建项目</button></section>
-        <section class="side-section conversations"><span class="side-label">对话</span><div v-for="task in recentSessions" :key="task.session_id" class="sidebar-session conversation-session"><button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><i :class="{ running: task.status === 'active' }" /><span>{{ task.title || 'Untitled task' }}</span></button></div><p v-if="!recentSessions.length" class="side-empty">历史对话会显示在这里</p></section>
-      </template>
-      <template v-else><nav class="primary-nav" aria-label="Primary navigation">
-        <button :class="{ active: page === 'work' }" @click="beginTask()"><CirclePlus :size="18" />新建任务 <kbd>Ctrl</kbd><kbd>K</kbd></button>
-        <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="17" />看板</button>
-        <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Plug :size="17" />插件</button>
-        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="17" />定时任务</button>
-        <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="17" />WebBridge</button>
+      <nav class="sidebar-tools" aria-label="工作台工具">
+        <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="16" /><span>全部任务</span></button>
+        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" /><span>自动化</span><small>即将推出</small></button>
+        <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" /><span>更多</span><ChevronDown :size="13" /></button>
+        <div v-if="sidebarToolsExpanded" id="sidebar-more-tools" class="sidebar-more-tools">
+          <div>
+            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>技能</span></button>
+            <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" /><span>浏览器连接</span></button>
+            <button v-if="chatEntryVisible" :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
+          </div>
+        </div>
       </nav>
 
-      <section class="side-section project-tree">
-        <span class="side-label side-label--action">项目<button title="打开本地目录" aria-label="打开本地目录" @click="openLocalProject"><FolderOpen :size="14" /></button></span>
-        <div v-for="item in projects" :key="item.workspace_id" class="project-group">
-          <div class="project-row-shell" :class="{ active: item.workspace_id === workspace?.workspace_id }">
-            <button class="project-collapse" :title="isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目'" :aria-expanded="!isProjectCollapsed(item.workspace_id)" @click="toggleProject(item.workspace_id)">
-              <ChevronRight :size="13" :class="{ expanded: !isProjectCollapsed(item.workspace_id) }" />
-            </button>
-            <button class="project-row" @click="chooseWorkspace(item)"><Folder :size="16" /><span>{{ item.name }}</span></button>
-            <button class="side-item-action" title="项目操作" aria-label="项目操作" @click="projectActionsOpen = projectActionsOpen === item.workspace_id ? null : item.workspace_id"><Ellipsis :size="16" /></button>
-            <div v-if="projectActionsOpen === item.workspace_id" class="project-action-menu">
-              <button @click="createProjectTask(item)"><Plus :size="14" />新建任务</button>
-              <button @click="showProjectFiles(item)"><FolderSearch :size="14" />查看项目文件</button>
-              <button @click="deleteProject(item)"><Trash2 :size="14" />删除项目</button>
-              <button @click="toggleProject(item.workspace_id)"><ChevronRight :size="14" :class="{ expanded: !isProjectCollapsed(item.workspace_id) }" />{{ isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目' }}</button>
+      <div class="sidebar-workspace">
+        <section v-if="!normalizedTaskQuery && (attentionTasks.length || runningTasks.length)" class="side-section task-focus">
+          <span class="side-label">任务</span>
+          <div v-if="attentionTasks.length" class="task-state-group attention">
+            <div class="task-state-heading"><span><ShieldCheck :size="14" />需要处理</span><b>{{ attentionTasks.length }}</b></div>
+            <div v-for="task in attentionTasks" :key="`attention-${task.session_id}`" class="sidebar-session status-session">
+              <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
+                <i /><span>{{ task.title || '未命名任务' }}</span><small>等待输入</small>
+              </button>
+              <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
             </div>
           </div>
-          <div class="project-task-list" :class="{ collapsed: isProjectCollapsed(item.workspace_id) }">
-            <div class="project-task-list__inner">
-              <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session">
-                <button class="project-task" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">{{ task.title || 'Untitled task' }}</button>
-                <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
-              </div>
-              <p v-if="!item.tasks.length" class="project-empty">暂无任务</p>
+          <div v-if="runningTasks.length" class="task-state-group running">
+            <div class="task-state-heading"><span><RotateCcw :size="14" />运行中</span><b>{{ runningTasks.length }}</b></div>
+            <div v-for="task in runningTasks" :key="`running-${task.session_id}`" class="sidebar-session status-session">
+              <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
+                <i /><span>{{ task.title || '未命名任务' }}</span><small>执行中</small>
+              </button>
+              <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
             </div>
           </div>
-        </div>
-        <p v-if="!projects.length" class="side-empty">打开本地工作区后会显示在这里</p>
-      </section>
-      <section v-if="archivedProjects.length" class="side-section project-tree archived-projects">
-        <span class="side-label">已归档项目</span>
-        <div v-for="item in archivedProjects" :key="item.workspace_id" class="project-group">
-          <div class="project-row-shell">
-            <button class="project-row archived-project-row" title="恢复项目" aria-label="恢复项目" @click="resumeProject(item)"><Archive :size="16" /><span>{{ item.name }}</span></button>
-            <button class="side-item-action" title="项目操作" aria-label="项目操作" @click="projectActionsOpen = projectActionsOpen === item.workspace_id ? null : item.workspace_id"><Ellipsis :size="16" /></button>
-            <div v-if="projectActionsOpen === item.workspace_id" class="project-action-menu">
-              <button @click="resumeProject(item)"><RotateCcw :size="14" />恢复项目</button>
-              <button @click="deleteProject(item)"><Trash2 :size="14" />删除项目</button>
-            </div>
-          </div>
-        </div>
-      </section>
-      <section class="side-section conversations">
-        <span class="side-label side-label--action">对话<button title="新建对话" aria-label="新建对话" @click="beginTask(null)"><Plus :size="14" /></button></span>
-        <div v-for="task in recentSessions" :key="task.session_id" class="sidebar-session conversation-session">
-          <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><i :class="{ running: task.status === 'active' }" /><span>{{ task.title || 'Untitled task' }}</span></button>
-          <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
-        </div>
-        <p v-if="!recentSessions.length" class="side-empty">历史对话会显示在这里</p>
-      </section>
+        </section>
 
-      </template>
+        <section v-if="normalizedTaskQuery" class="side-section search-results">
+          <span class="side-label">搜索结果 <small>{{ visibleSessions.length }}</small></span>
+          <div v-for="task in visibleSessions" :key="`search-${task.session_id}`" class="sidebar-session status-session">
+            <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
+              <i :class="task.status" /><span>{{ task.title || '未命名任务' }}</span><small>{{ taskStatusLabel(task) }}</small>
+            </button>
+            <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
+          </div>
+          <p v-if="!visibleSessions.length" class="side-empty">没有匹配的任务</p>
+        </section>
+
+        <section class="side-section project-tree">
+          <span class="side-label side-label--action">项目<button title="打开本地目录" aria-label="打开本地目录" @click="openLocalProject"><FolderOpen :size="14" /></button></span>
+          <div v-for="item in projects" :key="item.workspace_id" class="project-group">
+            <div class="project-row-shell" :class="{ active: item.workspace_id === workspace?.workspace_id }">
+              <button class="project-collapse" :title="isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目'" :aria-expanded="!isProjectCollapsed(item.workspace_id)" @click="toggleProject(item.workspace_id)">
+                <ChevronRight :size="13" :class="{ expanded: !isProjectCollapsed(item.workspace_id) }" />
+              </button>
+              <button class="project-row" @click="chooseWorkspace(item)"><Folder :size="16" /><span>{{ item.name }}</span></button>
+              <button class="side-item-action" title="项目操作" aria-label="项目操作" @click="projectActionsOpen = projectActionsOpen === item.workspace_id ? null : item.workspace_id"><Ellipsis :size="16" /></button>
+              <div v-if="projectActionsOpen === item.workspace_id" class="project-action-menu">
+                <button @click="createProjectTask(item)"><Plus :size="14" />新建任务</button>
+                <button @click="showProjectFiles(item)"><FolderSearch :size="14" />查看项目文件</button>
+                <button @click="deleteProject(item)"><Trash2 :size="14" />删除项目</button>
+                <button @click="toggleProject(item.workspace_id)"><ChevronRight :size="14" :class="{ expanded: !isProjectCollapsed(item.workspace_id) }" />{{ isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目' }}</button>
+              </div>
+            </div>
+            <div class="project-task-list" :class="{ collapsed: isProjectCollapsed(item.workspace_id) }">
+              <div class="project-task-list__inner">
+                <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session">
+                  <button class="project-task" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
+                    <i :class="task.status" /><span>{{ task.title || '未命名任务' }}</span>
+                  </button>
+                  <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
+                </div>
+                <p v-if="!item.tasks.length" class="project-empty">暂无任务</p>
+              </div>
+            </div>
+          </div>
+          <p v-if="!projects.length && !normalizedTaskQuery" class="side-empty">打开本地目录以建立项目上下文</p>
+        </section>
+
+        <section v-if="temporaryTasks.length && !normalizedTaskQuery" class="side-section temporary-tasks">
+          <span class="side-label">临时任务</span>
+          <div v-for="task in temporaryTasks" :key="task.session_id" class="sidebar-session conversation-session">
+            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><i :class="{ running: task.status === 'active' }" /><span>{{ task.title || '未命名任务' }}</span></button>
+            <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
+          </div>
+        </section>
+
+        <details v-if="archivedProjects.length && !normalizedTaskQuery" class="archived-projects">
+          <summary><Archive :size="14" />已归档项目 <small>{{ archivedProjects.length }}</small></summary>
+          <div v-for="item in archivedProjects" :key="item.workspace_id" class="project-row-shell">
+            <button class="project-row archived-project-row" title="恢复项目" @click="resumeProject(item)"><RotateCcw :size="14" /><span>{{ item.name }}</span></button>
+          </div>
+        </details>
+      </div>
 
       <footer class="sidebar-footer">
-        <button class="account"><CircleUserRound :size="23" /><span><b>SztuCode</b><small>{{ connected ? 'Connected' : 'Offline' }}</small></span></button>
-        <button class="settings-link" @click="openPage('settings')"><Settings :size="16" /></button>
+        <div class="service-status"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : '未连接' }}</small></span></div>
+        <button class="settings-link" title="设置" aria-label="设置" @click="openPage('settings')"><Settings :size="16" /></button>
       </footer>
-    </aside>
+      </aside>
+    </div>
+    <div
+      class="sidebar-resizer"
+      role="separator"
+      aria-label="调整导航宽度"
+      aria-controls="primary-navigation"
+      aria-orientation="vertical"
+      :aria-valuemin="SIDEBAR_MIN_WIDTH"
+      :aria-valuemax="SIDEBAR_MAX_WIDTH"
+      :aria-valuenow="Math.round(sidebarWidth)"
+      tabindex="0"
+      title="拖动调整导航宽度"
+      @pointerdown="startSidebarDrag"
+      @keydown="resizeSidebarWithKeyboard"
+    ><span><GripVertical :size="13" :stroke-width="1.8" /></span></div>
 
     <main class="kimi-main" :class="{ 'chat-main': page === 'chat' }">
       <template v-if="page === 'work'">
         <section v-if="active" class="work-page">
-          <header class="work-header">
-            <button class="workspace-trigger" @click="projectMenuOpen = !projectMenuOpen"><span>{{ activeWorkspace?.name || '未选择项目' }}</span><ChevronDown :size="14" /></button>
-            <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
-            <div class="work-header__tools">
-              <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
-              <button title="项目文件" :class="{ active: inspectorOpen }" @click="inspectorOpen = !inspectorOpen"><Folder :size="18" /></button>
-            </div>
-          </header>
-          <div v-if="pendingPermissions.length" class="global-permission-banner" aria-live="polite">
-            <div v-for="perm in pendingPermissions" :key="perm.toolUseId" class="global-permission-item">
-              <ShieldCheck :size="15" /><b>后台任务请求权限</b><span>{{ perm.toolName }} · {{ perm.preview }}</span>
-              <button type="button" @click="decidePermission(perm.toolUseId, 'deny_once')">拒绝</button>
-              <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
-            </div>
-          </div>
           <div class="work-layout" :class="{ 'no-inspector': !inspectorOpen || !activeWorkspace }" :style="workLayoutStyle">
             <section class="task-canvas">
+              <header class="work-header">
+                <button class="workspace-trigger" @click="projectMenuOpen = !projectMenuOpen"><span>{{ activeWorkspace?.name || '未选择项目' }}</span><ChevronDown :size="14" /></button>
+                <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
+                <div class="work-header__tools">
+                  <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
+                  <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
+                </div>
+              </header>
+              <div v-if="pendingPermissions.length" class="global-permission-banner" aria-live="polite">
+                <div v-for="perm in pendingPermissions" :key="perm.toolUseId" class="global-permission-item">
+                  <ShieldCheck :size="15" /><b>后台任务请求权限</b><span>{{ perm.toolName }} · {{ perm.preview }}</span>
+                  <button type="button" @click="decidePermission(perm.toolUseId, 'deny_once')">拒绝</button>
+                  <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
+                </div>
+              </div>
               <div class="task-conversation">
                 <div class="task-stream">
-                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><p>任务已经创建。告诉 SztuCode 你希望完成什么，它会在这里展示计划、工具调用与最终结果。</p></div>
-                  <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" />
+                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><div><b>从一个明确目标开始</b><p>SztuCode 会在当前项目中完成工作，并把验证结果、文件变更和可回滚记录留在这里。</p></div></div>
+                  <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
                 <form class="kimi-composer" @submit.prevent="submit">
-                  <div v-if="skillSuggestions.length" class="skill-completions"><button v-for="skill in skillSuggestions" :key="skill.name" type="button" @click="chooseSkill(skill.name)"><b>/{{ skill.name }}</b><span>{{ skill.description }}</span></button></div>
-                  <textarea v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复会话后继续' : '输入消息，键入 / 调用技能'" rows="3" @keydown="onComposerKeydown" />
+                  <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
+                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加附件" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '标准审批' }}<ChevronDown :size="13" /></button><span class="model-label"><i :class="{ online: providerStatus?.ready_for_next_run }" />{{ runtimeSettings?.model || '未配置模型' }}</span><button class="send" type="submit" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
-              <WorkContextPanel :steps="orderedTimeline" :attachments="attachedFiles" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" />
             </section>
-            <template v-if="inspectorOpen && activeWorkspace">
+            <template v-if="inspectorRendered && activeWorkspace">
               <div class="layout-divider" role="separator" aria-orientation="vertical" title="拖拽调整面板宽度" @mousedown="startDividerDrag" />
-              <ProjectInspector :workspace-id="activeWorkspace.workspace_id" :run-id="active.latest_run_id" />
+              <ProjectInspector
+                :workspace-id="activeWorkspace.workspace_id"
+                :run-id="active.latest_run_id"
+                :steps="orderedTimeline"
+                :attachments="attachedFiles"
+                :workspace-name="activeWorkspace.name"
+                :workspace-path="activeWorkspace.path"
+                :obscured="modelManagerOpen || permissionConfirmOpen"
+                @close="setInspectorOpen(false)"
+              />
             </template>
           </div>
         </section>
-        <section v-else class="landing-page">
-          <div class="kimi-hero"><span class="mascot"><Bot :size="32" /></span><div><h1>让 SztuCode 帮你完成任务</h1><a>本地开发版</a></div></div>
-          <form class="kimi-composer landing-composer" @submit.prevent="submit()">
-            <div v-if="skillSuggestions.length" class="skill-completions"><button v-for="skill in skillSuggestions" :key="skill.name" type="button" @click="chooseSkill(skill.name)"><b>/{{ skill.name }}</b><span>{{ skill.description }}</span></button></div>
-            <textarea v-model="prompt" placeholder="输入消息，键入 / 调用技能" rows="3" @keydown="onComposerKeydown" />
-            <div class="composer-toolbar"><button type="button" class="round" title="添加附件" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission"><ShieldCheck :size="15" />标准审批<ChevronDown :size="13" /></button><span /><button class="send" type="submit" :disabled="!connected">↑</button></div>
-            <button type="button" class="composer-project" @click="openLocalProject"><FolderOpen :size="15" />打开本地目录作为项目</button>
-          </form>
+        <section v-else class="landing-page task-launcher" :class="{ 'slash-open': slashMenuOpen }">
+          <div class="launcher-content">
+            <header class="launcher-heading">
+              <span class="launcher-mark" aria-hidden="true"><BookOpen :size="42" :stroke-width="1.8" /></span>
+              <div class="launcher-heading__copy">
+                <h1 aria-label="Work with SztuCode"><span aria-hidden="true">Work with SztuCode</span></h1>
+              </div>
+            </header>
+
+            <form class="kimi-composer landing-composer" @submit.prevent="submit()">
+              <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
+              <textarea ref="launcherPrompt" v-model="prompt" placeholder="描述你要完成的开发任务，输入 / 调用技能" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
+              <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
+              <div class="composer-toolbar launcher-toolbar">
+                <button type="button" class="round" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>
+                <div class="launcher-permission-control">
+                  <button type="button" class="permission" aria-haspopup="menu" :aria-expanded="launcherPermissionMenuOpen" @click.stop="toggleLauncherPermissionMenu"><ShieldCheck :size="15" />{{ permissionModeLabel }}<ChevronDown :size="13" /></button>
+                  <div v-if="launcherPermissionMenuOpen" class="launcher-popover permission-popover" role="menu" aria-label="权限模式">
+                    <button type="button" class="full-access-row" role="menuitemcheckbox" :aria-checked="runtimeSettings?.permission_mode === 'auto'" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><span><b>允许全部权限</b><small>跳过所有操作确认</small></span><i :class="{ active: runtimeSettings?.permission_mode === 'auto' }"><em /></i></button>
+                    <p v-if="permissionSettingsError" class="launcher-menu-error">{{ permissionSettingsError }}</p>
+                  </div>
+                </div>
+                <span />
+                <ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" />
+                <button class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
+              </div>
+              <div class="launcher-project-control">
+                <button type="button" class="composer-project" aria-haspopup="menu" :aria-expanded="launcherProjectMenuOpen" @click.stop="toggleLauncherProjectMenu"><FolderOpen :size="15" /><span>{{ workspace?.name || '选择本地项目' }}</span><ChevronDown :size="13" /></button>
+                <div v-if="launcherProjectMenuOpen" class="launcher-popover project-picker-popover" role="menu" aria-label="选择项目">
+                  <label class="project-picker-search"><Search :size="15" /><input v-model="launcherProjectQuery" type="search" placeholder="搜索工作空间" aria-label="搜索工作空间" /></label>
+                  <div v-if="filteredLauncherWorkspaces.length" class="project-picker-list">
+                    <button v-for="item in filteredLauncherWorkspaces" :key="item.workspace_id" type="button" role="menuitemradio" :aria-checked="workspace?.workspace_id === item.workspace_id" @click="chooseLauncherWorkspace(item)"><Folder :size="16" /><span><b>{{ item.name }}</b><small>{{ item.path }}</small></span><Check v-if="workspace?.workspace_id === item.workspace_id" :size="15" /></button>
+                  </div>
+                  <p v-else class="project-picker-empty">没有匹配的工作空间</p>
+                  <div class="project-picker-actions">
+                    <button v-if="workspace" type="button" role="menuitem" @click="clearLauncherWorkspace"><CirclePlus :size="16" /><span>临时任务<small>不关联项目上下文</small></span></button>
+                    <button type="button" role="menuitem" @click="createLocalWorkspace"><FolderPlus :size="16" /><span>新建工作空间<small>选择一个空文件夹</small></span></button>
+                    <button type="button" role="menuitem" @click="openLocalProject"><FolderOpen :size="16" /><span>打开本地文件夹<small>添加已有项目</small></span></button>
+                  </div>
+                </div>
+              </div>
+            </form>
+
+            <section class="starter-tasks" aria-label="任务起步项">
+              <span>从常见开发任务开始</span>
+              <div>
+                <button type="button" :class="{ selected: selectedStarterTask === 'understand' }" :aria-pressed="selectedStarterTask === 'understand'" @click="chooseStarterTask('understand', '分析当前项目结构、技术栈和关键模块，并给出一份简洁的项目导览。')"><FolderSearch :size="15" />理解项目</button>
+                <button type="button" :class="{ selected: selectedStarterTask === 'fix' }" :aria-pressed="selectedStarterTask === 'fix'" @click="chooseStarterTask('fix', '检查当前项目中最值得优先修复的问题，说明原因并直接完成修复。')"><Wrench :size="15" />排查并修复</button>
+                <button type="button" :class="{ selected: selectedStarterTask === 'review' }" :aria-pressed="selectedStarterTask === 'review'" @click="chooseStarterTask('review', '审查当前未提交的代码变更，重点检查缺陷、回归风险和缺失测试。')"><ShieldCheck :size="15" />审查变更</button>
+                <button type="button" :class="{ selected: selectedStarterTask === 'plan' }" :aria-pressed="selectedStarterTask === 'plan'" @click="chooseStarterTask('plan', '根据当前项目状态，为下一项开发工作制定可执行的实现计划。')"><LayoutDashboard :size="15" />制定计划</button>
+              </div>
+            </section>
+          </div>
         </section>
       </template>
 
@@ -718,7 +1124,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       <section v-else-if="page === 'diff'" class="diff-page"><DiffReview v-if="reviewCtx" :workspace-id="reviewCtx.workspaceId" :run-id="reviewCtx.runId" :paths="reviewCtx.paths" @close="closeReview" @changed="refreshIndex(false)" /></section>
 
       <section v-else-if="page === 'board'" class="simple-page board-page">
-        <header><div><h1>会话</h1><p>管理本地任务、归档与已关闭会话</p></div><button class="outline-button" @click="refreshIndex(false)">刷新</button></header>
+        <header><div><h1>全部任务</h1><p>管理项目任务、临时任务与归档记录</p></div><button class="outline-button" @click="refreshIndex(false)">刷新</button></header>
         <div class="session-board">
           <article v-for="task in liveSessions" :key="task.session_id" :class="{ pinned: task.pinned }"><button @click="chooseTask(task.session_id)"><b>{{ task.title || 'Untitled task' }}</b><span>{{ task.status }} · {{ task.updated_at }}</span></button><SessionActions :session="task" @changed="refreshIndex(false)" @closed="refreshIndex(false)" /></article>
           <h2 v-if="archivedSessions.length">已归档</h2>
@@ -726,13 +1132,27 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
           <div v-if="!sessions.length" class="empty-state"><LayoutDashboard :size="58" /><h2>暂无会话</h2></div>
         </div>
       </section>
-      <section v-else-if="page === 'automations'" class="simple-page automation-page"><header><div><h1>定时任务</h1><p>让 SztuCode 按计划自动执行任务，并把结果定时送达</p></div><button class="create-button" disabled><Plus :size="17" />创建</button></header><div class="empty-state"><CalendarClock :size="64" /><h2>暂无定时任务</h2><p>定时任务协议尚未接入 daemon，因此创建功能目前不可用。</p></div></section>
+      <section v-else-if="page === 'automations'" class="chat-main"><ChatPortal view="automations" :connected="connected" @submit="submitChat" @navigate="(view) => { page = 'chat'; chatView = view }" @open-project="openLocalProject" /></section>
 
-      <section v-else-if="page === 'skills'" class="simple-page"><header><div><h1>插件</h1></div><button class="outline-button" @click="refreshIndex(false)">刷新</button></header><div v-if="providerStatus?.skills.length" class="skill-grid"><article v-for="skill in providerStatus.skills" :key="skill.name"><Wrench :size="18" /><div><h2>{{ skill.name }}</h2><p>{{ skill.description }}</p></div><span>可用</span></article></div><div v-else class="empty-state"><Puzzle :size="58" /><h2>没有已发现的技能</h2><p>{{ connected ? '当前没有可用技能。' : '连接本地服务后加载技能。' }}</p></div></section>
+      <section v-else-if="page === 'skills'" class="chat-main"><SkillCenter :skills="providerStatus?.skills ?? []" :connected="connected" /></section>
 
-      <section v-else-if="page === 'webbridge'" class="simple-page"><header><div><h1>WebBridge</h1><p>连接浏览器扩展，让 Agent 在授权范围内协助网页操作</p></div></header><div class="bridge-card"><Globe2 :size="24" /><div><h2>浏览器连接</h2><p>当前未连接。此功能需要浏览器扩展和 daemon WebBridge 协议。</p></div><span class="status-pill">未连接</span></div></section>
+      <section v-else-if="page === 'webbridge'" class="simple-page"><header><div><h1>浏览器连接</h1><p>连接浏览器，让 Agent 在授权范围内协助网页操作</p></div></header><div class="bridge-card"><Globe2 :size="24" /><div><h2>连接状态</h2><p>当前未连接。此功能需要浏览器扩展与本地服务支持。</p></div><span class="status-pill">未连接</span></div></section>
 
-      <section v-else class="settings-screen"><header class="settings-top"><button title="返回工作区" aria-label="返回工作区" @click="openPage('work')"><ArrowLeft :size="19" /></button><h1>设置</h1></header><div class="settings-layout"><aside><span>SztuCode</span><button class="active">SztuCode Work</button></aside><main><section><span class="settings-section-label">系统设置</span><div class="setting-group"><label><div><b>开机自启动</b><p>登录系统时自动启动 SztuCode。</p></div><input :checked="autostart" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleAutostart" /></label><label><div><b>系统通知</b><p>允许 SztuCode 发送任务结果与重要提醒。</p></div><input v-model="notifications" type="checkbox" /></label><label><div><b>保持电脑唤醒</b><p>任务运行期间阻止电脑进入睡眠。</p></div><input :checked="stayAwake" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleStayAwake" /></label><p v-if="nativeSettingsError" class="native-settings-error">{{ nativeSettingsError }}</p></div></section><section><span class="settings-section-label">模型与审批</span><div class="setting-group"><label class="stack"><b>Provider</b><select :value="runtimeSettings?.provider" @change="chooseProvider"><option value="anthropic">Anthropic</option><option value="openai">OpenAI</option></select></label><label class="stack"><b>模型</b><input :value="runtimeSettings?.model" placeholder="模型名称" @change="chooseModel" /></label><label class="stack"><b>权限模式</b><select :value="runtimeSettings?.permission_mode" @change="choosePermissionMode(($event.target as HTMLSelectElement).value as RuntimeSettings['permission_mode'])"><option value="normal">标准审批</option><option value="plan">计划模式</option><option value="accept_edits">允许编辑</option><option value="auto">全部允许</option></select></label></div></section><section><span class="settings-section-label">模型管理</span><div class="setting-group ccswitch-mgr"><div class="ccswitch-current-row"><div><b>当前模型</b><p>{{ runtimeSettings?.model || '未配置模型' }}<template v-if="runtimeSettings?.base_url"><br />{{ runtimeSettings.base_url }}</template></p></div><button type="button" class="ccswitch-import-btn" :disabled="ccswitchLoading" @click="ccswitchOpen ? (ccswitchOpen = false) : loadCcswitchProviders()">{{ ccswitchLoading ? '加载中…' : (ccswitchOpen ? '收起' : '从 cc-switch 导入') }}</button></div><div v-if="ccswitchOpen" class="ccswitch-list"><div v-for="item in ccswitchProviders" :key="item.id" class="ccswitch-card"><span class="ccswitch-card__dot" :class="{ has: item.has_api_key }" /><div class="ccswitch-card__info"><b>{{ item.name }}<em v-if="item.is_current">当前</em></b><span>{{ item.base_url }}</span><small>{{ item.model }}</small></div><button type="button" :disabled="ccswitchApplying === item.id" @click="useCcswitchProvider(item.id)">{{ ccswitchApplying === item.id ? '应用中…' : '使用此配置' }}</button></div><p v-if="!ccswitchProviders.length && !ccswitchLoading" class="ccswitch-empty">本机未发现可导入的 cc-switch 供应商，请确认已安装 CC Switch</p></div><p v-if="ccswitchError" class="native-settings-error">{{ ccswitchError }}</p></div></section><section><span class="settings-section-label">WebBridge</span><div class="setting-group"><label><div><b>允许网站所有操作</b><p>允许 Agent 在浏览器中执行已授权的网页动作。</p></div><input v-model="webBridgeAllowed" type="checkbox" disabled /></label><label><div><b>浏览器连接</b><p>显示 SztuCode 与本地浏览器扩展的连接状态。</p></div><em>未连接</em></label></div></section></main></div></section>
+      <section v-else class="settings-screen"><header class="settings-top"><button title="返回工作区" aria-label="返回工作区" @click="openPage('work')"><ArrowLeft :size="19" /></button><h1>设置</h1></header><div class="settings-layout"><aside><span>SztuCode</span><button class="active">SztuCode Work</button></aside><main><section><span class="settings-section-label">系统设置</span><div class="setting-group"><label><div><b>开机自启动</b><p>登录系统时自动启动 SztuCode。</p></div><input :checked="autostart" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleAutostart" /></label><label><div><b>系统通知</b><p>允许 SztuCode 发送任务结果与重要提醒。</p></div><input v-model="notifications" type="checkbox" /></label><label><div><b>保持电脑唤醒</b><p>任务运行期间阻止电脑进入睡眠。</p></div><input :checked="stayAwake" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleStayAwake" /></label><p v-if="nativeSettingsError" class="native-settings-error">{{ nativeSettingsError }}</p></div></section><section><span class="settings-section-label">任务审批</span><div class="setting-group"><label class="stack"><b>权限模式</b><select :value="runtimeSettings?.permission_mode" @change="choosePermissionMode(($event.target as HTMLSelectElement).value as RuntimeSettings['permission_mode'])"><option value="normal">标准审批</option><option value="plan">计划模式</option><option value="accept_edits">允许编辑</option><option value="auto">全部允许</option></select></label></div></section><section><span class="settings-section-label">模型管理</span><div class="setting-group ccswitch-mgr"><div class="ccswitch-current-row"><div><b>当前模型</b><p>{{ runtimeSettings?.model || '未配置模型' }}<template v-if="runtimeSettings?.base_url"><br />{{ runtimeSettings.base_url }}</template></p></div><div class="model-management-actions"><button type="button" class="ccswitch-import-btn primary" @click="openModelManager"><Plus :size="14" />添加和管理模型</button><button type="button" class="ccswitch-import-btn" :disabled="ccswitchLoading" @click="ccswitchOpen ? (ccswitchOpen = false) : loadCcswitchProviders()">{{ ccswitchLoading ? '加载中…' : (ccswitchOpen ? '收起' : '从 cc-switch 导入') }}</button></div></div><div v-if="ccswitchOpen" class="ccswitch-list"><div v-for="item in ccswitchProviders" :key="item.id" class="ccswitch-card"><span class="ccswitch-card__dot" :class="{ has: item.has_api_key }" /><div class="ccswitch-card__info"><b>{{ item.name }}<em v-if="item.is_current">当前</em></b><span>{{ item.base_url }}</span><small>{{ item.model }}</small></div><button type="button" :disabled="ccswitchApplying === item.id" @click="useCcswitchProvider(item.id)">{{ ccswitchApplying === item.id ? '应用中…' : '使用此配置' }}</button></div><p v-if="!ccswitchProviders.length && !ccswitchLoading" class="ccswitch-empty">本机未发现可导入的 cc-switch 供应商，请确认已安装 CC Switch</p></div><p v-if="ccswitchError" class="native-settings-error">{{ ccswitchError }}</p></div></section><section><span class="settings-section-label">WebBridge</span><div class="setting-group"><label><div><b>允许网站所有操作</b><p>允许 Agent 在浏览器中执行已授权的网页动作。</p></div><input v-model="webBridgeAllowed" type="checkbox" disabled /></label><label><div><b>浏览器连接</b><p>显示 SztuCode 与本地浏览器扩展的连接状态。</p></div><em>未连接</em></label></div></section></main></div></section>
     </main>
+
+    <div v-if="modelManagerOpen" class="model-manager-backdrop"><ModelManager @close="modelManagerOpen = false" @updated="handleModelConfigUpdated" /></div>
+
+    <div v-if="permissionConfirmOpen" class="permission-confirm-backdrop" role="presentation" @mousedown.self="permissionConfirmOpen = false">
+      <section class="permission-confirm" role="alertdialog" aria-modal="true" aria-labelledby="permission-confirm-title" aria-describedby="permission-confirm-description">
+        <header><span><AlertTriangle :size="19" /></span><div><h2 id="permission-confirm-title">高风险权限提示</h2><p id="permission-confirm-description">允许全部权限后，Agent 将直接执行操作，不再逐次请求你的确认。</p></div></header>
+        <div class="permission-confirm__body">
+          <b>可能产生的后果</b>
+          <ul><li>文件被覆盖、误删或损坏</li><li>系统配置被更改，导致软件异常</li><li>执行无法撤销的命令或外部操作</li></ul>
+          <p><AlertTriangle :size="16" />部分操作不可逆，重要数据可能永久丢失。建议操作前备份重要内容。</p>
+        </div>
+        <footer><button type="button" @click="permissionConfirmOpen = false">取消</button><button type="button" class="danger" :disabled="permissionSaving" @click="confirmFullAccess">{{ permissionSaving ? '正在启用…' : '允许全部权限' }}</button></footer>
+      </section>
+    </div>
   </div>
 </template>
