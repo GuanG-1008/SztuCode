@@ -14,13 +14,14 @@ import asyncio
 import base64
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-
+from collections.abc import Iterable
 from io import BytesIO
+from pathlib import Path
+from types import TracebackType
+from typing import Any, BinaryIO, Literal, NoReturn
 
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "auto"
@@ -46,7 +47,7 @@ MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_BATCH_JOBS = 500
 
 
-def _die(message: str, code: int = 1) -> None:
+def _die(message: str, code: int = 1) -> NoReturn:
     print(f"Error: {message}", file=sys.stderr)
     raise SystemExit(code)
 
@@ -76,7 +77,7 @@ def _ensure_api_key(dry_run: bool) -> None:
     _die("OPENAI_API_KEY is not set. Export it before running.")
 
 
-def _read_prompt(prompt: Optional[str], prompt_file: Optional[str]) -> str:
+def _read_prompt(prompt: str | None, prompt_file: str | None) -> str:
     if prompt and prompt_file:
         _die("Use --prompt or --prompt-file, not both.")
     if prompt_file:
@@ -90,8 +91,8 @@ def _read_prompt(prompt: Optional[str], prompt_file: Optional[str]) -> str:
     return ""  # unreachable
 
 
-def _check_image_paths(paths: Iterable[str]) -> List[Path]:
-    resolved: List[Path] = []
+def _check_image_paths(paths: Iterable[str]) -> list[Path]:
+    resolved: list[Path] = []
     for raw in paths:
         path = Path(raw)
         if not path.exists():
@@ -102,7 +103,7 @@ def _check_image_paths(paths: Iterable[str]) -> List[Path]:
     return resolved
 
 
-def _normalize_output_format(fmt: Optional[str]) -> str:
+def _normalize_output_format(fmt: str | None) -> str:
     if not fmt:
         return DEFAULT_OUTPUT_FORMAT
     fmt = fmt.lower()
@@ -111,7 +112,7 @@ def _normalize_output_format(fmt: Optional[str]) -> str:
     return "jpeg" if fmt == "jpg" else fmt
 
 
-def _parse_size(size: str) -> Optional[Tuple[int, int]]:
+def _parse_size(size: str) -> tuple[int, int] | None:
     match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)", size)
     if not match:
         return None
@@ -159,12 +160,12 @@ def _validate_quality(quality: str) -> None:
         _die("quality must be one of low, medium, high, or auto.")
 
 
-def _validate_background(background: Optional[str]) -> None:
+def _validate_background(background: str | None) -> None:
     if background not in ALLOWED_BACKGROUNDS:
         _die("background must be one of transparent, opaque, or auto.")
 
 
-def _validate_input_fidelity(input_fidelity: Optional[str]) -> None:
+def _validate_input_fidelity(input_fidelity: str | None) -> None:
     if input_fidelity not in ALLOWED_INPUT_FIDELITIES:
         _die("input-fidelity must be one of low or high.")
 
@@ -172,11 +173,12 @@ def _validate_input_fidelity(input_fidelity: Optional[str]) -> None:
 def _validate_model(model: str) -> None:
     if not model.startswith(GPT_IMAGE_MODEL_PREFIX):
         _die(
-            "model must be a GPT Image model (for example gpt-image-1.5, gpt-image-1, or gpt-image-1-mini)."
+            "model must be a GPT Image model "
+            "(for example gpt-image-1.5, gpt-image-1, or gpt-image-1-mini)."
         )
 
 
-def _validate_transparency(background: Optional[str], output_format: str) -> None:
+def _validate_transparency(background: str | None, output_format: str) -> None:
     if background == "transparent" and output_format not in {"png", "webp"}:
         _die("transparent background requires output-format png or webp.")
 
@@ -184,8 +186,8 @@ def _validate_transparency(background: Optional[str], output_format: str) -> Non
 def _validate_model_specific_options(
     *,
     model: str,
-    background: Optional[str],
-    input_fidelity: Optional[str] = None,
+    background: str | None,
+    input_fidelity: str | None = None,
 ) -> None:
     if model != GPT_IMAGE_2_MODEL:
         return
@@ -196,11 +198,12 @@ def _validate_model_specific_options(
         )
     if input_fidelity is not None:
         _die(
-            "input_fidelity is not supported in gpt-image-2 because image inputs always use high fidelity for this model."
+            "input_fidelity is not supported in gpt-image-2 because image inputs "
+            "always use high fidelity for this model."
         )
 
 
-def _validate_generate_payload(payload: Dict[str, Any]) -> None:
+def _validate_generate_payload(payload: dict[str, Any]) -> None:
     model = str(payload.get("model", DEFAULT_MODEL))
     _validate_model(model)
     n = int(payload.get("n", 1))
@@ -222,8 +225,8 @@ def _build_output_paths(
     out: str,
     output_format: str,
     count: int,
-    out_dir: Optional[str],
-) -> List[Path]:
+    out_dir: str | None,
+) -> list[Path]:
     ext = "." + output_format
 
     if out_dir:
@@ -257,11 +260,11 @@ def _augment_prompt(args: argparse.Namespace, prompt: str) -> str:
     return _augment_prompt_fields(args.augment, prompt, fields)
 
 
-def _augment_prompt_fields(augment: bool, prompt: str, fields: Dict[str, Optional[str]]) -> str:
+def _augment_prompt_fields(augment: bool, prompt: str, fields: dict[str, str | None]) -> str:
     if not augment:
         return prompt
 
-    sections: List[str] = []
+    sections: list[str] = []
     if fields.get("use_case"):
         sections.append(f"Use case: {fields['use_case']}")
     sections.append(f"Primary request: {prompt}")
@@ -289,7 +292,7 @@ def _augment_prompt_fields(augment: bool, prompt: str, fields: Dict[str, Optiona
     return "\n".join(sections)
 
 
-def _fields_from_args(args: argparse.Namespace) -> Dict[str, Optional[str]]:
+def _fields_from_args(args: argparse.Namespace) -> dict[str, str | None]:
     return {
         "use_case": getattr(args, "use_case", None),
         "scene": getattr(args, "scene", None),
@@ -305,11 +308,11 @@ def _fields_from_args(args: argparse.Namespace) -> Dict[str, Optional[str]]:
     }
 
 
-def _print_request(payload: dict) -> None:
+def _print_request(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def _decode_and_write(images: List[str], outputs: List[Path], force: bool) -> None:
+def _decode_and_write(images: list[str], outputs: list[Path], force: bool) -> None:
     for idx, image_b64 in enumerate(images):
         if idx >= len(outputs):
             break
@@ -329,7 +332,7 @@ def _derive_downscale_path(path: Path, suffix: str) -> Path:
 
 def _downscale_image_bytes(image_bytes: bytes, *, max_dim: int, output_format: str) -> bytes:
     try:
-        from PIL import Image
+        from PIL import Image  # type: ignore[import-not-found]
     except Exception:
         _die(f"Downscaling requires Pillow. {_dependency_hint('pillow')}")
 
@@ -362,11 +365,11 @@ def _downscale_image_bytes(image_bytes: bytes, *, max_dim: int, output_format: s
 
 
 def _decode_write_and_downscale(
-    images: List[str],
-    outputs: List[Path],
+    images: list[str],
+    outputs: list[Path],
     *,
     force: bool,
-    downscale_max_dim: Optional[int],
+    downscale_max_dim: int | None,
     downscale_suffix: str,
     output_format: str,
 ) -> None:
@@ -389,12 +392,16 @@ def _decode_write_and_downscale(
         if derived.exists() and not force:
             _die(f"Output already exists: {derived} (use --force to overwrite)")
         derived.parent.mkdir(parents=True, exist_ok=True)
-        resized = _downscale_image_bytes(raw, max_dim=downscale_max_dim, output_format=output_format)
+        resized = _downscale_image_bytes(
+            raw,
+            max_dim=downscale_max_dim,
+            output_format=output_format,
+        )
         derived.write_bytes(resized)
         print(f"Wrote {derived}")
 
 
-def _create_client():
+def _create_client() -> Any:
     try:
         from openai import OpenAI
     except ImportError:
@@ -402,7 +409,7 @@ def _create_client():
     return OpenAI()
 
 
-def _create_async_client():
+def _create_async_client() -> Any:
     try:
         from openai import AsyncOpenAI
     except ImportError:
@@ -426,7 +433,7 @@ def _slugify(value: str) -> str:
     return value[:60] if value else "job"
 
 
-def _normalize_job(job: Any, idx: int) -> Dict[str, Any]:
+def _normalize_job(job: Any, idx: int) -> dict[str, Any]:
     if isinstance(job, str):
         prompt = job.strip()
         if not prompt:
@@ -440,11 +447,11 @@ def _normalize_job(job: Any, idx: int) -> Dict[str, Any]:
     return {}  # unreachable
 
 
-def _read_jobs_jsonl(path: str) -> List[Dict[str, Any]]:
+def _read_jobs_jsonl(path: str) -> list[dict[str, Any]]:
     p = Path(path)
     if not p.exists():
         _die(f"Input file not found: {p}")
-    jobs: List[Dict[str, Any]] = []
+    jobs: list[dict[str, Any]] = []
     for line_no, raw in enumerate(p.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -465,7 +472,7 @@ def _read_jobs_jsonl(path: str) -> List[Dict[str, Any]]:
     return jobs
 
 
-def _merge_non_null(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_non_null(dst: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
     merged = dict(dst)
     for k, v in src.items():
         if v is not None:
@@ -480,8 +487,8 @@ def _job_output_paths(
     idx: int,
     prompt: str,
     n: int,
-    explicit_out: Optional[str],
-) -> List[Path]:
+    explicit_out: str | None,
+) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = "." + output_format
 
@@ -491,7 +498,8 @@ def _job_output_paths(
             base = base.with_suffix(ext)
         elif base.suffix.lstrip(".").lower() != output_format:
             _warn(
-                f"Job {idx}: output extension {base.suffix} does not match output-format {output_format}."
+                f"Job {idx}: output extension {base.suffix} "
+                f"does not match output-format {output_format}."
             )
         base = out_dir / base.name
     else:
@@ -506,7 +514,7 @@ def _job_output_paths(
     ]
 
 
-def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
+def _extract_retry_after_seconds(exc: Exception) -> float | None:
     # Best-effort: openai SDK errors vary by version. Prefer a conservative fallback.
     for attr in ("retry_after", "retry_after_seconds"):
         val = getattr(exc, attr, None)
@@ -542,12 +550,12 @@ def _is_transient_error(exc: Exception) -> bool:
 
 async def _generate_one_with_retries(
     client: Any,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
     attempts: int,
     job_label: str,
 ) -> Any:
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             return await client.images.generate(**payload)
@@ -561,7 +569,8 @@ async def _generate_one_with_retries(
             if sleep_s is None:
                 sleep_s = min(60.0, 2.0**attempt)
             print(
-                f"{job_label} attempt {attempt}/{attempts} failed ({exc.__class__.__name__}); retrying in {sleep_s:.1f}s",
+                f"{job_label} attempt {attempt}/{attempts} failed "
+                f"({exc.__class__.__name__}); retrying in {sleep_s:.1f}s",
                 file=sys.stderr,
             )
             await asyncio.sleep(sleep_s)
@@ -632,7 +641,7 @@ async def _run_generate_batch(args: argparse.Namespace) -> int:
 
     any_failed = False
 
-    async def run_job(i: int, job: Dict[str, Any]) -> Tuple[int, Optional[str]]:
+    async def run_job(i: int, job: dict[str, Any]) -> tuple[int, str | None]:
         nonlocal any_failed
         prompt = str(job["prompt"]).strip()
         job_label = f"[job {i}/{len(jobs)}]"
@@ -843,34 +852,44 @@ def _edit(args: argparse.Namespace) -> None:
     )
 
 
-def _open_files(paths: List[Path]):
+def _open_files(paths: list[Path]) -> _FileBundle:
     return _FileBundle(paths)
 
 
-def _open_mask(mask_path: Optional[Path]):
+def _open_mask(mask_path: Path | None) -> _NullContext | _SingleFile:
     if mask_path is None:
         return _NullContext()
     return _SingleFile(mask_path)
 
 
 class _NullContext:
-    def __enter__(self):
+    def __enter__(self) -> None:
         return None
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         return False
 
 
 class _SingleFile:
     def __init__(self, path: Path):
         self._path = path
-        self._handle = None
+        self._handle: BinaryIO | None = None
 
-    def __enter__(self):
+    def __enter__(self) -> BinaryIO:
         self._handle = self._path.open("rb")
         return self._handle
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         if self._handle:
             try:
                 self._handle.close()
@@ -880,15 +899,20 @@ class _SingleFile:
 
 
 class _FileBundle:
-    def __init__(self, paths: List[Path]):
+    def __init__(self, paths: list[Path]):
         self._paths = paths
-        self._handles: List[object] = []
+        self._handles: list[BinaryIO] = []
 
-    def __enter__(self):
+    def __enter__(self) -> list[BinaryIO]:
         self._handles = [p.open("rb") for p in self._paths]
         return self._handles
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         for handle in self._handles:
             try:
                 handle.close()
@@ -949,7 +973,11 @@ def main() -> int:
         help="Generate multiple prompts concurrently (JSONL input)",
     )
     _add_shared_args(batch_parser)
-    batch_parser.add_argument("--input", required=True, help="Path to JSONL file (one job per line)")
+    batch_parser.add_argument(
+        "--input",
+        required=True,
+        help="Path to JSONL file (one job per line)",
+    )
     batch_parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     batch_parser.add_argument("--max-attempts", type=int, default=3)
     batch_parser.add_argument("--fail-fast", action="store_true")

@@ -24,7 +24,7 @@ import argparse
 import re
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 V_NS = "urn:schemas-microsoft-com:vml"
@@ -34,7 +34,9 @@ NS = {"w": W_NS, "v": V_NS, "r": R_NS}
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _read_xml(z: zipfile.ZipFile, name: str) -> etree._Element:
@@ -49,8 +51,8 @@ def _find_doc_parts(z: zipfile.ZipFile) -> list[str]:
     return sorted(set(parts))
 
 
-def _scan_part(root: etree._Element) -> list[dict]:
-    hits = []
+def _scan_part(root: etree._Element) -> list[dict[str, str]]:
+    hits: list[dict[str, str]] = []
 
     # VML watermark-like textpath
     for tp in root.xpath(".//v:textpath", namespaces=NS):

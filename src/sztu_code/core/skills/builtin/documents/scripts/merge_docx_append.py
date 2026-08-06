@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -36,7 +36,9 @@ def _read_xml(z: zipfile.ZipFile, name: str) -> etree._Element:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _has_drawings(body: etree._Element) -> bool:

@@ -1,13 +1,21 @@
 # 字符串替换编辑工具 —— 类似 Claude Code 的 edit_file
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
-from sztu_code.core.tools.base import BaseTool, ToolPermission, ToolResult
+from sztu_code.core.tools.base import (
+    _PERMISSION_GRANT_KEY,
+    _PERMISSION_GRANT_TOKEN,
+    BaseTool,
+    ToolPermission,
+    ToolResult,
+)
 from sztu_code.core.tools.workspace import resolve_workspace_path
+from sztu_code.core.workflow.scope import ScopeAuditLog, write_is_outside_scope
 
 _MAX_BYTES = 1 * 1024 * 1024  # 1 MB
 
@@ -59,8 +67,22 @@ class EditFileTool(BaseTool):
     }
 
     # 绑定可选工作区根目录，使编辑不会落到 daemon 启动目录之外
-    def __init__(self, workspace_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        workspace_root: Path | None = None,
+        allowed_paths: Sequence[str] | None = None,
+        scope_audit: ScopeAuditLog | None = None,
+    ) -> None:
         self._workspace_root = workspace_root
+        self._allowed_paths = tuple(allowed_paths) if allowed_paths is not None else None
+        self._scope_audit = scope_audit
+
+    # 范围内编辑使用普通写权限，越界编辑升级为 full-access 审批
+    def classify_permission(self, params: dict[str, object]) -> ToolPermission:
+        path = str(params.get("path", ""))
+        if write_is_outside_scope(path, self._allowed_paths):
+            return ToolPermission.DANGER_FULL_ACCESS
+        return ToolPermission.WORKSPACE_WRITE
 
     # 读取文件 → 精确替换 → 写回；old_string 必须唯一（除非 replace_all）
     async def invoke(self, params: dict[str, object]) -> ToolResult:
@@ -68,6 +90,10 @@ class EditFileTool(BaseTool):
 
         if ".." in Path(p.path).parts:
             raise PermissionError(f"path traversal not allowed: {p.path}")
+        outside_scope = write_is_outside_scope(p.path, self._allowed_paths)
+        grant = params.get(_PERMISSION_GRANT_KEY)
+        if outside_scope and grant is not _PERMISSION_GRANT_TOKEN:
+            raise PermissionError(f"edit outside assigned scope requires approval: {p.path}")
 
         if p.old_string == p.new_string:
             return ToolResult(
@@ -120,5 +146,7 @@ class EditFileTool(BaseTool):
             result = original.replace(p.old_string, p.new_string, 1)
 
         path.write_text(result, encoding="utf-8")
+        if outside_scope and self._scope_audit is not None:
+            self._scope_audit.record(p.path)
         replaced = count if p.replace_all else 1
         return ToolResult(content=f"replaced {replaced} occurrence(s) in {p.path}")

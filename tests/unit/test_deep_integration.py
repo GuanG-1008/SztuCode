@@ -230,7 +230,7 @@ class TestStepLimit:
         assert getattr(finished[1], "step", 0) == 2
 
     # 功能：验证 max_steps 耗尽后循环不再调用 LLM
-    # 设计：provider 包含 10 个响应但 max_steps=3，断言 call_count == 3
+    # 设计：使用始终成功的 echo 隔离步数限制，并关闭额外结语回合后断言恰好调用 3 次
     async def test_max_steps_stops_calling_llm(self) -> None:
         tc = _tc("echo", uid="t0")
         provider = _MockProvider(

@@ -41,3 +41,4 @@ Architecture Decision Record（ADR）用于记录难以从代码本身还原的�
 | ADR | 状态 | 决策 |
 | --- | --- | --- |
 | [ADR-0001](0001-daemon-client-separation.md) | Accepted | daemon 与客户端采用分离架构 |
+| [ADR-0002](0002-structured-multi-agent-workflow.md) | Proposed | 结构化多智能体 DAG、交接与范围升级 |

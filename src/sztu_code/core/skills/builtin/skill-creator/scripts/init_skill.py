@@ -3,7 +3,8 @@
 Skill Initializer - Creates a new skill from template
 
 Usage:
-    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples] [--interface key=value]
+    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets]
+        [--examples] [--interface key=value]
 
 Examples:
     init_skill.py my-new-skill --path skills/public
@@ -25,7 +26,9 @@ ALLOWED_RESOURCES = {"scripts", "references", "assets"}
 
 SKILL_TEMPLATE = """---
 name: {skill_name}
-description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
+description: [TODO: Complete and informative explanation of what the skill does and when
+  to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks
+  that trigger it.]
 ---
 
 # {skill_title}
@@ -58,7 +61,8 @@ description: [TODO: Complete and informative explanation of what the skill does 
 - Example: Product Management with "Core Capabilities" -> numbered capability list
 - Structure: ## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start
+with task-based, add workflow for complex operations).
 
 Delete this entire "Structuring This Skill" section when done - it's just guidance.]
 
@@ -72,28 +76,35 @@ Delete this entire "Structuring This Skill" section when done - it's just guidan
 
 ## Resources (optional)
 
-Create only the resource directories this skill actually needs. Delete this section if no resources are required.
+Create only the resource directories this skill actually needs. Delete this section if
+no resources are required.
 
 ### scripts/
 Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
 
 **Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
+- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF
+  manipulation
 - DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
 
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
+**Appropriate for:** Python scripts, shell scripts, or any executable code that performs
+automation, data processing, or specific operations.
 
-**Note:** Scripts may be executed without loading into context, but can still be read by Codex for patching or environment adjustments.
+**Note:** Scripts may be executed without loading into context, but can still be read by
+Codex for patching or environment adjustments.
 
 ### references/
-Documentation and reference material intended to be loaded into context to inform Codex's process and thinking.
+Documentation and reference material intended to be loaded into context to inform
+Codex's process and thinking.
 
 **Examples from other skills:**
 - Product management: `communication.md`, `context_building.md` - detailed workflow guides
 - BigQuery: API reference documentation and query examples
 - Finance: Schema documentation, company policies
 
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Codex should reference while working.
+**Appropriate for:** In-depth documentation, API references, database schemas,
+comprehensive guides, or any detailed information that Codex should reference while
+working.
 
 ### assets/
 Files not intended to be loaded into context, but rather used within the output Codex produces.
@@ -103,7 +114,8 @@ Files not intended to be loaded into context, but rather used within the output 
 - Frontend builder: HTML/React boilerplate project directories
 - Typography: Font files (.ttf, .woff2)
 
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
+**Appropriate for:** Templates, boilerplate code, document templates, images, icons,
+fonts, or any files meant to be copied or used in the final output.
 
 ---
 
@@ -194,7 +206,8 @@ Note: This is a text placeholder. Actual assets can be any file type.
 """
 
 
-def normalize_skill_name(skill_name):
+# 将技能名规范化为小写连字符形式
+def normalize_skill_name(skill_name: str) -> str:
     """Normalize a skill name to lowercase hyphen-case."""
     normalized = skill_name.strip().lower()
     normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
@@ -203,12 +216,14 @@ def normalize_skill_name(skill_name):
     return normalized
 
 
-def title_case_skill_name(skill_name):
+# 将连字符技能名转换为标题形式
+def title_case_skill_name(skill_name: str) -> str:
     """Convert hyphenated skill name to Title Case for display."""
     return " ".join(word.capitalize() for word in skill_name.split("-"))
 
 
-def parse_resources(raw_resources):
+# 解析、校验并去重资源目录列表
+def parse_resources(raw_resources: str) -> list[str]:
     if not raw_resources:
         return []
     resources = [item.strip() for item in raw_resources.split(",") if item.strip()]
@@ -218,8 +233,8 @@ def parse_resources(raw_resources):
         print(f"[ERROR] Unknown resource type(s): {', '.join(invalid)}")
         print(f"   Allowed: {allowed}")
         sys.exit(1)
-    deduped = []
-    seen = set()
+    deduped: list[str] = []
+    seen: set[str] = set()
     for resource in resources:
         if resource not in seen:
             deduped.append(resource)
@@ -227,7 +242,14 @@ def parse_resources(raw_resources):
     return deduped
 
 
-def create_resource_dirs(skill_dir, skill_name, skill_title, resources, include_examples):
+# 创建请求的技能资源目录与可选示例文件
+def create_resource_dirs(
+    skill_dir: Path,
+    skill_name: str,
+    skill_title: str,
+    resources: list[str],
+    include_examples: bool,
+) -> None:
     for resource in resources:
         resource_dir = skill_dir / resource
         resource_dir.mkdir(exist_ok=True)
@@ -255,7 +277,14 @@ def create_resource_dirs(skill_dir, skill_name, skill_title, resources, include_
                 print("[OK] Created assets/")
 
 
-def init_skill(skill_name, path, resources, include_examples, interface_overrides):
+# 初始化技能目录、元数据与所选资源
+def init_skill(
+    skill_name: str,
+    path: str | Path,
+    resources: list[str],
+    include_examples: bool,
+    interface_overrides: list[str],
+) -> Path | None:
     """
     Initialize a new skill directory with template SKILL.md.
 
@@ -327,13 +356,15 @@ def init_skill(skill_name, path, resources, include_examples, interface_override
     print("3. Update agents/openai.yaml if the UI metadata should differ")
     print("4. Run the validator when ready to check the skill structure")
     print(
-        "5. Forward-test complex skills with realistic user requests to ensure they work as intended"
+        "5. Forward-test complex skills with realistic user requests to ensure they "
+        "work as intended"
     )
 
     return skill_dir
 
 
-def main():
+# 解析命令行参数并初始化技能目录
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create a new skill directory with a SKILL.md template.",
     )

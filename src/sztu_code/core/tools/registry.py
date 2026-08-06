@@ -1,6 +1,7 @@
 # 工具注册表 —— 管理所有工具的注册、别名解析和 schema 导出
 from __future__ import annotations
 
+from collections.abc import Iterator
 from copy import deepcopy
 
 from sztu_code.core.tools.base import BaseTool, ToolPermission
@@ -87,13 +88,19 @@ class ToolRegistry:
         schemas: list[dict[str, object]] = []
         for tool in self._tools.values():
             input_schema = deepcopy(tool.input_schema)
-            properties = dict(input_schema.get("properties", {}))
+            raw_properties = input_schema.get("properties", {})
+            properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
             properties["description"] = {
                 "type": "string",
                 "description": "用简短中文说明本次调用的具体目的，作为执行时间线标题。",
             }
             input_schema["properties"] = properties
-            required = [str(item) for item in input_schema.get("required", [])]
+            raw_required = input_schema.get("required", [])
+            required = (
+                [str(item) for item in raw_required]
+                if isinstance(raw_required, list)
+                else []
+            )
             if "description" not in required:
                 required.append("description")
             input_schema["required"] = required
@@ -105,7 +112,7 @@ class ToolRegistry:
         return schemas
 
     # 返回所有已注册工具的迭代器
-    def __iter__(self):
+    def __iter__(self) -> Iterator[BaseTool]:
         return iter(self._tools.values())
 
     def __len__(self) -> int:

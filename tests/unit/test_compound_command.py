@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from sztu_code.core.permissions.policy import (
     PermissionDecision,
     ToolPolicy,

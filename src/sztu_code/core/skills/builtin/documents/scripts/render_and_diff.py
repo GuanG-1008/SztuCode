@@ -36,8 +36,8 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-from lxml import etree
-from PIL import Image, ImageChops
+from lxml import etree  # type: ignore[import-untyped]
+from PIL import Image, ImageChops  # type: ignore[import-not-found]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}

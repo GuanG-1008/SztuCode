@@ -50,7 +50,7 @@ def _spawn_daemon() -> None:
     config = get_config()
     log_path = Path(config.logging.file).expanduser()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    flags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) if os.name == "nt" else 0
     with open(log_path, "ab") as log_file, open(os.devnull, "rb") as devnull:
         subprocess.Popen(
             [sys.executable, "-m", "sztu_code.core.app"],

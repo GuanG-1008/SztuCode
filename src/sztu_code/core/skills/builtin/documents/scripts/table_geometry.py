@@ -16,14 +16,15 @@ from __future__ import annotations
 
 import argparse
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any
 from zipfile import ZipFile
 
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Twips
+from docx.enum.table import WD_TABLE_ALIGNMENT  # type: ignore[import-not-found]
+from docx.oxml import OxmlElement  # type: ignore[import-not-found]
+from docx.oxml.ns import qn  # type: ignore[import-not-found]
+from docx.shared import Twips  # type: ignore[import-not-found]
 
 DEFAULT_CONTENT_WIDTH_DXA = 9360
 DEFAULT_CELL_MARGINS_DXA = {"top": 80, "bottom": 80, "start": 120, "end": 120}
@@ -34,7 +35,7 @@ DEFAULT_TABLE_INDENT_DXA = DEFAULT_CELL_MARGINS_DXA["start"]
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
-def length_to_dxa(length) -> int:
+def length_to_dxa(length: Any) -> int:
     """Return a python-docx Length in DXA/twips."""
 
     try:
@@ -43,7 +44,7 @@ def length_to_dxa(length) -> int:
         return int(round(float(length)))
 
 
-def section_content_width_dxa(section) -> int:
+def section_content_width_dxa(section: Any) -> int:
     """Compute usable section width from page width minus side margins."""
 
     return (
@@ -87,7 +88,7 @@ def exact_column_widths(
     return widths
 
 
-def _ensure_child(parent, tag: str):
+def _ensure_child(parent: Any, tag: str) -> Any:
     child = parent.find(qn(tag))
     if child is None:
         child = OxmlElement(tag)
@@ -95,13 +96,13 @@ def _ensure_child(parent, tag: str):
     return child
 
 
-def _set_width(parent, tag: str, width_dxa: int) -> None:
+def _set_width(parent: Any, tag: str, width_dxa: int) -> None:
     width = _ensure_child(parent, tag)
     width.set(qn("w:type"), "dxa")
     width.set(qn("w:w"), str(int(width_dxa)))
 
 
-def _set_cell_margins(cell, margins_dxa: dict[str, int]) -> None:
+def _set_cell_margins(cell: Any, margins_dxa: dict[str, int]) -> None:
     tc_pr = cell._tc.get_or_add_tcPr()
     tc_mar = _ensure_child(tc_pr, "w:tcMar")
     for side in ("top", "bottom", "start", "end"):
@@ -110,7 +111,7 @@ def _set_cell_margins(cell, margins_dxa: dict[str, int]) -> None:
         margin.set(qn("w:type"), "dxa")
 
 
-def _replace_table_grid(table, column_widths_dxa: Sequence[int]) -> None:
+def _replace_table_grid(table: Any, column_widths_dxa: Sequence[int]) -> None:
     tbl = table._tbl
     grid = tbl.tblGrid
     for child in list(grid):
@@ -122,7 +123,7 @@ def _replace_table_grid(table, column_widths_dxa: Sequence[int]) -> None:
 
 
 def apply_table_geometry(
-    table,
+    table: Any,
     column_widths_dxa: Sequence[int],
     *,
     table_width_dxa: int | None = None,
@@ -197,7 +198,11 @@ def audit_docx_tables(path: Path) -> int:
     """Print table width/indent/grid/cell-width checks. Returns issue count."""
 
     ns = {"w": W_NS}
-    attr = lambda name: f"{{{W_NS}}}{name}"
+
+    # 构造 WordprocessingML 属性的限定名称
+    def attr(name: str) -> str:
+        return f"{{{W_NS}}}{name}"
+
     issues = 0
 
     with ZipFile(path) as zf:

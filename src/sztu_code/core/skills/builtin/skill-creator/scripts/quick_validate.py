@@ -7,12 +7,13 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 MAX_SKILL_NAME_LENGTH = 64
 
 
-def validate_skill(skill_path):
+# 校验技能目录及 SKILL.md frontmatter 的基本约束
+def validate_skill(skill_path: str | Path) -> tuple[bool, str]:
     """Basic validation of a skill"""
     skill_path = Path(skill_path)
 
@@ -45,7 +46,8 @@ def validate_skill(skill_path):
         unexpected = ", ".join(sorted(unexpected_keys))
         return (
             False,
-            f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}",
+            f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. "
+            f"Allowed properties are: {allowed}",
         )
 
     if "name" not in frontmatter:
@@ -61,7 +63,8 @@ def validate_skill(skill_path):
         if not re.match(r"^[a-z0-9-]+$", name):
             return (
                 False,
-                f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)",
+                f"Name '{name}' should be hyphen-case "
+                "(lowercase letters, digits, and hyphens only)",
             )
         if name.startswith("-") or name.endswith("-") or "--" in name:
             return (
@@ -85,7 +88,8 @@ def validate_skill(skill_path):
         if len(description) > 1024:
             return (
                 False,
-                f"Description is too long ({len(description)} characters). Maximum is 1024 characters.",
+                f"Description is too long ({len(description)} characters). "
+                "Maximum is 1024 characters.",
             )
 
     return True, "Skill is valid!"

@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
-from docx import Document
+from docx import Document  # type: ignore[import-not-found]
 
 EMU_PER_INCH = 914400
 
 
-def _inches(x) -> float:
+def _inches(x: Any) -> float:
     # python-docx uses Length objects with .inches, but be defensive.
     try:
         return float(x.inches)

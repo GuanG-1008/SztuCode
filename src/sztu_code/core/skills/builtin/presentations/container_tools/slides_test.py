@@ -3,21 +3,22 @@
 import argparse
 import sys
 import tempfile
+from collections.abc import Sequence
 from os.path import abspath, dirname, expanduser, join
-from typing import Sequence, cast
+from typing import cast
 
-import numpy as np
+import numpy as np  # type: ignore[import-not-found]
+from PIL import Image  # type: ignore[import-not-found]
+from pptx import Presentation  # type: ignore[import-not-found]
+from pptx.dml.color import RGBColor  # type: ignore[import-not-found]
+from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE  # type: ignore[import-not-found]
+from pptx.util import Emu  # type: ignore[import-not-found]
 
 SCRIPT_DIR = dirname(__file__)
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import render_slides  # type: ignore
-from PIL import Image
-from pptx import Presentation
-from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
-from pptx.util import Emu
+import render_slides  # noqa: E402
 
 # Configuration specific to overflow checking
 PAD_PX: int = 100  # fixed padding on every side in pixels
@@ -116,7 +117,7 @@ def inspect_images(
                 max_mismatch = 0.02
             else:
                 max_mismatch = 0.03
-            return mismatch_fraction <= max_mismatch
+            return bool(mismatch_fraction <= max_mismatch)
 
         if not (
             _is_clean(left_margin)

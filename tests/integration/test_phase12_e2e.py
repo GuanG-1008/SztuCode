@@ -13,10 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from sztu_code.core.compact.offload import OffloadManager, OffloadRecord
 from sztu_code.core.compact.canvas import TaskCanvas
+from sztu_code.core.compact.offload import OffloadManager
 from sztu_code.core.config import SztuConfig
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus
@@ -24,7 +22,6 @@ from sztu_code.core.llm.types import LlmResponse, ToolCallBlock, UsageStats
 from sztu_code.core.runner import AgentRunner
 from sztu_code.core.session.model import Session
 from sztu_code.core.session.store import SessionStore
-
 
 # ============================================================
 # 场景模拟：Mock LLM 驱动一个 4 步 coding 任务

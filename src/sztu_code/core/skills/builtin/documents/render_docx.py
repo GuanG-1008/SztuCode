@@ -7,12 +7,13 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from os import makedirs, replace
 from os.path import abspath, basename, exists, expanduser, join, splitext
-from typing import Sequence, cast
+from typing import cast
 from zipfile import ZipFile
 
-from pdf2image import convert_from_path, pdfinfo_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path  # type: ignore[import-not-found]
 
 TWIPS_PER_INCH: int = 1440
 
@@ -125,7 +126,7 @@ def calc_dpi_via_ooxml_docx(input_path: str, max_w_px: int, max_h_px: int) -> in
     return round(min(max_w_px / width_in, max_h_px / height_in))
 
 
-def _build_lo_env(user_profile: str) -> dict:
+def _build_lo_env(user_profile: str) -> dict[str, str]:
     """Build a container-safe env for LibreOffice.
 
     LibreOffice sometimes tries to write configuration/cache under a default,
@@ -142,14 +143,15 @@ def _build_lo_env(user_profile: str) -> dict:
     return env
 
 
-def _run_cmd(cmd: list[str], env: dict, verbose: bool) -> subprocess.CompletedProcess:
+def _run_cmd(
+    cmd: list[str], env: dict[str, str], verbose: bool
+) -> subprocess.CompletedProcess[str]:
     """Run a command and capture output for debuggability."""
 
     proc = subprocess.run(
         cmd,
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         env=env,
     )
@@ -182,7 +184,11 @@ def convert_to_pdf(
     env = _build_lo_env(user_profile)
     logs: list[str] = []
 
-    def _log_result(label: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:
+    def _log_result(
+        label: str,
+        cmd: list[str],
+        proc: subprocess.CompletedProcess[str],
+    ) -> None:
         logs.append(f"--- {label} ---")
         logs.append("CMD: " + " ".join(cmd))
         logs.append(f"EXIT: {proc.returncode}")
@@ -354,7 +360,8 @@ def rasterize(
                 ),
             )
 
-    # Rename convert_from_path's output format f'page{thread_id:04d}-{page_num:02d}.png' to 'page-<num>.png'
+    # Rename convert_from_path's output format
+    # f'page{thread_id:04d}-{page_num:02d}.png' to 'page-<num>.png'.
     pages: list[tuple[int, str]] = []
     for src_path in paths_raw:
         base = splitext(basename(src_path))[0]

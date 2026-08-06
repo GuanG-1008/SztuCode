@@ -8,6 +8,9 @@ from typing import ClassVar
 
 from pydantic import BaseModel
 
+_PERMISSION_GRANT_KEY = "__sztu_permission_grant__"
+_PERMISSION_GRANT_TOKEN = object()
+
 
 class ToolPermission(StrEnum):
     """工具权限级别，与 PermissionMode 对应"""
@@ -22,6 +25,8 @@ class ToolResult:
     is_error: bool = False
     # "runtime_error" | "timeout" | "schema_error" | "permission_denied"
     error_type: str | None = None
+    # 供内部组合工具读取的结构化执行元数据，不直接展示给模型
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 class BaseTool(ABC):

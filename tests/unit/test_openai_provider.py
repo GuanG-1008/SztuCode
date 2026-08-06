@@ -10,6 +10,7 @@ from sztu_code.core.llm.openai_provider import (
     OpenAIProvider,
     _anth_to_openai_messages,
     _anth_to_openai_tools,
+    _context_window,
     _map_finish_reason,
 )
 from sztu_code.core.llm.types import LlmResponse
@@ -473,6 +474,13 @@ async def test_empty_stream() -> None:
     tokens = [e for e in events if e.type == "llm.token"]  # type: ignore[attr-defined]
     assert tokens == []
     assert result.text == ""
+
+
+# 功能：验证 DeepSeek V4 Flash 使用官方 1M 上下文长度计算预算占比
+# 设计：直接检查模型前缀映射，同时保留显式 override 优先级以防配置被静默忽略
+def test_deepseek_v4_flash_context_window() -> None:
+    assert _context_window("deepseek-v4-flash") == 1_000_000
+    assert _context_window("deepseek-v4-flash", 262_144) == 262_144
 
 
 # --- error handling tests ----------------------------------------------------

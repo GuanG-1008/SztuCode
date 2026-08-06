@@ -33,7 +33,8 @@ class LoggingConfig:
 
 @dataclass
 class AgentConfig:
-    max_steps: int = _DEFAULT_MAX_STEPS  # 0 = 不限步数；预算由 budget.max_tokens / max_wall_clock_s 兜底
+    # 0 = 不限步数；预算由 budget.max_tokens / max_wall_clock_s 兜底
+    max_steps: int = _DEFAULT_MAX_STEPS
     max_budget_usd: float = 0.0  # 0 = 不限制 USD 成本上限
     repeated_error_threshold: int = 3  # 同一工具同类错误连续 N 次触发熔断
     # max_steps 到达前给一次总结回合，避免裸失败
@@ -52,6 +53,16 @@ class BudgetConfig:
     max_tokens: int = 0
     # 本 run 累计墙钟秒数上限；0=不限
     max_wall_clock_s: int = 0
+
+
+@dataclass
+class WorkflowConfig:
+    # 同一工作流最多并行执行的角色任务数
+    max_concurrency: int = 4
+    # 任务图允许的最大嵌套深度
+    max_depth: int = 2
+    # 单个角色任务失败后的最大重试次数
+    max_retries: int = 1
 
 
 @dataclass
@@ -124,6 +135,7 @@ class SztuConfig:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     offload: OffloadConfig = field(default_factory=OffloadConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+    workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
 
 
@@ -261,6 +273,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         "compaction",
         "offload",
         "budget",
+        "workflow",
         "mcp",
     }
     if unknown:
@@ -311,7 +324,10 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         if "max_steps" in agent:
             val = agent["max_steps"]
             if not isinstance(val, int) or val < 0:
-                raise SystemExit("Config error: agent.max_steps must be a non-negative integer (0 = unlimited)")
+                raise SystemExit(
+                    "Config error: agent.max_steps must be a non-negative integer "
+                    "(0 = unlimited)"
+                )
             config.agent.max_steps = val
         if "wrap_up_on_max_steps" in agent:
             val = agent["wrap_up_on_max_steps"]
@@ -343,6 +359,27 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                 if not isinstance(val, int) or val < 0:
                     raise SystemExit(f"Config error: budget.{_key} must be a non-negative integer")
                 setattr(config.budget, _key, val)
+
+    if "workflow" in data:
+        workflow = data["workflow"]
+        if not isinstance(workflow, dict):
+            raise SystemExit("Config error: [workflow] must be a table")
+        allowed_workflow = {"max_concurrency", "max_depth", "max_retries"}
+        unknown_workflow = set(workflow.keys()) - allowed_workflow
+        if unknown_workflow:
+            raise SystemExit(
+                f"Unknown [workflow] keys: {', '.join(sorted(unknown_workflow))}"
+            )
+        for _key in allowed_workflow:
+            if _key not in workflow:
+                continue
+            val = workflow[_key]
+            minimum = 1 if _key == "max_concurrency" else 0
+            if not isinstance(val, int) or val < minimum:
+                raise SystemExit(
+                    f"Config error: workflow.{_key} must be an integer >= {minimum}"
+                )
+            setattr(config.workflow, _key, val)
 
     if "llm" in data:
         llm = data["llm"]
@@ -602,6 +639,25 @@ def _apply_env(config: SztuConfig) -> None:
                 raise SystemExit(
                     f"Config error: {_env} must be an integer, got: {_str!r}"
                 )
+
+    # --- 多智能体工作流环境变量 ---
+    for _env, _attr, _minimum in (
+        ("SZTU_WORKFLOW_MAX_CONCURRENCY", "max_concurrency", 1),
+        ("SZTU_WORKFLOW_MAX_DEPTH", "max_depth", 0),
+        ("SZTU_WORKFLOW_MAX_RETRIES", "max_retries", 0),
+    ):
+        _str = os.environ.get(_env)
+        if _str is None:
+            continue
+        try:
+            val = int(_str)
+        except ValueError:
+            raise SystemExit(f"Config error: {_env} must be an integer, got: {_str!r}")
+        if val < _minimum:
+            raise SystemExit(
+                f"Config error: {_env} must be >= {_minimum}, got: {_str!r}"
+            )
+        setattr(config.workflow, _attr, val)
 
     llm_provider = os.environ.get("SZTU_LLM_PROVIDER")
     if llm_provider is not None:

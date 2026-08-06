@@ -23,6 +23,7 @@ from sztu_code.core.llm.types import LlmResponse, ToolCallBlock, UsageStats
 _DEFAULT_CONTEXT_WINDOW = 128_000
 
 _KNOWN_CONTEXT_WINDOWS: list[tuple[str, int]] = [
+    ("deepseek-v4-", 1_000_000),
     ("gpt-4.1-mini", 1_000_000),
     ("gpt-4.1-nano", 1_000_000),
     ("gpt-4.1", 1_000_000),

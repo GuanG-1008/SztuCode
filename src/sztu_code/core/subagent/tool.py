@@ -32,6 +32,7 @@ from sztu_code.core.tools.builtin.task_list import TaskListTool
 from sztu_code.core.tools.builtin.task_update import TaskUpdateTool
 from sztu_code.core.tools.builtin.write_file import WriteFileTool
 from sztu_code.core.tools.registry import ToolRegistry
+from sztu_code.core.workflow.scope import ScopeAuditLog
 
 if TYPE_CHECKING:
     from sztu_code.core.llm.base import LLMProvider
@@ -55,6 +56,12 @@ class SpawnAgentParams(BaseModel):
     run_in_background: bool = False
     subagent_type: str = ""
     skill: str = ""
+    # 以下字段供工作流组合工具设置，不暴露在普通模型工具 schema 中
+    allowed_paths: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    max_tokens: int = 0
+    max_wall_clock_s: int = 0
+    scope_audit: Any = None
 
 
 # 在隔离的冷启动上下文中派生子 agent，支持前台阻塞和后台并行两种模式
@@ -86,7 +93,7 @@ class SpawnAgentTool(BaseTool):
             },
             "subagent_type": {
                 "type": "string",
-                "description": "Agent role profile (coder/explore/plan/planner/executor/reviewer). Leave empty for coder.",  # noqa: E501
+                "description": "Agent role profile (coder/tester/reviewer/planner/explore/plan/executor). Leave empty for coder.",  # noqa: E501
             },
             "skill": {
                 "type": "string",
@@ -118,6 +125,7 @@ class SpawnAgentTool(BaseTool):
         grace_step_on_max_steps: bool = True,
         stuck_max_failures: int = 3,
         stuck_max_total: int = 0,
+        max_depth: int = 2,
     ) -> None:
         self._provider = provider
         self._parent_bus = parent_bus
@@ -137,14 +145,18 @@ class SpawnAgentTool(BaseTool):
         self._grace_step_on_max_steps = grace_step_on_max_steps
         self._stuck_max_failures = stuck_max_failures
         self._stuck_max_total = stuck_max_total
+        self._max_depth = max_depth
 
     # 派生子 agent，前台时阻塞直到完成并返回结果，后台时立即返回 run_id
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         p = SpawnAgentParams.model_validate(params)
 
-        if self._depth >= 2:
+        if self._depth >= self._max_depth:
             return ToolResult(
-                content="Subagent nesting limit (2) reached; cannot spawn further subagents.",
+                content=(
+                    f"Subagent nesting limit ({self._max_depth}) reached; "
+                    "cannot spawn further subagents."
+                ),
                 is_error=True,
                 error_type="runtime_error",
             )
@@ -169,6 +181,13 @@ class SpawnAgentTool(BaseTool):
             if allowed_tools is not None:
                 allowed_tools |= set(skill.allowed_tools)
             skill_prompt = _skill_loader.render_prompt(skill, p.prompt).strip()
+        if p.allowed_tools is not None:
+            workflow_tools = set(p.allowed_tools)
+            allowed_tools = (
+                workflow_tools
+                if allowed_tools is None
+                else allowed_tools & workflow_tools
+            )
         # 子代理继承静态基础规则 + 角色提示 + 技能 + 后台身份段
         from sztu_code.core.prompts.system_prompt import build_static_base
 
@@ -188,8 +207,16 @@ class SpawnAgentTool(BaseTool):
             goal=p.prompt,
             max_steps=child_max_steps,
             system_prompt_override=system_prompt_override,
-            max_tokens=self._budget.max_tokens if self._budget else 0,
-            max_wall_clock_s=self._budget.max_wall_clock_s if self._budget else 0,
+            max_tokens=(
+                p.max_tokens
+                if p.max_tokens > 0
+                else self._budget.max_tokens if self._budget else 0
+            ),
+            max_wall_clock_s=(
+                p.max_wall_clock_s
+                if p.max_wall_clock_s > 0
+                else self._budget.max_wall_clock_s if self._budget else 0
+            ),
         )
 
         child_bus = EventBus()
@@ -215,6 +242,8 @@ class SpawnAgentTool(BaseTool):
             child_context=child_context,
             permission_manager=child_permission_manager,
             child_max_steps=child_max_steps,
+            allowed_paths=p.allowed_paths,
+            scope_audit=p.scope_audit if isinstance(p.scope_audit, ScopeAuditLog) else None,
         )
         # 子 agent 使用独立的 DenialTracker，避免父子 agent 拒绝计数互相干扰
         from sztu_code.core.permissions.denial_tracker import DenialTracker
@@ -260,7 +289,8 @@ class SpawnAgentTool(BaseTool):
                 content=(
                     f"Subagent started in background. run_id={child_run_id}. "
                     f"Use agent_result(run_id='{child_run_id}') to retrieve result."
-                )
+                ),
+                metadata={"run_id": child_run_id, "status": "running"},
             )
 
         async with EventWriter(child_run_path / "events.jsonl") as writer:
@@ -278,7 +308,8 @@ class SpawnAgentTool(BaseTool):
 
         if child_context.status == "success":
             return ToolResult(
-                content=child_context.result or "Subagent completed with no text output."
+                content=child_context.result or "Subagent completed with no text output.",
+                metadata=self._context_metadata(child_context),
             )
         return ToolResult(
             content=(
@@ -287,7 +318,18 @@ class SpawnAgentTool(BaseTool):
             ),
             is_error=True,
             error_type="runtime_error",
+            metadata=self._context_metadata(child_context),
         )
+
+    # 提取子运行 ID、状态、预算用量和耗时，供组合工作流做全局预算核算
+    def _context_metadata(self, context: ExecutionContext) -> dict[str, object]:
+        return {
+            "run_id": context.run_id,
+            "status": context.status,
+            "reason": context.reason or "",
+            "tokens": context.total_tokens(),
+            "elapsed_s": context.elapsed_s(),
+        }
 
     # 后台任务协程：写事件文件，运行 loop，发布完成事件
     async def _run_background(
@@ -321,6 +363,8 @@ class SpawnAgentTool(BaseTool):
         child_context: ExecutionContext | None = None,
         permission_manager: PermissionManager | None = None,
         child_max_steps: int = 0,
+        allowed_paths: list[str] | None = None,
+        scope_audit: ScopeAuditLog | None = None,
     ) -> ToolRegistry:
         from sztu_code.core.task.manager import TaskManager
 
@@ -333,8 +377,8 @@ class SpawnAgentTool(BaseTool):
         _all_tools = [
             ReadFileTool(self._workspace_root),
             BashTool(self._workspace_root),
-            WriteFileTool(self._workspace_root),
-            EditFileTool(self._workspace_root),
+            WriteFileTool(self._workspace_root, allowed_paths, scope_audit),
+            EditFileTool(self._workspace_root, allowed_paths, scope_audit),
             ListDirTool(self._workspace_root),
             GrepSearchTool(self._workspace_root),
             GlobSearchTool(self._workspace_root),
@@ -358,7 +402,7 @@ class SpawnAgentTool(BaseTool):
             if _allowed(note_tool.name):
                 registry.register(note_tool)
 
-        if self._depth < 1:
+        if self._depth + 1 < self._max_depth:
             nested = SpawnAgentTool(
                 provider=self._provider,
                 parent_bus=child_bus,
@@ -378,6 +422,7 @@ class SpawnAgentTool(BaseTool):
                 grace_step_on_max_steps=self._grace_step_on_max_steps,
                 stuck_max_failures=self._stuck_max_failures,
                 stuck_max_total=self._stuck_max_total,
+                max_depth=self._max_depth,
             )
             if _allowed("spawn_agent"):
                 registry.register(nested)

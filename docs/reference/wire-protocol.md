@@ -1332,6 +1332,21 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
           ],
           "default": null,
           "title": "Latest Run Id"
+        },
+        "total_input_tokens": {
+          "default": 0,
+          "title": "Total Input Tokens",
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "default": 0,
+          "title": "Total Output Tokens",
+          "type": "integer"
+        },
+        "total_elapsed_s": {
+          "default": 0.0,
+          "title": "Total Elapsed S",
+          "type": "number"
         }
       },
       "required": [
@@ -1487,6 +1502,21 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
           ],
           "default": null,
           "title": "Latest Run Id"
+        },
+        "total_input_tokens": {
+          "default": 0,
+          "title": "Total Input Tokens",
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "default": 0,
+          "title": "Total Output Tokens",
+          "type": "integer"
+        },
+        "total_elapsed_s": {
+          "default": 0.0,
+          "title": "Total Elapsed S",
+          "type": "number"
         }
       },
       "required": [
@@ -1620,6 +1650,21 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
           ],
           "default": null,
           "title": "Latest Run Id"
+        },
+        "total_input_tokens": {
+          "default": 0,
+          "title": "Total Input Tokens",
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "default": 0,
+          "title": "Total Output Tokens",
+          "type": "integer"
+        },
+        "total_elapsed_s": {
+          "default": 0.0,
+          "title": "Total Elapsed S",
+          "type": "number"
         }
       },
       "required": [
@@ -1759,6 +1804,21 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
           ],
           "default": null,
           "title": "Latest Run Id"
+        },
+        "total_input_tokens": {
+          "default": 0,
+          "title": "Total Input Tokens",
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "default": 0,
+          "title": "Total Output Tokens",
+          "type": "integer"
+        },
+        "total_elapsed_s": {
+          "default": 0.0,
+          "title": "Total Elapsed S",
+          "type": "number"
         }
       },
       "required": [
@@ -1892,6 +1952,21 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
           ],
           "default": null,
           "title": "Latest Run Id"
+        },
+        "total_input_tokens": {
+          "default": 0,
+          "title": "Total Input Tokens",
+          "type": "integer"
+        },
+        "total_output_tokens": {
+          "default": 0,
+          "title": "Total Output Tokens",
+          "type": "integer"
+        },
+        "total_elapsed_s": {
+          "default": 0.0,
+          "title": "Total Elapsed S",
+          "type": "number"
         }
       },
       "required": [
@@ -2036,6 +2111,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | Field | Type | Required |
 |---|---|---|
 | `messages` | `array` | yes |
+| `run_stats` | `object` | no |
 
 ```json
 {
@@ -2047,6 +2123,23 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       },
       "title": "Messages",
       "type": "array"
+    },
+    "run_stats": {
+      "additionalProperties": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "title": "Run Stats",
+      "type": "object"
     }
   },
   "required": [
@@ -2265,6 +2358,9 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `status` | `string` | yes |
 | `reason` | `string | null` | no |
 | `steps` | `integer` | yes |
+| `total_input_tokens` | `integer` | no |
+| `total_output_tokens` | `integer` | no |
+| `elapsed_s` | `number` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -2299,6 +2395,21 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "steps": {
       "title": "Steps",
       "type": "integer"
+    },
+    "total_input_tokens": {
+      "default": 0,
+      "title": "Total Input Tokens",
+      "type": "integer"
+    },
+    "total_output_tokens": {
+      "default": 0,
+      "title": "Total Output Tokens",
+      "type": "integer"
+    },
+    "elapsed_s": {
+      "default": 0.0,
+      "title": "Elapsed S",
+      "type": "number"
     },
     "ts": {
       "title": "Ts",
@@ -3044,6 +3155,599 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "src/example.py"
   ],
   "ts": "2026-05-16T10:00:00.001Z"
+}
+```
+
+## Multi-agent Workflow Events
+
+### WorkflowStartedEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `run_id` | `string` | yes |
+| `workflow_id` | `string` | yes |
+| `goal` | `string` | yes |
+| `planner_summary` | `string` | yes |
+| `tasks` | `array` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "$defs": {
+    "WorkflowTaskSnapshot": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "owner": {
+          "enum": [
+            "planner",
+            "coder",
+            "tester",
+            "reviewer"
+          ],
+          "title": "Owner",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "blocked",
+            "cancelled",
+            "timed_out",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "completion_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Completion Criteria",
+          "type": "array"
+        },
+        "allowed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "attempt": {
+          "default": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "owner",
+        "status",
+        "dependencies",
+        "completion_criteria",
+        "allowed_paths"
+      ],
+      "title": "WorkflowTaskSnapshot",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "workflow.started",
+      "default": "workflow.started",
+      "title": "Type",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "workflow_id": {
+      "title": "Workflow Id",
+      "type": "string"
+    },
+    "goal": {
+      "title": "Goal",
+      "type": "string"
+    },
+    "planner_summary": {
+      "title": "Planner Summary",
+      "type": "string"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/WorkflowTaskSnapshot"
+      },
+      "title": "Tasks",
+      "type": "array"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "workflow_id",
+    "goal",
+    "planner_summary",
+    "tasks",
+    "ts"
+  ],
+  "title": "WorkflowStartedEvent",
+  "type": "object"
+}
+```
+
+### WorkflowTaskUpdatedEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `run_id` | `string` | yes |
+| `workflow_id` | `string` | yes |
+| `task` | `object` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "$defs": {
+    "WorkflowTaskSnapshot": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "owner": {
+          "enum": [
+            "planner",
+            "coder",
+            "tester",
+            "reviewer"
+          ],
+          "title": "Owner",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "blocked",
+            "cancelled",
+            "timed_out",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "completion_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Completion Criteria",
+          "type": "array"
+        },
+        "allowed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "attempt": {
+          "default": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "owner",
+        "status",
+        "dependencies",
+        "completion_criteria",
+        "allowed_paths"
+      ],
+      "title": "WorkflowTaskSnapshot",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "workflow.task_updated",
+      "default": "workflow.task_updated",
+      "title": "Type",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "workflow_id": {
+      "title": "Workflow Id",
+      "type": "string"
+    },
+    "task": {
+      "$ref": "#/$defs/WorkflowTaskSnapshot"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "workflow_id",
+    "task",
+    "ts"
+  ],
+  "title": "WorkflowTaskUpdatedEvent",
+  "type": "object"
+}
+```
+
+### WorkflowHandoffEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `run_id` | `string` | yes |
+| `workflow_id` | `string` | yes |
+| `artifact` | `object` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "$defs": {
+    "WorkflowHandoffSnapshot": {
+      "properties": {
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "planner",
+            "coder",
+            "tester",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "changed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed Paths",
+          "type": "array"
+        },
+        "scope_escalations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scope Escalations",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "output": {
+          "title": "Output",
+          "type": "string"
+        },
+        "conclusion": {
+          "title": "Conclusion",
+          "type": "string"
+        },
+        "diff_summary": {
+          "title": "Diff Summary",
+          "type": "string"
+        },
+        "test_summary": {
+          "title": "Test Summary",
+          "type": "string"
+        },
+        "security_summary": {
+          "title": "Security Summary",
+          "type": "string"
+        },
+        "review_decision": {
+          "anyOf": [
+            {
+              "enum": [
+                "accept",
+                "return"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Review Decision"
+        },
+        "tokens": {
+          "default": 0,
+          "title": "Tokens",
+          "type": "integer"
+        },
+        "elapsed_s": {
+          "default": 0.0,
+          "title": "Elapsed S",
+          "type": "number"
+        },
+        "attempt": {
+          "default": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "child_run_id": {
+          "default": "",
+          "title": "Child Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "role",
+        "status",
+        "summary",
+        "changed_paths",
+        "scope_escalations",
+        "commands",
+        "output",
+        "conclusion",
+        "diff_summary",
+        "test_summary",
+        "security_summary"
+      ],
+      "title": "WorkflowHandoffSnapshot",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "workflow.handoff",
+      "default": "workflow.handoff",
+      "title": "Type",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "workflow_id": {
+      "title": "Workflow Id",
+      "type": "string"
+    },
+    "artifact": {
+      "$ref": "#/$defs/WorkflowHandoffSnapshot"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "workflow_id",
+    "artifact",
+    "ts"
+  ],
+  "title": "WorkflowHandoffEvent",
+  "type": "object"
+}
+```
+
+### WorkflowReviewEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `run_id` | `string` | yes |
+| `workflow_id` | `string` | yes |
+| `task_id` | `string` | yes |
+| `decision` | `string` | yes |
+| `diff_summary` | `string` | yes |
+| `test_summary` | `string` | yes |
+| `security_summary` | `string` | yes |
+| `conclusion` | `string` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "workflow.reviewed",
+      "default": "workflow.reviewed",
+      "title": "Type",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "workflow_id": {
+      "title": "Workflow Id",
+      "type": "string"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "accept",
+        "return"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "diff_summary": {
+      "title": "Diff Summary",
+      "type": "string"
+    },
+    "test_summary": {
+      "title": "Test Summary",
+      "type": "string"
+    },
+    "security_summary": {
+      "title": "Security Summary",
+      "type": "string"
+    },
+    "conclusion": {
+      "title": "Conclusion",
+      "type": "string"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "workflow_id",
+    "task_id",
+    "decision",
+    "diff_summary",
+    "test_summary",
+    "security_summary",
+    "conclusion",
+    "ts"
+  ],
+  "title": "WorkflowReviewEvent",
+  "type": "object"
+}
+```
+
+### WorkflowFinishedEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `run_id` | `string` | yes |
+| `workflow_id` | `string` | yes |
+| `status` | `string` | yes |
+| `reason` | `string` | yes |
+| `total_tokens` | `integer` | yes |
+| `elapsed_s` | `number` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "workflow.finished",
+      "default": "workflow.finished",
+      "title": "Type",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "workflow_id": {
+      "title": "Workflow Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    },
+    "total_tokens": {
+      "title": "Total Tokens",
+      "type": "integer"
+    },
+    "elapsed_s": {
+      "title": "Elapsed S",
+      "type": "number"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "workflow_id",
+    "status",
+    "reason",
+    "total_tokens",
+    "elapsed_s",
+    "ts"
+  ],
+  "title": "WorkflowFinishedEvent",
+  "type": "object"
 }
 ```
 

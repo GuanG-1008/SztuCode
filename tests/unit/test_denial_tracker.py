@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from sztu_code.core.permissions.denial_tracker import DenialTracker
 
-
 # ── record_denial ──────────────────────────────────────────────────────────────
 
 # 功能：验证同工具连续拒绝时计数器递增

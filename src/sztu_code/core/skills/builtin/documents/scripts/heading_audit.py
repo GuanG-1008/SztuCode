@@ -15,8 +15,9 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
-from docx import Document
+from docx import Document  # type: ignore[import-not-found]
 
 
 def _heading_level(style_name: str | None) -> int | None:
@@ -34,7 +35,7 @@ def _heading_level(style_name: str | None) -> int | None:
         return None
 
 
-def _has_numbering(p) -> bool:
+def _has_numbering(p: Any) -> bool:
     # python-docx doesn't expose numbering cleanly; check OOXML
     pPr = p._p.pPr
     if pPr is None:
@@ -95,7 +96,8 @@ def main() -> None:
 
     print("\nREMINDER")
     print(
-        "- TOC relies on Heading styles (Heading 1/2/3...). Avoid manual numbering + direct formatting for headings."
+        "- TOC relies on Heading styles (Heading 1/2/3...). "
+        "Avoid manual numbering + direct formatting for headings."
     )
 
 

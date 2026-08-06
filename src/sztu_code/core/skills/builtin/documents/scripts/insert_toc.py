@@ -25,11 +25,12 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 
-from docx import Document
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from lxml import etree
+from docx import Document  # type: ignore[import-not-found]
+from docx.oxml import OxmlElement  # type: ignore[import-not-found]
+from docx.oxml.ns import qn  # type: ignore[import-not-found]
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -73,12 +74,12 @@ def _set_update_fields_on_open(docx_path: Path) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _clear_paragraph(p) -> None:
+def _clear_paragraph(p: Any) -> None:
     for r in list(p.runs)[::-1]:
         p._p.remove(r._r)
 
 
-def _add_toc_field(paragraph, levels: str = "1-3") -> None:
+def _add_toc_field(paragraph: Any, levels: str = "1-3") -> None:
     """Insert a TOC field into an existing paragraph."""
 
     r = paragraph.add_run()
@@ -87,7 +88,8 @@ def _add_toc_field(paragraph, levels: str = "1-3") -> None:
 
     instr = OxmlElement("w:instrText")
     instr.set(qn("xml:space"), "preserve")
-    # Typical field switches: \o = levels, \h = hyperlinks, \z = hide page numbers in web layout, \u = use applied outline levels
+    # Typical switches: \o = levels, \h = links, \z = no web page numbers,
+    # and \u = applied outline levels.
     instr.text = f' TOC \\o "{levels}" \\h \\z \\u '
 
     fld_sep = OxmlElement("w:fldChar")

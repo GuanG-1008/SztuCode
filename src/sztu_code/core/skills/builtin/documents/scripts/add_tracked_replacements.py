@@ -23,7 +23,7 @@ import argparse
 import datetime as _dt
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -34,7 +34,9 @@ def w(tag: str) -> str:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _enable_track(settings_root: etree._Element) -> bool:

@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
-from docx import Document
+from docx import Document  # type: ignore[import-not-found]
 
 
 def _is_heading(style_name: str | None) -> bool:
@@ -40,7 +41,7 @@ def _is_heading(style_name: str | None) -> bool:
     return style_name.lower().startswith("heading")
 
 
-def clear_run_direct_formatting(doc: Document) -> int:
+def clear_run_direct_formatting(doc: Any) -> int:
     changed = 0
     for p in doc.paragraphs:
         for r in p.runs:
@@ -87,10 +88,10 @@ def clear_run_direct_formatting(doc: Document) -> int:
     return changed
 
 
-def clear_paragraph_direct_formatting(doc: Document) -> int:
+def clear_paragraph_direct_formatting(doc: Any) -> int:
     changed = 0
 
-    def _clear(p):
+    def _clear(p: Any) -> None:
         nonlocal changed
         pf = p.paragraph_format
         # Indents
@@ -123,8 +124,8 @@ def clear_paragraph_direct_formatting(doc: Document) -> int:
     return changed
 
 
-def enforce_heading_spacing(doc: Document, space_after_pt: float = 6.0) -> int:
-    from docx.shared import Pt
+def enforce_heading_spacing(doc: Any, space_after_pt: float = 6.0) -> int:
+    from docx.shared import Pt  # type: ignore[import-not-found]
 
     changed = 0
     for p in doc.paragraphs:
