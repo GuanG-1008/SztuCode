@@ -111,7 +111,7 @@ class GrepSearchTool(BaseTool):
             for lineno, line in enumerate(text.splitlines(), start=1):
                 if matcher.search(line):
                     rel = file.relative_to(root)
-                    matches.append(f"{rel.as_posix()}:{lineno}: {line.strip()}")
+                    matches.append(f"{rel.as_posix()}:{lineno}: {line}")
                     if len(matches) >= _MAX_MATCHES:
                         matches.append("[truncated]")
                         return ToolResult(content="\n".join(matches))
