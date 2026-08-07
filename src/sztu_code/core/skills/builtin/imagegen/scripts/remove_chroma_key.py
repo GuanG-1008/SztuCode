@@ -8,20 +8,19 @@ generate an image on a flat key color, then convert that key color to alpha.
 from __future__ import annotations
 
 import argparse
+import re
+import sys
 from io import BytesIO
 from pathlib import Path
-import re
 from statistics import median
-import sys
-from typing import Tuple
+from typing import Any, NoReturn
 
-
-Color = Tuple[int, int, int]
+Color = tuple[int, int, int]
 KEY_DOMINANCE_THRESHOLD = 16.0
 ALPHA_NOISE_FLOOR = 8
 
 
-def _die(message: str, code: int = 1) -> None:
+def _die(message: str, code: int = 1) -> NoReturn:
     print(f"Error: {message}", file=sys.stderr)
     raise SystemExit(code)
 
@@ -35,9 +34,9 @@ def _dependency_hint(package: str) -> str:
     )
 
 
-def _load_pillow():
+def _load_pillow() -> tuple[Any, Any]:
     try:
-        from PIL import Image, ImageFilter
+        from PIL import Image, ImageFilter  # type: ignore[import-not-found]
     except ImportError:
         _die(f"Pillow is required for chroma-key removal. {_dependency_hint('pillow')}")
     return Image, ImageFilter
@@ -187,7 +186,7 @@ def _cleanup_spill(rgb: Color, key: Color, alpha: int = 255) -> Color:
 
 
 def _apply_alpha_to_image(
-    image,
+    image: Any,
     *,
     key: Color,
     tolerance: int,
@@ -230,7 +229,7 @@ def _apply_alpha_to_image(
     return transparent
 
 
-def _contract_alpha(image, pixels: int):
+def _contract_alpha(image: Any, pixels: int) -> Any:
     if pixels == 0:
         return image
 
@@ -242,7 +241,7 @@ def _contract_alpha(image, pixels: int):
     return image
 
 
-def _apply_edge_feather(image, radius: float):
+def _apply_edge_feather(image: Any, radius: float) -> Any:
     if radius == 0:
         return image
 
@@ -253,13 +252,13 @@ def _apply_edge_feather(image, radius: float):
     return image
 
 
-def _encode_image(image, output_format: str) -> bytes:
+def _encode_image(image: Any, output_format: str) -> bytes:
     out = BytesIO()
     image.save(out, format=output_format.upper())
     return out.getvalue()
 
 
-def _alpha_counts(image) -> tuple[int, int, int]:
+def _alpha_counts(image: Any) -> tuple[int, int, int]:
     pixels = image.load()
     width, height = image.size
     total = 0
@@ -278,7 +277,7 @@ def _alpha_counts(image) -> tuple[int, int, int]:
     return total, transparent, partial
 
 
-def _sample_border_key(image, mode: str) -> Color:
+def _sample_border_key(image: Any, mode: str) -> Color:
     width, height = image.size
     pixels = image.load()
     samples: list[Color] = []

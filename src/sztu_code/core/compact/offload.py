@@ -76,7 +76,7 @@ def _make_summary(tool_name: str, content: str, max_chars: int = _DEFAULT_SUMMAR
             1 for line in lines
             if line and not line.startswith("#") and not line.startswith("//")
         )
-        first_few = [result_line[:120] for result_line in lines[:3] if result_line]
+        first_few = [line[:120] for line in lines[:3] if line]
         preview = "; ".join(first_few)
         if len(preview) > max_chars:
             preview = preview[: max_chars - 3] + "..."

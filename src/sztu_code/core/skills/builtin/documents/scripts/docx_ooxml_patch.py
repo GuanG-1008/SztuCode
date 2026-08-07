@@ -21,16 +21,16 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 try:
-    from docx import Document
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.opc.constants import RELATIONSHIP_TYPE as RT
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn as docx_qn
+    from docx import Document  # type: ignore[import-not-found]
+    from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore[import-not-found]
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT  # type: ignore[import-not-found]
+    from docx.oxml import OxmlElement  # type: ignore[import-not-found]
+    from docx.oxml.ns import qn as docx_qn  # type: ignore[import-not-found]
 except Exception:
-    Document = None  # type: ignore
+    Document = None
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -187,16 +187,18 @@ def add_comment_to_first_indented_paragraph(
     """Add a Word comment anchored to a paragraph.
 
     Anchor selection:
-      - If neither `indent_left_twips` nor `contains` is provided, anchors to the **first non-empty**
-        paragraph (fallback: first paragraph).
-      - If `indent_left_twips` is provided, the target paragraph must have `w:pPr/w:ind/@w:left` equal
-        to that value (twips). (Note: many paragraphs don't have explicit indentation.)
+      - If neither `indent_left_twips` nor `contains` is provided, anchors to the
+        **first non-empty** paragraph (fallback: first paragraph).
+      - If `indent_left_twips` is provided, the target paragraph must have
+        `w:pPr/w:ind/@w:left` equal to that value (twips). (Note: many paragraphs don't
+        have explicit indentation.)
       - If `contains` is provided, the target paragraph's visible text must contain that substring.
 
     `comment_id`:
       - "auto" (default) selects the next non-colliding id across existing anchors and comments.xml.
 
-    This function edits the unzipped DOCX in place (document.xml, comments.xml, rels, content types).
+    This function edits the unzipped DOCX in place (document.xml, comments.xml, rels,
+    content types).
     """
 
     date_iso = date_iso or iso_now()

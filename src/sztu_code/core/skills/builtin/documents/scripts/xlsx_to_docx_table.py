@@ -11,8 +11,10 @@ This is a "minimum useful" converter intended for reports:
 
 Limits
 ------
-- It does NOT reproduce Excel formulas, merged cells, conditional formatting, charts, or complex number formats.
-- Number formatting is best-effort. If you need exact appearance, consider exporting the range as an image instead.
+- It does NOT reproduce Excel formulas, merged cells, conditional formatting, charts,
+  or complex number formats.
+- Number formatting is best-effort. If you need exact appearance, consider exporting
+  the range as an image instead.
 """
 
 from __future__ import annotations
@@ -22,16 +24,17 @@ import datetime as _dt
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Inches
-from openpyxl import load_workbook
+from docx import Document  # type: ignore[import-not-found]
+from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore[import-not-found]
+from docx.oxml import OxmlElement  # type: ignore[import-not-found]
+from docx.oxml.ns import qn  # type: ignore[import-not-found]
+from docx.shared import Inches  # type: ignore[import-not-found]
+from openpyxl import load_workbook  # type: ignore[import-untyped]
 
 
-def _mark_row_as_header(row) -> None:
+def _mark_row_as_header(row: Any) -> None:
     """Mark a table row as a repeating header row (w:tblHeader).
 
     This improves accessibility and ensures header rows repeat when the table
@@ -45,7 +48,7 @@ def _mark_row_as_header(row) -> None:
         trPr.append(OxmlElement("w:tblHeader"))
 
 
-def _is_empty(v) -> bool:
+def _is_empty(v: object) -> bool:
     if v is None:
         return True
     if isinstance(v, str) and not v.strip():
@@ -53,7 +56,7 @@ def _is_empty(v) -> bool:
     return False
 
 
-def _best_effort_format(cell) -> str:
+def _best_effort_format(cell: Any) -> str:
     v = cell.value
     if v is None:
         return ""
@@ -74,7 +77,7 @@ def _best_effort_format(cell) -> str:
     return str(v)
 
 
-def _used_bounds(ws):
+def _used_bounds(ws: Any) -> tuple[int, int]:
     # Compute a tight-ish used range; ws.max_row/col may include trailing empties.
     max_r = 0
     max_c = 0
@@ -114,10 +117,10 @@ def main() -> None:
         raise RuntimeError("Sheet appears empty")
 
     # Gather formatted strings for width heuristics
-    data = []
+    data: list[list[str]] = []
     col_max_len = [0] * max_c
     for r in range(1, max_r + 1):
-        row_vals = []
+        row_vals: list[str] = []
         for c in range(1, max_c + 1):
             cell = ws.cell(row=r, column=c)
             s = _best_effort_format(cell)

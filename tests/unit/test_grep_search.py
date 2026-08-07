@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 
-from sztu_code.core.tools.builtin.grep_search import GrepSearchTool
+from sztu_code.core.tools.builtin.grep_search import _MAX_BYTES, GrepSearchTool
 
 
 def _make_tree(root: Path) -> None:
@@ -130,3 +131,67 @@ async def test_no_matches(tmp_path: Path) -> None:
     result = await tool.invoke({"pattern": "nonexistent_symbol_xyz"})
     assert not result.is_error
     assert result.content == "No matches found."
+
+
+# 功能：超过 _MAX_BYTES 的文件只搜索前 _MAX_BYTES 字节，限制前文本可命中、限制后不返回
+# 设计：构造限制前后各一个目标词的大文件，分别搜索验证截断边界，不依赖进程内存统计
+async def test_only_bytes_within_limit_are_searched(tmp_path: Path) -> None:
+    big = tmp_path / "big.txt"
+    big.write_bytes(b"TARGET_BEFORE\n" + b"a" * _MAX_BYTES + b"\nTARGET_AFTER\n")
+    tool = GrepSearchTool(tmp_path)
+
+    before = await tool.invoke({"pattern": "TARGET_BEFORE"})
+    assert not before.is_error
+    assert "big.txt:1: TARGET_BEFORE" in before.content
+
+    after = await tool.invoke({"pattern": "TARGET_AFTER"})
+    assert not after.is_error
+    assert after.content == "No matches found."
+
+
+# 功能：流式读取以 _MAX_BYTES 为上限调用 read，避免先整读文件再切片
+# 设计：monkeypatch Path.open 返回记录 read(n) 的替身文件对象，断言读取参数含上限值且总读取字节不超限
+async def test_read_call_carries_byte_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = tmp_path / "big.txt"
+    big.write_bytes(b"x" * (_MAX_BYTES + 4096))
+
+    class _SpyFile:
+        # 替身文件对象：透传真实句柄，同时记录每次 read(n) 的调用参数
+        def __init__(self, fh: BinaryIO) -> None:
+            self._fh = fh
+            self.read_args: list[int] = []
+            self.total_bytes = 0
+
+        # 记录读取请求大小与返回字节数，供断言证明读取上限生效
+        def read(self, n: int = -1) -> bytes:
+            self.read_args.append(n)
+            data = self._fh.read(n)
+            self.total_bytes += len(data)
+            return data
+
+        def __enter__(self) -> _SpyFile:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            self._fh.close()
+
+    opened_spies: list[_SpyFile] = []
+    real_open = Path.open
+
+    # 替换 Path.open 使其返回替身，从而捕获真实读取行为
+    def spy_open(self: Path, *args: object, **kwargs: object) -> _SpyFile:
+        spy = _SpyFile(real_open(self, *args, **kwargs))
+        opened_spies.append(spy)
+        return spy
+
+    monkeypatch.setattr(Path, "open", spy_open)
+    tool = GrepSearchTool(tmp_path)
+    result = await tool.invoke({"pattern": "zzz_missing"})
+
+    assert not result.is_error
+    assert opened_spies
+    spy = opened_spies[0]
+    assert _MAX_BYTES in spy.read_args
+    assert spy.total_bytes <= _MAX_BYTES

@@ -76,10 +76,16 @@ html>body{{padding:0}}</style>
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="{_SHELL_CSP}">
 <title>{document_title}</title>
-<style>:root{{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}}html,body{{margin:0}}body{{box-sizing:border-box;padding:1rem;background:inherit}}iframe{{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}}</style>
+<style>
+:root{{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}}
+html,body{{margin:0}}
+body{{box-sizing:border-box;padding:1rem;background:inherit}}
+iframe{{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}}
+</style>
 </head>
 <body>
-<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="{document_title}" srcdoc="{escape(frame_html)}"></iframe>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer"
+  title="{document_title}" srcdoc="{escape(frame_html)}"></iframe>
 </body>
 </html>
 """

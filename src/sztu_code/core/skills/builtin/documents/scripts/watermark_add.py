@@ -28,7 +28,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 V_NS = "urn:schemas-microsoft-com:vml"
@@ -50,7 +50,9 @@ def o(tag: str) -> str:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _pick_header_part(names: list[str]) -> str | None:
@@ -112,7 +114,7 @@ def _ensure_header_exists(in_docx: str) -> str:
         if _pick_header_part(z.namelist()) is not None:
             return in_docx
 
-    from docx import Document  # local import to keep deps light for simple uses
+    from docx import Document  # type: ignore[import-not-found]  # local optional dependency
 
     doc = Document(in_docx)
     sec = doc.sections[0]

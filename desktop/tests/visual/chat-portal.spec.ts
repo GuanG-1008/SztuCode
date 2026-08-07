@@ -1,10 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-// 通用问答入口暂时隐藏（App.vue chatEntryVisible=false），本测试依赖该入口进入 ChatPortal，
-// 恢复入口后删除 test.skip 即可
-test.skip("Chat portal exposes every tool page and its primary interactions", async ({ page }) => {
+// 正式入口暂时隐藏；开发态查询参数只为完整验证 ChatPortal 交互而开放。
+test("Chat portal exposes every tool page and its primary interactions", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/?visual-chat=1", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await page.getByRole("button", { name: "通用问答", exact: true }).click();
 
@@ -15,19 +14,23 @@ test.skip("Chat portal exposes every tool page and its primary interactions", as
   await expect(page.getByRole("heading", { name: "精选技能" })).toBeVisible();
   await page.getByPlaceholder("搜索技能").fill("frontend");
   await expect(page.locator(".skill-card")).toHaveCount(1);
+  const installedButton = page.getByRole("button", { name: /^我安装的 \d+$/ });
+  const installedCount = installedButton.locator("span");
+  const installedBefore = Number(await installedCount.textContent());
   await page.getByRole("region", { name: "SkillHub" }).getByRole("button", { name: "移除 frontend-design" }).click();
-  await page.getByRole("button", { name: "我安装的 6" }).click();
+  await expect(installedCount).toHaveText(String(installedBefore - 1));
+  await installedButton.click();
   await expect(page.locator(".skill-card")).toHaveCount(0);
   await page.getByRole("button", { name: "添加技能", exact: true }).click();
   await page.getByPlaceholder("例如：release-notes").fill("release-notes");
   await page.getByPlaceholder("本地路径或仓库地址").fill("./skills/release-notes");
   await page.getByRole("dialog").getByRole("button", { name: "添加", exact: true }).click();
-  await expect(page.getByRole("button", { name: "我安装的 7" })).toBeVisible();
-  await page.getByRole("button", { name: "我安装的 7" }).click();
+  await expect(installedCount).toHaveText(String(installedBefore));
+  await installedButton.click();
   await page.getByPlaceholder("搜索技能").fill("");
   await expect(page).toHaveScreenshot("skill-center-1280.png", { fullPage: true });
 
-  await page.getByRole("button", { name: /自动化/ }).click();
+  await page.getByRole("button", { name: "自动化 即将推出", exact: true }).click();
   await page.getByRole("button", { name: "新建任务", exact: true }).click();
   await page.getByPlaceholder("例如：每周项目进展汇总").fill("周报汇总");
   await page.getByRole("button", { name: "保存任务", exact: true }).click();

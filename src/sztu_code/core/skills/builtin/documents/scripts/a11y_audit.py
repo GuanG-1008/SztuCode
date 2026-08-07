@@ -34,7 +34,7 @@ import zipfile
 from dataclasses import dataclass
 from typing import Any
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -63,7 +63,9 @@ def _read_xml(z: zipfile.ZipFile, name: str) -> etree._Element:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _load_document_rels(z: zipfile.ZipFile) -> dict[str, str]:
@@ -259,7 +261,6 @@ def _fix_table_headers_first_row(root: etree._Element) -> int:
 
 def audit_docx(path: str) -> dict[str, Any]:
     with zipfile.ZipFile(path, "r") as z:
-        rels_map = _load_document_rels(z)
         parts = _iter_story_parts(z)
         findings: list[Finding] = []
         for part in parts:
@@ -349,13 +350,10 @@ def main() -> None:
             f.write(json.dumps(report, indent=2, ensure_ascii=False))
             f.write("\n")
         print(
-            "[a11y] wrote report -> %s | high=%s medium=%s low=%s"
-            % (
-                args.out_json,
-                report["counts"]["high"],
-                report["counts"]["medium"],
-                report["counts"]["low"],
-            )
+            f"[a11y] wrote report -> {args.out_json} | "
+            f"high={report['counts']['high']} "
+            f"medium={report['counts']['medium']} "
+            f"low={report['counts']['low']}"
         )
     else:
         print(json.dumps(report, indent=2, ensure_ascii=False))

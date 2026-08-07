@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Beaker, Bot, CheckCircle2, ChevronDown, CircleX, FileDiff, ListChecks, ScrollText, Sparkles } from "@lucide/vue";
+import { ArrowRightLeft, Beaker, Bot, CheckCircle2, ChevronDown, CircleX, FileDiff, GitBranch, ListChecks, ScrollText, ShieldCheck, Sparkles } from "@lucide/vue";
 import type { TimelineStep } from "./types";
 
 const props = defineProps<{ step: TimelineStep; hideEvidence?: boolean }>();
 const logsOpen = ref(false);
 const completedPlans = computed(() => props.step.plan?.filter((item) => item.status === "completed").length ?? 0);
+const completedWorkflowTasks = computed(() => props.step.workflowTasks?.filter((item) => item.status === "succeeded").length ?? 0);
 </script>
 
 <template>
@@ -38,6 +39,29 @@ const completedPlans = computed(() => props.step.plan?.filter((item) => item.sta
     <header><Bot :size="15" /><b>Agent 集群</b></header>
     <div v-for="agent in step.subagents" :key="agent.runId" class="activity-row" :class="agent.status">
       <i /><span>{{ agent.description || agent.runId }}</span><small>{{ agent.status === 'running' ? '运行中' : agent.status === 'success' ? '完成' : '失败' }}</small>
+    </div>
+  </section>
+
+  <section v-if="step.workflowTasks?.length" class="timeline-activity workflow-activity">
+    <header><GitBranch :size="15" /><b>多智能体任务图</b><span>{{ completedWorkflowTasks }}/{{ step.workflowTasks.length }}</span></header>
+    <div v-for="task in step.workflowTasks" :key="task.id" class="activity-row" :class="task.status">
+      <i /><span><b>{{ task.owner }}</b> · {{ task.title }}<small v-if="task.dependencies.length">依赖 {{ task.dependencies.join(", ") }}</small><small v-if="task.error">{{ task.error }}</small></span><small>{{ task.status }}<template v-if="task.attempt"> · #{{ task.attempt }}</template></small>
+    </div>
+  </section>
+
+  <section v-if="step.workflowHandoffs?.length" class="timeline-activity workflow-activity">
+    <header><ArrowRightLeft :size="15" /><b>结构化交接</b><span>{{ step.workflowHandoffs.length }}</span></header>
+    <div v-for="(handoff, index) in step.workflowHandoffs" :key="`${handoff.taskId}-${index}`" class="activity-row" :class="handoff.status">
+      <CheckCircle2 v-if="handoff.status === 'succeeded'" :size="14" /><CircleX v-else :size="14" />
+      <span><b>{{ handoff.role }}</b> · {{ handoff.summary }}<small v-if="handoff.commands.length">{{ handoff.commands.join(" · ") }}</small><small v-if="handoff.conclusion">{{ handoff.conclusion }}</small><small v-if="handoff.scopeEscalations.length" class="scope-escalation">已审批范围升级：{{ handoff.scopeEscalations.join(", ") }}</small></span>
+    </div>
+  </section>
+
+  <section v-if="step.workflowReviews?.length" class="timeline-activity workflow-activity">
+    <header><ShieldCheck :size="15" /><b>Reviewer 仲裁</b></header>
+    <div v-for="(review, index) in step.workflowReviews" :key="`${review.taskId}-${index}`" class="activity-row" :class="review.decision === 'accept' ? 'succeeded' : 'rejected'">
+      <CheckCircle2 v-if="review.decision === 'accept'" :size="14" /><CircleX v-else :size="14" />
+      <span><b>{{ review.decision === "accept" ? "接受" : "退回" }}</b> · {{ review.conclusion }}<small>Diff：{{ review.diffSummary }}</small><small>测试：{{ review.testSummary }}</small><small>安全：{{ review.securitySummary }}</small></span>
     </div>
   </section>
 

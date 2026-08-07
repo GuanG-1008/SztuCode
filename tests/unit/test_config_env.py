@@ -215,3 +215,41 @@ def test_unknown_budget_key_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
     with pytest.raises(SystemExit):
         get_config()
+
+
+# 功能：验证 [workflow] TOML 段会解析并发、深度和重试预算
+# 设计：一次写入三个边界不同的整数，断言配置对象完整承载而非只支持部分字段
+def test_workflow_toml_parsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    toml_path = tmp_path / "sztu.toml"
+    toml_path.write_bytes(
+        b"[workflow]\nmax_concurrency = 3\nmax_depth = 1\nmax_retries = 2\n"
+    )
+    monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
+    cfg = get_config()
+    assert cfg.workflow.max_concurrency == 3
+    assert cfg.workflow.max_depth == 1
+    assert cfg.workflow.max_retries == 2
+
+
+# 功能：验证 SZTU_WORKFLOW_* 环境变量覆盖工作流默认预算
+# 设计：设置三个独立环境变量并读取配置，覆盖环境解析循环的全部字段
+def test_workflow_env_vars_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SZTU_WORKFLOW_MAX_CONCURRENCY", "6")
+    monkeypatch.setenv("SZTU_WORKFLOW_MAX_DEPTH", "3")
+    monkeypatch.setenv("SZTU_WORKFLOW_MAX_RETRIES", "4")
+    cfg = get_config()
+    assert cfg.workflow.max_concurrency == 6
+    assert cfg.workflow.max_depth == 3
+    assert cfg.workflow.max_retries == 4
+
+
+# 功能：验证工作流并发数不能为零而深度和重试允许为零
+# 设计：只设置非法并发环境变量并断言 SystemExit，锁定最容易造成调度死锁的配置边界
+def test_workflow_concurrency_rejects_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SZTU_WORKFLOW_MAX_CONCURRENCY", "0")
+    with pytest.raises(SystemExit):
+        get_config()

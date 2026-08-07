@@ -35,7 +35,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 try:
     from docx_ooxml_patch import unzip_docx, zip_docx
@@ -111,7 +111,8 @@ def _p_style(p: etree._Element) -> str | None:
     st = p.find("w:pPr/w:pStyle", namespaces=NS)
     if st is None:
         return None
-    return st.get(w_attr("val"))
+    value = st.get(w_attr("val"))
+    return str(value) if value is not None else None
 
 
 def _outline_level(p: etree._Element) -> int | None:

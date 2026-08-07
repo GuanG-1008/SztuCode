@@ -16,7 +16,6 @@ from sztu_code.core.llm.types import LlmResponse, UsageStats
 from sztu_code.core.session.store import SessionStore, _filter_active_notes
 from sztu_code.core.tools.builtin.note_update import NoteUpdateTool
 
-
 # ============================================================
 # 3a: 异步压缩
 # ============================================================

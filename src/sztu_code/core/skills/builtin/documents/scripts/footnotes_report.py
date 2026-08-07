@@ -25,7 +25,7 @@ from __future__ import annotations
 import zipfile
 from collections import Counter
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -47,7 +47,8 @@ def _report_part(z: zipfile.ZipFile, part: str, kind: str) -> None:
     notes = root.xpath(f".//w:{kind}[number(@w:id) >= 1]", namespaces=NS)
     ids = [int(n.get(f"{{{W_NS}}}id")) for n in notes]
     print(
-        f"[{part}] defined_{kind}s={len(ids)} ids={sorted(ids)[:10]}{'...' if len(ids) > 10 else ''}"
+        f"[{part}] defined_{kind}s={len(ids)} ids={sorted(ids)[:10]}"
+        f"{'...' if len(ids) > 10 else ''}"
     )
     for n in notes[:5]:
         nid = n.get(f"{{{W_NS}}}id")
@@ -81,7 +82,8 @@ def main() -> None:
             dupes = [k for k, v in c.items() if v > 1]
             if dupes:
                 print(
-                    f"[warn] duplicated footnote reference ids (multiple references to same note): {dupes}"
+                    "[warn] duplicated footnote reference ids "
+                    f"(multiple references to same note): {dupes}"
                 )
 
         if "word/footnotes.xml" in z.namelist():

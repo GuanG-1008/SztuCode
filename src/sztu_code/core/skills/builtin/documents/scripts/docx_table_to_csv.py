@@ -24,7 +24,7 @@ import os
 import sys
 from pathlib import Path
 
-from docx import Document
+from docx import Document  # type: ignore[import-not-found]
 
 
 def main() -> None:

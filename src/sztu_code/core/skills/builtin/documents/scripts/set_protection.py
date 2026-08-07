@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -39,7 +39,9 @@ def _read_xml(z: zipfile.ZipFile, name: str) -> etree._Element:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _ensure_settings_part(z: zipfile.ZipFile) -> etree._Element:
@@ -92,7 +94,11 @@ def main() -> None:
     ap.add_argument(
         "--mode",
         required=True,
-        help="Protection mode: off | readOnly | comments | trackedChanges | forms (aliases accepted: read_only, read-only, readonly, tracked_changes, tracked-changes)",
+        help=(
+            "Protection mode: off | readOnly | comments | trackedChanges | forms "
+            "(aliases accepted: read_only, read-only, readonly, tracked_changes, "
+            "tracked-changes)"
+        ),
     )
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -117,7 +123,9 @@ def main() -> None:
         }
         if key not in mode_map:
             raise SystemExit(
-                f"[set_protection] invalid --mode={mode_in!r}. Use off, readOnly, comments, trackedChanges, forms (aliases: read_only, tracked_changes)."
+                f"[set_protection] invalid --mode={mode_in!r}. "
+                "Use off, readOnly, comments, trackedChanges, forms "
+                "(aliases: read_only, tracked_changes)."
             )
         canonical_mode = mode_map[key]
 

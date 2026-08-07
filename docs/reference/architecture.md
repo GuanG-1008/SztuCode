@@ -83,6 +83,18 @@ Permission Manager 结合当前模式、持久化策略、工具权限和用户�
 - Subagent 使用独立 run ID 和受限角色执行子任务，结果回填父运行。
 - MCP 将外部 stdio/TCP Server 的能力适配为统一工具。
 
+### Planner、Coder、Tester、Reviewer 工作流
+
+`run_workflow` 先让只读 Planner 输出含依赖、负责人、完成条件和文件范围的结构化 DAG，再由 daemon 调度器按依赖执行 Coder、Tester 和 Reviewer：
+
+- Coder 只获得读写文件工具，不获得 Shell；范围内编辑走普通写权限，越过 Planner 分配范围时升级为 `danger_full_access`。`normal`/`accept_edits` 会请求用户审批，`auto` 直接放行，批准后的范围升级写入交接证据；
+- Tester 只读工作区并独立运行命令，必须提交命令、关键原始输出和结论；
+- Reviewer 只读 Diff、测试和安全证据，必须给出 `accept` 或 `return`；
+- DAG 调度器统一限制并发、嵌套深度、Token、墙钟和重试预算，并把失败、取消和超时传播到依赖任务与父工作流；
+- `workflow.*` 事件与其他 EventBus 事件共用 `events.jsonl`、IPC 和 daemon Trace，TUI 与桌面时间线均可回放任务和交接证据。
+
+范围升级仍受工作区根目录约束；`auto` 不允许写出当前 workspace。
+
 ## 数据持久化
 
 主要本地数据：
@@ -104,6 +116,7 @@ Permission Manager 结合当前模式、持久化策略、工具权限和用户�
 - daemon 是任务状态的唯一事实来源；客户端状态必须可从历史和事件恢复。
 - 工作区工具不得越过已解析的工作区根目录。
 - 高风险动作必须经过权限策略，模式切换不能绕过底层分类。
+- 角色分配范围不是第二套静态沙箱；越界必须进入权限升级并留下 Trace 证据。
 - 事件关联键和顺序必须足够支持断线重连、去重和回放。
 - 生成的 Wire Protocol 必须与代码保持同步。
 

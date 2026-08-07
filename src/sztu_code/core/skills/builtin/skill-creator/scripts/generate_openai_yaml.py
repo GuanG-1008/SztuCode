@@ -47,14 +47,16 @@ ALLOWED_INTERFACE_KEYS = {
 }
 
 
-def yaml_quote(value):
+# 转义字符串并生成双引号 YAML 标量
+def yaml_quote(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'"{escaped}"'
 
 
-def format_display_name(skill_name):
+# 将连字符技能名转换为适合界面展示的名称
+def format_display_name(skill_name: str) -> str:
     words = [word for word in skill_name.split("-") if word]
-    formatted = []
+    formatted: list[str] = []
     for index, word in enumerate(words):
         lower = word.lower()
         upper = word.upper()
@@ -71,7 +73,8 @@ def format_display_name(skill_name):
     return " ".join(formatted)
 
 
-def generate_short_description(display_name):
+# 生成符合界面长度约束的技能短描述
+def generate_short_description(display_name: str) -> str:
     description = f"Help with {display_name} tasks"
 
     if len(description) < 25:
@@ -101,7 +104,8 @@ def generate_short_description(display_name):
     return description
 
 
-def read_frontmatter_name(skill_dir):
+# 从技能文档 frontmatter 读取并校验名称
+def read_frontmatter_name(skill_dir: str | Path) -> str | None:
     skill_md = Path(skill_dir) / "SKILL.md"
     if not skill_md.exists():
         print(f"[ERROR] SKILL.md not found in {skill_dir}")
@@ -113,7 +117,7 @@ def read_frontmatter_name(skill_dir):
         return None
     frontmatter_text = match.group(1)
 
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     try:
         frontmatter = yaml.safe_load(frontmatter_text)
@@ -130,9 +134,12 @@ def read_frontmatter_name(skill_dir):
     return name.strip()
 
 
-def parse_interface_overrides(raw_overrides):
-    overrides = {}
-    optional_order = []
+# 解析 key=value 形式的界面字段覆盖参数
+def parse_interface_overrides(
+    raw_overrides: list[str],
+) -> tuple[dict[str, str] | None, list[str] | None]:
+    overrides: dict[str, str] = {}
+    optional_order: list[str] = []
     for item in raw_overrides:
         if "=" not in item:
             print(f"[ERROR] Invalid interface override '{item}'. Use key=value.")
@@ -153,13 +160,20 @@ def parse_interface_overrides(raw_overrides):
     return overrides, optional_order
 
 
-def write_openai_yaml(skill_dir, skill_name, raw_overrides):
+# 根据技能名和界面覆盖项写入 agents/openai.yaml
+def write_openai_yaml(
+    skill_dir: str | Path,
+    skill_name: str,
+    raw_overrides: list[str],
+) -> Path | None:
     overrides, optional_order = parse_interface_overrides(raw_overrides)
-    if overrides is None:
+    if overrides is None or optional_order is None:
         return None
 
     display_name = overrides.get("display_name") or format_display_name(skill_name)
-    short_description = overrides.get("short_description") or generate_short_description(display_name)
+    short_description = overrides.get("short_description") or generate_short_description(
+        display_name
+    )
 
     if not (25 <= len(short_description) <= 64):
         print(
@@ -183,11 +197,12 @@ def write_openai_yaml(skill_dir, skill_name, raw_overrides):
     agents_dir.mkdir(parents=True, exist_ok=True)
     output_path = agents_dir / "openai.yaml"
     output_path.write_text("\n".join(interface_lines) + "\n")
-    print(f"[OK] Created agents/openai.yaml")
+    print("[OK] Created agents/openai.yaml")
     return output_path
 
 
-def main():
+# 解析命令行参数并生成技能界面元数据
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create agents/openai.yaml for a skill directory.",
     )

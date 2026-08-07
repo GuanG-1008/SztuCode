@@ -18,12 +18,14 @@ import argparse
 import json
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
-from docx import Document
+from docx import Document  # type: ignore[import-not-found]
 
 
-def _iter_paragraphs(doc: Document):
+def _iter_paragraphs(doc: Any) -> Iterator[Any]:
     # body paragraphs
     for p in doc.paragraphs:
         yield p
@@ -41,7 +43,7 @@ def _iter_paragraphs(doc: Document):
             yield p
 
 
-def _has_direct_run_formatting(run) -> bool:
+def _has_direct_run_formatting(run: Any) -> bool:
     f = run.font
     return any(
         v is not None
@@ -56,7 +58,7 @@ def _has_direct_run_formatting(run) -> bool:
     )
 
 
-def _has_direct_paragraph_formatting(p) -> bool:
+def _has_direct_paragraph_formatting(p: Any) -> bool:
     pf = p.paragraph_format
     return any(
         v is not None
@@ -71,7 +73,7 @@ def _has_direct_paragraph_formatting(p) -> bool:
     )
 
 
-def _looks_like_heading(p) -> bool:
+def _looks_like_heading(p: Any) -> bool:
     # heuristic: short line, bold-ish, ends without period, no list prefix
     txt = (p.text or "").strip()
     if not txt:
@@ -100,13 +102,13 @@ def main() -> None:
 
     doc = Document(args.input_docx)
 
-    font_names = Counter()
+    font_names: Counter[str] = Counter()
     direct_runs = 0
     direct_paras = 0
-    heading_like_not_heading = []
+    heading_like_not_heading: list[dict[str, int | str]] = []
 
     # collect examples (limit)
-    examples = defaultdict(list)
+    examples: defaultdict[str, list[dict[str, int | str]]] = defaultdict(list)
 
     for i, p in enumerate(_iter_paragraphs(doc), start=1):
         style_name = p.style.name if p.style is not None else ""
@@ -146,7 +148,8 @@ def main() -> None:
         "heading_like_paragraphs_not_heading_style": heading_like_not_heading[:20],
         "examples": dict(examples),
         "notes": [
-            "Direct formatting is not always wrong, but it often causes inconsistent output when templates change.",
+            "Direct formatting is not always wrong, but it often causes inconsistent "
+            "output when templates change.",
             "Heading-like paragraphs not using Heading styles can break TOC and accessibility.",
         ],
     }

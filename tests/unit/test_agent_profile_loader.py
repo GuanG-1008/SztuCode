@@ -20,7 +20,9 @@ def test_builtin_planner_found() -> None:
 
 # 功能：内建三种角色均可加载
 # 设计：参数化测试所有内建角色名（coder 的 allowed_tools 为空代表不限，故单独测试）
-@pytest.mark.parametrize("role", ["planner", "executor", "reviewer", "explore", "plan"])
+@pytest.mark.parametrize(
+    "role", ["planner", "executor", "tester", "reviewer", "explore", "plan"]
+)
 def test_all_builtin_roles_found(role: str) -> None:
     loader = AgentProfileLoader()
     profile = loader.load(role)

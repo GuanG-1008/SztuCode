@@ -34,10 +34,10 @@ import argparse
 import os
 import re
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from docx import Document
-from lxml import etree
+from docx import Document  # type: ignore[import-not-found]
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 V_NS = "urn:schemas-microsoft-com:vml"
@@ -48,7 +48,7 @@ NS = {"w": W_NS, "v": V_NS, "o": O_NS, "r": R_NS}
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _read_zip_xml(z: zipfile.ZipFile, name: str) -> etree._Element:

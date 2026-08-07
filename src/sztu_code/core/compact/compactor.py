@@ -143,13 +143,19 @@ class Compactor:
                 new_messages = context.messages[len(snapshot):]
                 context.messages = [
                     {"role": "user", "content": _continuation_message(result.summary_text)},
-                    {"role": "assistant", "content": "Understood, I'll continue from this summary."},
+                    {
+                        "role": "assistant",
+                        "content": "Understood, I'll continue from this summary.",
+                    },
                 ] + new_messages
             else:
                 # 无新增：全量替换
                 context.messages = [
                     {"role": "user", "content": _continuation_message(result.summary_text)},
-                    {"role": "assistant", "content": "Understood, I'll continue from this summary."},
+                    {
+                        "role": "assistant",
+                        "content": "Understood, I'll continue from this summary.",
+                    },
                 ]
             context.compacted = True
             await self.record_compaction(context.run_id, result)

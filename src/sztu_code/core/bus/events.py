@@ -281,6 +281,97 @@ class ChangeAppliedEvent(BaseModel):
     ts: str
 
 
+class WorkflowTaskSnapshot(BaseModel):
+    id: str
+    title: str
+    owner: Literal["planner", "coder", "tester", "reviewer"]
+    status: Literal[
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+        "blocked",
+        "cancelled",
+        "timed_out",
+        "rejected",
+    ]
+    dependencies: list[str]
+    completion_criteria: list[str]
+    allowed_paths: list[str]
+    attempt: int = 0
+    error: str = ""
+
+
+class WorkflowHandoffSnapshot(BaseModel):
+    task_id: str
+    role: Literal["planner", "coder", "tester", "reviewer"]
+    status: Literal["succeeded", "failed"]
+    summary: str
+    changed_paths: list[str]
+    scope_escalations: list[str]
+    commands: list[str]
+    output: str
+    conclusion: str
+    diff_summary: str
+    test_summary: str
+    security_summary: str
+    review_decision: Literal["accept", "return"] | None = None
+    tokens: int = 0
+    elapsed_s: float = 0.0
+    attempt: int = 1
+    child_run_id: str = ""
+
+
+class WorkflowStartedEvent(BaseModel):
+    type: Literal["workflow.started"] = "workflow.started"
+    run_id: str
+    workflow_id: str
+    goal: str
+    planner_summary: str
+    tasks: list[WorkflowTaskSnapshot]
+    ts: str
+
+
+class WorkflowTaskUpdatedEvent(BaseModel):
+    type: Literal["workflow.task_updated"] = "workflow.task_updated"
+    run_id: str
+    workflow_id: str
+    task: WorkflowTaskSnapshot
+    ts: str
+
+
+class WorkflowHandoffEvent(BaseModel):
+    type: Literal["workflow.handoff"] = "workflow.handoff"
+    run_id: str
+    workflow_id: str
+    artifact: WorkflowHandoffSnapshot
+    ts: str
+
+
+class WorkflowReviewEvent(BaseModel):
+    type: Literal["workflow.reviewed"] = "workflow.reviewed"
+    run_id: str
+    workflow_id: str
+    task_id: str
+    decision: Literal["accept", "return"]
+    diff_summary: str
+    test_summary: str
+    security_summary: str
+    conclusion: str
+    ts: str
+
+
+class WorkflowFinishedEvent(BaseModel):
+    type: Literal["workflow.finished"] = "workflow.finished"
+    run_id: str
+    workflow_id: str
+    status: Literal["succeeded", "failed", "cancelled", "timed_out"]
+    reason: str
+    total_tokens: int
+    elapsed_s: float
+    ts: str
+
+
 # 根据 type 字段决定事件类型的判别联合
 Event = Annotated[
     CoreStartedEvent
@@ -314,6 +405,11 @@ Event = Annotated[
     | PlanUpdatedEvent
     | TestResultEvent
     | ChangeAppliedEvent
+    | WorkflowStartedEvent
+    | WorkflowTaskUpdatedEvent
+    | WorkflowHandoffEvent
+    | WorkflowReviewEvent
+    | WorkflowFinishedEvent
     | PermissionModeChangedEvent,
     Discriminator("type"),
 ]

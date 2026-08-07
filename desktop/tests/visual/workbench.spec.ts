@@ -2,7 +2,7 @@
 
 test("agent workbench sidebar prioritizes tasks and project context", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeVisible();
   await page.getByRole("button", { name: "搜索任务或项目", exact: true }).click();
   await expect(page.getByRole("searchbox", { name: "搜索任务或项目" })).toBeVisible();
@@ -22,7 +22,7 @@ test("agent workbench sidebar prioritizes tasks and project context", async ({ p
 
 test("task conversation scrolls against the workspace divider while controls stay visible", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const entries = Array.from(
     { length: 18 },
@@ -94,7 +94,7 @@ test("task conversation scrolls against the workspace divider while controls sta
 
 test("task conversation slash menu opens above the composer without clipping", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.locator(".kimi-main").evaluate((main) => {
     main.innerHTML = `
       <section class="work-page">
@@ -141,7 +141,7 @@ test("task conversation slash menu opens above the composer without clipping", a
 
 test("workspace panel collapses smoothly before it is removed", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.locator("#app").evaluate((root) => {
     const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
     const state = app?._instance?.setupState;
@@ -169,7 +169,7 @@ test("workspace panel collapses smoothly before it is removed", async ({ page })
 
 test("new task, keyboard shortcut, and more tools remain interactive", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   await page.getByRole("button", { name: "全部任务", exact: true }).click();
   await expect(page.getByRole("heading", { name: "全部任务", exact: true })).toBeVisible();
@@ -194,7 +194,7 @@ test("new task, keyboard shortcut, and more tools remain interactive", async ({ 
 
 test("slash menu groups commands and supports keyboard selection", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   const launcherInput = page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能");
 
   await launcherInput.fill("/");
@@ -230,7 +230,7 @@ test("slash menu groups commands and supports keyboard selection", async ({ page
 
 test("new-task controls expose project and permission workflows", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   await page.getByRole("button", { name: "选择本地项目", exact: true }).click();
   await expect(page.getByRole("menu", { name: "选择项目" })).toBeVisible();
@@ -253,7 +253,7 @@ test("new-task controls expose project and permission workflows", async ({ page 
 
 test("automation page communicates its local service integration state", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: /自动化/ }).click();
   await expect(page.getByRole("heading", { name: "定时任务", exact: true })).toBeVisible();
   await expect(page.getByText("暂无定时任务")).toBeVisible();
@@ -262,7 +262,7 @@ test("automation page communicates its local service integration state", async (
 
 test("sidebar keeps the 952px boundary and auto-collapses below it", async ({ page }) => {
   await page.setViewportSize({ width: 952, height: 640 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   const navigationToggle = page.getByRole("button", { name: "收起导航" });
   await expect(navigationToggle).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeVisible();
@@ -293,7 +293,7 @@ test("sidebar keeps the 952px boundary and auto-collapses below it", async ({ pa
 
 test("sidebar content keeps its width while the navigation viewport collapses", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const sidebar = page.locator(".agent-sidebar");
   const viewport = page.locator(".sidebar-viewport");
@@ -341,7 +341,7 @@ test("sidebar content keeps its width while the navigation viewport collapses", 
 test("sidebar resizer clamps its range and collapses after an intentional over-pull", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.addInitScript(() => localStorage.removeItem("sztu.sidebarWidth"));
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   const shell = page.locator(".kimi-shell");
   const resizer = page.getByRole("separator", { name: "调整导航宽度" });
@@ -373,7 +373,7 @@ test("sidebar resizer clamps its range and collapses after an intentional over-p
 
 test("settings remains available from the workbench footer", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "设置" }).click();
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
   await expect(page.getByText("系统设置")).toBeVisible();

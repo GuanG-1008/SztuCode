@@ -22,7 +22,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
@@ -48,13 +48,16 @@ def _read_xml(zf: zipfile.ZipFile, name: str) -> etree._Element:
 
 
 def _xml_bytes(root: etree._Element) -> bytes:
-    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    return bytes(
+        etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+    )
 
 
 def _w_val(node: etree._Element | None) -> str | None:
     if node is None:
         return None
-    return node.get(f"{{{W_NS}}}val")
+    value = node.get(f"{{{W_NS}}}val")
+    return str(value) if value is not None else None
 
 
 def _paragraph_text(p: etree._Element) -> str:

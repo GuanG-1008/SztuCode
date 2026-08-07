@@ -124,6 +124,8 @@ class PermissionManager:
         if self._mode == PermissionMode.AUTO:
             return True, "auto_mode"
         if self._mode == PermissionMode.ACCEPT_EDITS:
+            if tool_permission == ToolPermission.DANGER_FULL_ACCESS:
+                return None
             if is_edit or tool_name in ("write_file", "edit_file", "note_save"):
                 return True, "accept_edits_mode"
             return None
@@ -159,6 +161,9 @@ class PermissionManager:
             )
             return allowed, reason
 
+        from sztu_code.core.tools.base import ToolPermission
+
+        force_full_access_ask = actual_permission == ToolPermission.DANGER_FULL_ACCESS
         command = str(params.get("command", "")) if tool_name == "bash" else ""
         policy = self._policies.get(tool_name)
 
@@ -172,7 +177,7 @@ class PermissionManager:
         # 不可被任何缓存绕过 — 逐段检查复合命令
         outside_cwd = bool(command and _any_segment_matches_outside_cwd(command))
 
-        if not outside_cwd:
+        if not outside_cwd and not force_full_access_ask:
             # Tier 3: session always 缓存
             session_key = (session_id, tool_name)
             if session_key in self._session_always:
@@ -183,7 +188,11 @@ class PermissionManager:
             # Tier 4: persistent always（跨 session）
             if tool_name in self._persistent_always:
                 cached = self._persistent_always[tool_name]
-                logger.debug("permission: persistent cache hit tool=%s decision=%s", tool_name, cached)
+                logger.debug(
+                    "permission: persistent cache hit tool=%s decision=%s",
+                    tool_name,
+                    cached,
+                )
                 return cached == "allow", f"auto_{cached}"
 
             # Tier 5: allow_patterns（bash only）
@@ -258,7 +267,9 @@ class PermissionManager:
                     save_policy_file(self._persistent_always, self._policy_file)
                     logger.info("permission: policy.toml written path=%s", self._policy_file)
                 except Exception:
-                    logger.exception("permission: failed to write policy.toml path=%s", self._policy_file)
+                    logger.exception(
+                        "permission: failed to write policy.toml path=%s", self._policy_file
+                    )
             else:
                 logger.warning("permission: policy_file is None, skipping persistence")
         elif decision == "always_deny":
@@ -273,7 +284,9 @@ class PermissionManager:
                     save_policy_file(self._persistent_always, self._policy_file)
                     logger.info("permission: policy.toml written path=%s", self._policy_file)
                 except Exception:
-                    logger.exception("permission: failed to write policy.toml path=%s", self._policy_file)
+                    logger.exception(
+                        "permission: failed to write policy.toml path=%s", self._policy_file
+                    )
             else:
                 logger.warning("permission: policy_file is None, skipping persistence")
         return allow

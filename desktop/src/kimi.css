@@ -175,6 +175,11 @@ button.composer-project:hover { color: #1a70cf; }
 .activity-row.failed { color: #b23c35; }
 .activity-row small { margin-left: auto; color: inherit; }
 .activity-row i { width: 6px; height: 6px; border-radius: 50%; background: #4087d8; }
+.activity-row span > small { display: block; margin: 3px 0 0; }
+.activity-row .scope-escalation { color: #a46918; }
+.workflow-activity .activity-row.rejected,
+.workflow-activity .activity-row.failed { color: #b23c35; }
+.workflow-activity .activity-row.running { color: #1e6fc8; }
 .activity-files { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 10px; }
 .activity-files code { padding: 3px 5px; color: #5c626a; background: #eff1f3; border-radius: 4px; font-size: 10px; }
 .logs-activity > button { border: 0; }

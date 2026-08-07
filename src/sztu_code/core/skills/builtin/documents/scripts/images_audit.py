@@ -23,9 +23,10 @@ from __future__ import annotations
 import argparse
 import zipfile
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -45,7 +46,7 @@ NS = {
 EMU_PER_INCH = 914400
 
 
-def _iter_content_parts(z: zipfile.ZipFile):
+def _iter_content_parts(z: zipfile.ZipFile) -> Iterator[str]:
     for name in z.namelist():
         if not name.startswith("word/"):
             continue
@@ -162,7 +163,8 @@ def main() -> None:
     if kind_counts.get("anchor"):
         print("\nWARNING")
         print(
-            "- Floating/anchored images detected (wp:anchor). These are the most common Word-vs-LO mismatch."
+            "- Floating/anchored images detected (wp:anchor). "
+            "These are the most common Word-vs-LO mismatch."
         )
         print("  Strongly recommend: render to PNG and check placement on every affected page.")
 

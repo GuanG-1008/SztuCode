@@ -72,6 +72,11 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | `SZTU_TRACE_ENABLED` | `true` | 是否记录 trace |
 | `SZTU_TRACE_FILE` | `~/.sztu/traces/daemon.jsonl` | trace 文件路径 |
 | `SZTU_TRACE_INCLUDE_LLM_PAYLOAD` | `true` | 是否记录完整 LLM payload |
+| `SZTU_BUDGET_MAX_TOKENS` | `0` | 父运行与工作流聚合 Token 上限；`0` 不限制 |
+| `SZTU_BUDGET_MAX_WALL_CLOCK_S` | `0` | 父运行与工作流墙钟秒数上限；`0` 不限制 |
+| `SZTU_WORKFLOW_MAX_CONCURRENCY` | `4` | 工作流最大并行角色任务数 |
+| `SZTU_WORKFLOW_MAX_DEPTH` | `2` | 工作流与 Subagent 最大嵌套深度 |
+| `SZTU_WORKFLOW_MAX_RETRIES` | `1` | 单个角色任务最大重试次数 |
 
 ## TOML 示例
 
@@ -95,6 +100,11 @@ stuck_max_total = 0
 [budget]
 max_tokens = 0
 max_wall_clock_s = 0
+
+[workflow]
+max_concurrency = 4
+max_depth = 2
+max_retries = 1
 
 [llm]
 provider = "anthropic"
@@ -149,8 +159,8 @@ port = 3000
 | --- | --- |
 | `normal` | 根据风险和已保存策略逐次审批 |
 | `plan` | 分析和规划，不执行产生修改的操作 |
-| `accept_edits` | 自动允许受控编辑，其他高风险动作仍审批 |
-| `auto` | 尽可能自动执行，仅用于可信且可恢复环境 |
+| `accept_edits` | 自动允许分配范围内的受控编辑；角色越界写入仍升级审批 |
+| `auto` | 自动批准包括角色范围升级在内的工具调用，仅用于可信且可恢复环境 |
 
 持久化策略位于 `~/.sztu/policy.toml`。修改或共享该文件前应检查是否扩大了工具权限。
 

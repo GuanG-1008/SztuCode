@@ -76,6 +76,10 @@ function aggregateStep(steps: TimelineStep[]): TimelineStep {
     subagents: steps.flatMap((step) => step.subagents ?? []),
     skills: steps.flatMap((step) => step.skills ?? []),
     logs: steps.flatMap((step) => step.logs ?? []),
+    workflowTasks: [...steps].reverse().find((step) => step.workflowTasks?.length)?.workflowTasks ?? [],
+    workflowHandoffs: steps.flatMap((step) => step.workflowHandoffs ?? []),
+    workflowReviews: steps.flatMap((step) => step.workflowReviews ?? []),
+    workflowOutcome: [...steps].reverse().find((step) => step.workflowOutcome)?.workflowOutcome,
   };
 }
 
@@ -84,7 +88,8 @@ function hasAssistantContent(step: TimelineStep): boolean {
     step.finalText || step.tokens.length || step.thinking || step.toolCalls.length ||
     step.plan?.length || step.tests?.length || step.changes?.length ||
     step.logs?.length || step.subagents?.length || step.skills?.length ||
-    step.runStartedAt || step.runStats,
+    step.runStartedAt || step.runStats || step.workflowTasks?.length ||
+    step.workflowHandoffs?.length || step.workflowReviews?.length,
   );
 }
 
@@ -190,7 +195,9 @@ const turns = computed<TurnView[]>(() => {
     const changePaths = [...new Set(aggregatedStep.changes?.flatMap((entry) => entry.paths) ?? [])];
     const hasActivity = Boolean(
       allToolCalls.length || thinkingText || plan.length || aggregatedStep.subagents?.length ||
-      aggregatedStep.skills?.length || aggregatedStep.logs?.length,
+      aggregatedStep.skills?.length || aggregatedStep.logs?.length ||
+      aggregatedStep.workflowTasks?.length || aggregatedStep.workflowHandoffs?.length ||
+      aggregatedStep.workflowReviews?.length,
     );
     return {
       key: steps.find((step) => step.runId)?.runId ?? `turn-${index}`,

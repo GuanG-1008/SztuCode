@@ -40,6 +40,43 @@ export type ChangeEntry = { paths: string[]; workspacePath: string };
 export type LogEntry = { level: string; source: string; message: string };
 export type SubagentEntry = { runId: string; description: string; status: "running" | "success" | "failed" };
 export type SkillEntry = { name: string; arguments: string };
+export type WorkflowTaskEntry = {
+  id: string;
+  title: string;
+  owner: "planner" | "coder" | "tester" | "reviewer";
+  status: "pending" | "running" | "succeeded" | "failed" | "blocked" | "cancelled" | "timed_out" | "rejected";
+  dependencies: string[];
+  completionCriteria: string[];
+  allowedPaths: string[];
+  attempt: number;
+  error?: string;
+};
+export type WorkflowHandoffEntry = {
+  taskId: string;
+  role: WorkflowTaskEntry["owner"];
+  status: "succeeded" | "failed";
+  summary: string;
+  changedPaths: string[];
+  scopeEscalations: string[];
+  commands: string[];
+  output: string;
+  conclusion: string;
+  childRunId: string;
+};
+export type WorkflowReviewEntry = {
+  taskId: string;
+  decision: "accept" | "return";
+  diffSummary: string;
+  testSummary: string;
+  securitySummary: string;
+  conclusion: string;
+};
+export type WorkflowOutcome = {
+  status: "succeeded" | "failed" | "cancelled" | "timed_out";
+  reason: string;
+  totalTokens: number;
+  elapsedS: number;
+};
 
 export interface TimelineStep {
   step: number;
@@ -62,6 +99,10 @@ export interface TimelineStep {
   logs?: LogEntry[];
   subagents?: SubagentEntry[];
   skills?: SkillEntry[];
+  workflowTasks?: WorkflowTaskEntry[];
+  workflowHandoffs?: WorkflowHandoffEntry[];
+  workflowReviews?: WorkflowReviewEntry[];
+  workflowOutcome?: WorkflowOutcome;
 }
 
 export function toolSummary(params: Record<string, unknown>): string {

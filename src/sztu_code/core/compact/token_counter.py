@@ -14,7 +14,7 @@ class TokenCounter:
     def __init__(self) -> None:
         self._encoder = None
         try:
-            import tiktoken
+            import tiktoken  # type: ignore[import-not-found]
             self._encoder = tiktoken.get_encoding("cl100k_base")
         except (ImportError, ValueError):
             logger.debug("tiktoken 不可用，回退到字符估算 (len//4)")

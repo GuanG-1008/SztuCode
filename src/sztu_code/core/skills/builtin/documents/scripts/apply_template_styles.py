@@ -17,7 +17,8 @@ added parts.
 
 Usage
 -----
-python scripts/apply_template_styles.py --template template.dotx --target report.docx --out styled.docx
+python scripts/apply_template_styles.py --template template.dotx \
+    --target report.docx --out styled.docx
 
 Caveats
 -------
@@ -30,7 +31,7 @@ from __future__ import annotations
 import argparse
 import zipfile
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 

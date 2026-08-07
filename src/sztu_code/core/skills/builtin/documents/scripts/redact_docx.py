@@ -8,10 +8,12 @@ optionally comments) at the paragraph level:
 
 - Concatenate the paragraph's <w:t> nodes to a single string
 - Apply regex matches against the full string
-- Replace each match with a fixed-length mask (default) so line breaks and pagination are less likely to shift
+- Replace each match with a fixed-length mask (default) so line breaks and pagination
+  are less likely to shift
 - Write the modified string back into the original <w:t> node segmentation
 
-This is *not* a cryptographic anonymization tool; it is a practical helper for "redact this doc for sharing".
+This is *not* a cryptographic anonymization tool; it is a practical helper for
+"redact this doc for sharing".
 
 Safety defaults
 ---------------
@@ -27,8 +29,9 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from lxml import etree
+from lxml import etree  # type: ignore[import-untyped]
 
 try:
     from docx_ooxml_patch import unzip_docx, zip_docx
@@ -180,12 +183,12 @@ def redact_docx(
     replacement: str | None,
     preserve_length: bool,
     include_comments: bool,
-) -> dict:
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="docx_redact_") as td:
         tmp = Path(td)
         unzip_docx(input_docx, tmp)
 
-        stats = {
+        stats: dict[str, Any] = {
             "file": str(input_docx),
             "parts_processed": 0,
             "paragraphs_touched": 0,
@@ -278,7 +281,8 @@ def main() -> None:
         "--replacement",
         default=None,
         help=(
-            "Optional replacement string. If --preserve_length (default), it will be repeated/truncated "
+            "Optional replacement string. If --preserve_length (default), "
+            "it will be repeated/truncated "
             "to match each match's length."
         ),
     )

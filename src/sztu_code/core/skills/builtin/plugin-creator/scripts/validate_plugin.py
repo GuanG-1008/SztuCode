@@ -10,8 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-import yaml
-
+import yaml  # type: ignore[import-untyped]
 
 TODO_MARKER = "[TODO:"
 SEMVER_RE = re.compile(

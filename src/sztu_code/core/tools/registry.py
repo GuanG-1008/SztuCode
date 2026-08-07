@@ -92,16 +92,14 @@ class ToolRegistry:
         schemas: list[dict[str, object]] = []
         for tool in self._tools.values():
             input_schema = deepcopy(tool.input_schema)
-            raw_properties = input_schema.get("properties")
-            properties: dict[str, object] = (
-                dict(raw_properties) if isinstance(raw_properties, dict) else {}
-            )
+            raw_properties = input_schema.get("properties", {})
+            properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
             properties["description"] = {
                 "type": "string",
                 "description": "用简短中文说明本次调用的具体目的，作为执行时间线标题。",
             }
             input_schema["properties"] = properties
-            raw_required = input_schema.get("required")
+            raw_required = input_schema.get("required", [])
             required = (
                 [str(item) for item in raw_required]
                 if isinstance(raw_required, list)

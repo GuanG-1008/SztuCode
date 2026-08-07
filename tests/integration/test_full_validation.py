@@ -3,14 +3,12 @@ Phase 1+2+3 全量验证 —— 无需 API key 的端到端测试
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from sztu_code.core.compact.offload import OffloadManager
 from sztu_code.core.compact.canvas import TaskCanvas
-from sztu_code.core.context import ExecutionContext, ContinueReason, TerminationReason
+from sztu_code.core.compact.offload import OffloadManager
+from sztu_code.core.context import ContinueReason, ExecutionContext, TerminationReason
 from sztu_code.core.session.store import SessionStore
-
 
 # ============================================================
 # Phase 1: OffloadManager
