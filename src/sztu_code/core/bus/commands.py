@@ -304,10 +304,17 @@ class SessionResumeResult(BaseModel):
     session: SessionSummary
 
 
+class MessageImageBlock(BaseModel):
+    type: Literal["image"] = "image"
+    media_type: str  # 图片 MIME 类型，如 image/png
+    data: str  # base64 编码的图片数据
+
+
 class SessionSendMessageCommand(BaseModel):
     type: Literal["session.send_message"] = "session.send_message"
     session_id: str
     content: str
+    images: list[MessageImageBlock] = Field(default_factory=list)
 
 
 class SessionSendMessageResult(BaseModel):

@@ -173,6 +173,12 @@ export async function replayRun(runId: string): Promise<Record<string, unknown>[
   return (result.events as Record<string, unknown>[] | undefined) ?? [];
 }
 
+// 请求停止正在执行的 run；后端取消后通过 run.finished 事件通知前端
+export async function cancelRun(runId: string): Promise<string> {
+  const result = await client.request("run.cancel", { run_id: runId });
+  return String(result.status ?? "");
+}
+
 export async function openWorkspace(path: string): Promise<Workspace> {
   const result = await client.request("workspace.open", { path });
   return result.workspace as Workspace;

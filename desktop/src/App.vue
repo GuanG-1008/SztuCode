@@ -20,7 +20,7 @@ import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
 import {
-  applyCcswitchProvider, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
+  applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, respondPermission,
   resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings,
   type CcswitchProvider, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
@@ -59,6 +59,8 @@ const sessions = ref<Session[]>([]);
 const activeId = ref<string | null>(null);
 const timeline = ref<Map<number, TimelineStep>>(new Map());
 const activeRunId = ref<string | null>(null);
+// 当前会话是否正在执行 run（区别于 activeRunId：加载历史任务时 activeRunId 可能是已结束的 run）
+const runActive = ref(false);
 const prompt = ref("");
 const activePrompt = ref<HTMLTextAreaElement | null>(null);
 const launcherPrompt = ref<HTMLTextAreaElement | null>(null);
@@ -113,6 +115,8 @@ const ccswitchProviders = ref<CcswitchProvider[]>([]);
 const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
+// 发送请求中或正在执行 run 时，把发送按钮切换为停止按钮
+const isRunActive = computed(() => sending.value || runActive.value);
 const activeWorkspace = computed(() => workspaces.value.find((item) => item.workspace_id === active.value?.workspace_id) ?? workspace.value);
 const activeWorkspaces = computed(() => workspaces.value.filter((item) => !item.archived));
 const archivedProjects = computed(() => workspaces.value.filter((item) => item.archived));
@@ -546,6 +550,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       } : current);
     }
     if (runId === activeRunId.value) activeRunId.value = null;
+    runActive.value = false;
     liveRunUsage.delete(relatedRunId);
     void refreshIndex(false);
     return;
@@ -575,6 +580,7 @@ function beginTask(project: Workspace | null = workspace.value) {
   liveRunUsage.clear();
   timeline.value = new Map();
   activeRunId.value = null;
+  runActive.value = false;
   page.value = "work";
   prompt.value = "";
   selectedStarterTask.value = "";
@@ -597,6 +603,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
       activeRunId.value = await sendPrompt(sessionId, trimmed);
+      runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
       await refreshIndex(false);
     } else {
@@ -604,9 +611,20 @@ async function submitTask(content: string, project: Workspace | null = workspace
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
       activeRunId.value = await sendPrompt(activeId.value, trimmed);
+      runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
     }
   } finally { sending.value = false; }
+}
+// 停止当前正在执行的 run；后端取消后通过 run.finished 事件更新界面状态
+async function stopActiveRun() {
+  const runId = activeRunId.value;
+  if (!runId) return;
+  try {
+    await cancelRun(runId);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+  }
 }
 async function chooseTask(id: string) {
   activeId.value = id;
@@ -618,6 +636,8 @@ async function chooseTask(id: string) {
   const history = await sessionHistory(id);
   hydrateTimeline(history.messages, history.run_stats);
   activeRunId.value = latestRunId;
+  // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
+  runActive.value = !!latestRunId && sessions.value.find((item) => item.session_id === id)?.status === "active";
   page.value = "work";
 }
 async function chooseWorkspace(item: Workspace) { workspace.value = item; projectMenuOpen.value = false; const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id); if (matching) await chooseTask(matching.session_id); }
@@ -806,7 +826,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; void refreshIndex(false); }
+function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function loadNativeSettings() {
   try {
     const settings = await getNativeSettings();
@@ -1207,7 +1227,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
             </section>
@@ -1251,7 +1271,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 </div>
                 <span />
                 <ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" />
-                <button class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
+                <button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
               </div>
               <div class="launcher-project-control">
                 <button type="button" class="composer-project" aria-haspopup="menu" :aria-expanded="launcherProjectMenuOpen" @click.stop="toggleLauncherProjectMenu"><FolderOpen :size="15" /><span>{{ workspace?.name || '选择本地项目' }}</span><ChevronDown :size="13" /></button>
