@@ -52,7 +52,15 @@ cd desktop/src-tauri
 cargo check
 ```
 
-桌面端依赖正在运行的 Python daemon。前端开发服务器端口由 `desktop/vite.config.ts` 决定，Tauri 开发入口由 `desktop/src-tauri/tauri.conf.json` 配置。
+桌面端依赖正在运行的 Python daemon。前端开发服务器端口由 `desktop/vite.config.ts` 决定，Tauri 开发入口由 `desktop/src-tauri/tauri.conf.json` 配置；macOS 专用窗口样式在 `desktop/src-tauri/tauri.macos.conf.json`。
+
+### macOS
+
+- 先安装 Xcode Command Line Tools：`xcode-select --install`
+- 开发流程与上方相同（bash）；不要依赖 Windows 专用路径或 PowerShell 示例
+- 本机打包：`cd desktop && npm run tauri build`
+- 视觉测试：`npx playwright install chromium && npm run test:visual`
+- 详细命令与产物路径见 [Desktop README](../../desktop/README.md)
 
 ## 模块修改清单
 
