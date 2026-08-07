@@ -621,8 +621,8 @@ fn main() {
                 let _ = window.set_theme(Some(tauri::Theme::Light));
                 // Sidebar 材质更透一些，贴近 Cursor/Codex 浅色毛玻璃
                 let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None);
-                // 拦截系统 zoom，标题栏双击/绿色按钮改走无动画 work-area fill
-                macos_work_area::install_zoom_intercept();
+                // 拖边缘改大小时逐帧重绘，避免 WKWebView 旧帧缩放造成 8px 边距跳变
+                let _ = macos_work_area::disable_live_resize_preserve(&window);
             }
             window.set_focus().expect("focus main window");
             Ok(())
