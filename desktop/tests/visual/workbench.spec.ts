@@ -378,3 +378,54 @@ test("settings remains available from the workbench footer", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
   await expect(page.getByText("系统设置")).toBeVisible();
 });
+
+// 功能：验证右侧功能区"全屏"是真正的全屏——其余窗口功能全部隐藏，功能区独占整个视口，而非浮层遮挡
+// 设计：复用 collapse 测试的 Vue 状态注入让会话区/功能区出现，点「全屏」后用 getBoundingClientRect 与 offsetParent
+// 断言面板铺满视口且标题栏/导航/会话区真的 display:none，再按 Esc 验证恢复，避免只验证类名导致语义倒退
+test("workspace panel fullscreen hides all other windows and fills the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("#app").evaluate((root) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    state.workspace = { workspace_id: "workspace-fixture", name: "Fixture", path: "F:/fixture", archived: false };
+    state.sessions = [{ session_id: "session-fixture", title: "Fixture task", status: "active", updated_at: "", archived: false, pinned: false, workspace_id: "workspace-fixture" }];
+    state.activeId = "session-fixture";
+  });
+
+  const inspector = page.locator(".project-inspector");
+  const expandButton = page.getByRole("button", { name: "全屏", exact: true });
+  await expect(expandButton).toBeVisible();
+  await expandButton.click();
+  await expect(inspector).toHaveClass(/is-expanded/);
+
+  const geometry = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>(".project-inspector.is-expanded")!;
+    const rect = panel.getBoundingClientRect();
+    return {
+      panel: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      titlebarGone: !document.querySelector<HTMLElement>(".kimi-titlebar")?.offsetParent,
+      sidebarGone: !document.querySelector<HTMLElement>(".sidebar-viewport")?.offsetParent,
+      canvasGone: !document.querySelector<HTMLElement>(".task-canvas")?.offsetParent,
+      dividerGone: !document.querySelector<HTMLElement>(".layout-divider")?.offsetParent,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    };
+  });
+
+  expect(geometry.panel.x).toBe(0);
+  expect(geometry.panel.y).toBe(0);
+  expect(geometry.panel.width).toBeCloseTo(geometry.viewport.width, 0);
+  expect(geometry.panel.height).toBeCloseTo(geometry.viewport.height, 0);
+  expect(geometry.titlebarGone).toBe(true);
+  expect(geometry.sidebarGone).toBe(true);
+  expect(geometry.canvasGone).toBe(true);
+  expect(geometry.dividerGone).toBe(true);
+
+  // Esc 退出全屏：其余窗口功能恢复
+  await page.keyboard.press("Escape");
+  await expect(inspector).not.toHaveClass(/is-expanded/);
+  await expect(page.locator(".kimi-titlebar")).toBeVisible();
+  await expect(page.locator(".sidebar-viewport")).toBeVisible();
+  await expect(page.locator(".task-canvas")).toBeVisible();
+});

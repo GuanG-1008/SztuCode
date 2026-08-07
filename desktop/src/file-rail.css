@@ -15,7 +15,14 @@
   border-radius: 10px;
   box-shadow: 0 2px 8px rgb(27 35 31 / 4%);
 }
-.project-inspector.file-rail.is-expanded { position: fixed; z-index: 210; inset: 7px 7px 7px 276px; width: auto; max-height: none; margin: 0; box-shadow: 0 12px 40px rgb(27 35 31 / 14%); }
+/* 展开态进入真正全屏：功能区独占整个窗口（无边框/圆角/阴影），其余窗口功能全部隐藏，而非用层级遮挡 */
+.project-inspector.file-rail.is-expanded { position: fixed; inset: 0; z-index: 210; width: auto; max-height: none; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+/* 全屏时隐藏标题栏、导航、会话区与分隔条，让功能区独占窗口 */
+.kimi-shell:has(.project-inspector.file-rail.is-expanded) .kimi-titlebar,
+.kimi-shell:has(.project-inspector.file-rail.is-expanded) .sidebar-viewport,
+.kimi-shell:has(.project-inspector.file-rail.is-expanded) .sidebar-resizer,
+.kimi-shell:has(.project-inspector.file-rail.is-expanded) .task-canvas,
+.kimi-shell:has(.project-inspector.file-rail.is-expanded) .layout-divider { display: none; }
 
 .workspace-tab-strip {
   position: relative;
