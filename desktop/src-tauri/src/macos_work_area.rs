@@ -10,8 +10,7 @@ use std::{
     time::Duration,
 };
 
-use objc2::msg_send;
-use objc2_app_kit::{NSScreen, NSView, NSWindow};
+use objc2_app_kit::{NSScreen, NSWindow};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::WebviewWindow;
 
@@ -78,17 +77,7 @@ fn lerp_frame(from: FrameTuple, to: FrameTuple, t: f64) -> FrameTuple {
     )
 }
 
-/// 对 view 及其一层子视图关闭 live-resize 内容保真。
-fn disable_preserve_on_view(view: &NSView) {
-    // SAFETY: NSView 响应 setPreservesContentDuringLiveResize:
-    let _: () = unsafe { msg_send![view, setPreservesContentDuringLiveResize: false] };
-    for sub in view.subviews().iter() {
-        let sub_ref: &NSView = sub;
-        let _: () = unsafe { msg_send![sub_ref, setPreservesContentDuringLiveResize: false] };
-    }
-}
-
-/// 关闭窗口与 contentView/webview 的 live-resize 内容保真，减轻拖边缘时边距跳变。
+/// 关闭窗口 live-resize 内容保真，减轻拖边缘时边距跳变。
 pub fn disable_live_resize_preserve(window: &WebviewWindow) -> Result<(), String> {
     let window_for_thread = window.clone();
     window
@@ -103,9 +92,6 @@ pub fn disable_live_resize_preserve(window: &WebviewWindow) -> Result<(), String
             unsafe {
                 let ns_window = &*(ptr as *const NSWindow);
                 ns_window.setPreservesContentDuringLiveResize(false);
-                if let Some(content) = ns_window.contentView() {
-                    disable_preserve_on_view(&content);
-                }
             }
         })
         .map_err(|e| e.to_string())
