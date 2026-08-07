@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +29,18 @@ def _continuation_message(summary_text: str) -> str:
         "further questions. Resume directly — do not acknowledge the summary, do not "
         "recap what was happening, and do not preface with continuation text."
     )
+
+
+# 构造压缩续接的 assistant ack 消息内容块（带 cache_control 断点标记）
+# 借鉴 Claude Code：摘要 ack 消息上放置 cache_control，使前缀稳定可缓存
+def _continuation_ack_blocks() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "text",
+            "text": "Understood, I'll continue from this summary.",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
 
 _COMPACT_PROMPT = """\
@@ -63,11 +74,13 @@ Be concise. Omit reasoning steps and intermediate attempts. Keep conclusions.\
 
 
 # 返回当前 UTC 时间的简短时间戳字符串（用于文件名）
+# 宽松检查摘要质量 — 只要有关键词和足够长度就接受，不要求严格格式
 def _summary_is_well_formed(summary: str) -> bool:
-    return bool(
-        re.search(r"^##\s*1\.\s*Original Goal", summary, re.MULTILINE)
-        and summary.count("## ") >= 2
+    keywords = any(
+        kw in summary.lower()
+        for kw in ("original goal", "completed", "remaining", "summary", "progress")
     )
+    return bool(keywords and len(summary) >= 30)
 
 
 def _ts_compact() -> str:
@@ -77,6 +90,71 @@ def _ts_compact() -> str:
 # 返回当前 UTC 时间的 ISO 8601 字符串
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# ─── 滑动窗口 turn 检测 ───
+
+# 判断消息是否为独立 user 文本消息（turn 0 序言或干预消息）
+def _is_standalone_user_msg(msg: dict[str, Any]) -> bool:
+    return msg.get("role") == "user" and isinstance(msg.get("content"), str)
+
+
+# 判断 user 消息是否包含 tool_result 块（标志一个 turn 结束）
+def _has_tool_results(msg: dict[str, Any]) -> bool:
+    content = msg.get("content")
+    return isinstance(content, list) and any(
+        b.get("type") == "tool_result" for b in content
+    )
+
+
+# 将扁平消息列表切分为 turn 列表
+# Turn 0 = 序言（初始 goal），Turn N = [assistant] + [user(tool_results)]
+# 借鉴 Claude Code keepRecent=5 的分组逻辑
+def _split_into_turns(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if not messages:
+        return []
+
+    turns: list[list[dict[str, Any]]] = []
+    i = 0
+
+    # Turn 0: 收集所有前导独立 user 文本消息（序言）
+    preamble: list[dict[str, Any]] = []
+    while i < len(messages) and _is_standalone_user_msg(messages[i]):
+        preamble.append(messages[i])
+        i += 1
+    if preamble:
+        turns.append(preamble)
+
+    # 剩余消息：配对 assistant + user(tool_results)
+    current: list[dict[str, Any]] = []
+    for j in range(i, len(messages)):
+        msg = messages[j]
+        if msg["role"] == "assistant":
+            if current:
+                turns.append(current)
+            current = [msg]
+        elif msg["role"] == "user":
+            current.append(msg)
+            if _has_tool_results(msg):
+                turns.append(current)
+                current = []
+            else:
+                # 独立 user 消息（干预等）— 自成一个 turn
+                turns.append(current)
+                current = []
+    if current:
+        turns.append(current)  # 尾部 assistant（end_turn）
+    return turns
+
+
+# 将 turn 列表还原为扁平消息列表
+def _flatten_turns(turns: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [msg for turn in turns for msg in turn]
+
+
+# 将 turn 列表序列化为纯文本（供 LLM 摘要使用）
+def _turns_to_text(turns: list[list[dict[str, Any]]]) -> str:
+    return _messages_to_text(_flatten_turns(turns))
 
 
 @dataclass
@@ -101,68 +179,106 @@ class Compactor:
         context: ExecutionContext,
         provider: LLMProvider,
         focus: str = "",
+        *,
+        sliding_window_size: int = 0,
     ) -> CompactionResult | None:
         await self.notify_compacting(context.run_id)
-        result = await self.compact_messages(context.messages, provider, focus=focus)
-        if result is None:
-            return None
-
-        context.messages = [
-            {"role": "user", "content": _continuation_message(result.summary_text)},
-            {"role": "assistant", "content": "Understood, I'll continue from this summary."},
-        ]
+        if sliding_window_size > 0:
+            result, new_msgs = await self.compact_messages(
+                context.messages, provider, focus=focus,
+                sliding_window_size=sliding_window_size,
+                compaction_count=context.compaction_count,
+            )
+            if result is None or new_msgs is None:
+                return None
+            context.messages = new_msgs
+        else:
+            result = await self.compact_messages(context.messages, provider, focus=focus)
+            if result is None:
+                return None
+            context.messages = [
+                {"role": "user", "content": _continuation_message(result.summary_text)},
+                {"role": "assistant", "content": _continuation_ack_blocks()},
+            ]
         context.compacted = True
+        context.compaction_count += 1
+        context.compaction_failure_count = 0  # 成功一次重置熔断器
         await self.record_compaction(context.run_id, result)
         logger.info(
-            "context compacted session=%s run=%s original≈%d summary=%d tokens",
+            "context compacted session=%s run=%s original≈%d summary=%d tokens mode=%s",
             self._session_id, context.run_id,
             result.original_token_estimate, result.summary_tokens,
+            "sliding" if sliding_window_size > 0 else "full",
         )
         return result
 
     # 异步压缩：在后台执行压缩，不阻塞 AgentLoop
-    # 借鉴 Hy-Memory System2 理念 — 耗时记忆操作不应阻塞对话
+    # 借鉴 Claude Code precomputeCompactionEnabled — 后台预计算摘要
     def compact_async(
         self,
         context: ExecutionContext,
         provider: LLMProvider,
         focus: str = "",
+        *,
+        sliding_window_size: int = 0,
     ) -> asyncio.Task[None] | None:
         # 对当前消息做快照（浅拷贝列表，消息 dict 本身不变）
         snapshot = list(context.messages)
 
         async def _run() -> None:
             await self.notify_compacting(context.run_id)
-            result = await self.compact_messages(snapshot, provider, focus=focus)
-            if result is None:
-                return
-
-            # 检查快照后是否有新消息追加
-            if len(context.messages) > len(snapshot):
-                # 有新消息：仅压缩快照部分，保留新增消息
-                new_messages = context.messages[len(snapshot):]
-                context.messages = [
-                    {"role": "user", "content": _continuation_message(result.summary_text)},
-                    {
-                        "role": "assistant",
-                        "content": "Understood, I'll continue from this summary.",
-                    },
-                ] + new_messages
+            if sliding_window_size > 0:
+                result, new_msgs = await self.compact_messages(
+                    snapshot, provider, focus=focus,
+                    sliding_window_size=sliding_window_size,
+                    compaction_count=context.compaction_count,
+                )
+                if result is None:
+                    context.compaction_failure_count += 1
+                    logger.warning(
+                        "compactor: sliding compaction attempt %d failed (session=%s)",
+                        context.compaction_failure_count, context.run_id,
+                    )
+                    return
+                # result 非 None 但 new_msgs 为 None → 跳过（token 不足等）
+                if new_msgs is None:
+                    return
+                # 检查快照后是否有新消息追加
+                if len(context.messages) > len(snapshot):
+                    new_messages_since = context.messages[len(snapshot):]
+                    context.messages = new_msgs + new_messages_since
+                else:
+                    context.messages = new_msgs
             else:
-                # 无新增：全量替换
-                context.messages = [
-                    {"role": "user", "content": _continuation_message(result.summary_text)},
-                    {
-                        "role": "assistant",
-                        "content": "Understood, I'll continue from this summary.",
-                    },
-                ]
+                result = await self.compact_messages(snapshot, provider, focus=focus)
+                if result is None:
+                    context.compaction_failure_count += 1
+                    logger.warning(
+                        "compactor: full compaction attempt %d failed (session=%s)",
+                        context.compaction_failure_count, context.run_id,
+                    )
+                    return
+                # 检查快照后是否有新消息追加
+                if len(context.messages) > len(snapshot):
+                    new_messages = context.messages[len(snapshot):]
+                    context.messages = [
+                        {"role": "user", "content": _continuation_message(result.summary_text)},
+                        {"role": "assistant", "content": _continuation_ack_blocks()},
+                    ] + new_messages
+                else:
+                    context.messages = [
+                        {"role": "user", "content": _continuation_message(result.summary_text)},
+                        {"role": "assistant", "content": _continuation_ack_blocks()},
+                    ]
             context.compacted = True
+            context.compaction_count += 1
+            context.compaction_failure_count = 0  # 成功一次重置熔断器
             await self.record_compaction(context.run_id, result)
             logger.info(
-                "context compacted (async) session=%s run=%s original≈%d summary=%d tokens",
+                "context compacted (async) session=%s run=%s original≈%d summary=%d tokens mode=%s",
                 self._session_id, context.run_id,
                 result.original_token_estimate, result.summary_tokens,
+                "sliding" if sliding_window_size > 0 else "full",
             )
 
         task = asyncio.create_task(_run())
@@ -197,68 +313,149 @@ class Compactor:
             )
         )
 
-    # 纯函数式压缩：接收消息列表，返回 CompactionResult；失败时返回 None
+    # 纯函数式压缩：接收消息列表，返回 CompactionResult 或 (result, new_messages)
+    # sliding_window_size=0 → 全量替换（返回单个 CompactionResult | None）
+    # sliding_window_size>0 → 滑动窗口（返回 (CompactionResult | None, new_messages | None)）
     async def compact_messages(
         self,
         messages: list[dict[str, Any]],
         provider: LLMProvider,
         focus: str = "",
-    ) -> CompactionResult | None:
+        *,
+        sliding_window_size: int = 0,
+        compaction_count: int = 0,
+    ) -> CompactionResult | None | tuple[CompactionResult | None, list[dict[str, Any]] | None]:
         from sztu_code.core.compact.token_counter import TokenCounter
         from sztu_code.core.events.bus import EventBus as _Bus
 
         counter = TokenCounter()
-        history_text = _messages_to_text(messages)
-        original_estimate = counter.count(history_text)
-        prompt = _COMPACT_PROMPT
-        if focus.strip():
-            prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
 
-        compress_request: list[dict[str, object]] = [
-            {"role": "user", "content": f"{prompt}\n\n---\n\n{history_text}"}
-        ]
+        if sliding_window_size > 0:
+            # ─── 滑动窗口模式 ───
+            # 保留最近 N 个 turn 完整细节，仅摘要更早的 turn
+            # 这样摘要前缀可以跨多次 LLM 调用保持稳定 → API 自动缓存
+            turns = _split_into_turns(messages)
+            if len(turns) <= 1 + sliding_window_size:
+                # turn 太少 — 回退全量替换，确保短对话仍能压缩
+                history_text = _messages_to_text(messages)
+                original_estimate = counter.count(history_text)
+                prompt = _COMPACT_PROMPT
+                if focus.strip():
+                    prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
 
-        try:
-            silent_bus = _Bus()
-            response = await provider.chat(
-                messages=compress_request,
-                tool_schemas=[],
-                bus=silent_bus,
-                run_id="compact",
-                step=0,
-                system="You are a helpful assistant that summarizes conversations.",
-            )
-        except Exception:
-            logger.exception("compactor: LLM call failed, skipping compaction")
-            return None
+                compress_request = [
+                    {"role": "user", "content": f"{prompt}\n\n---\n\n{history_text}"}
+                ]
 
-        if response.stop_reason == "max_tokens":
-            logger.warning("compactor: summary response truncated, skipping compaction")
-            return None
+                try:
+                    silent_bus = _Bus()
+                    response = await provider.chat(
+                        messages=compress_request,
+                        tool_schemas=[],
+                        bus=silent_bus,
+                        run_id="compact",
+                        step=0,
+                        system="You are a helpful assistant that summarizes conversations.",
+                    )
+                except Exception:
+                    logger.exception("compactor: LLM call failed, skipping compaction")
+                    return None, None
 
-        summary_text = response.text.strip()
-        if not summary_text or not _summary_is_well_formed(summary_text):
-            logger.warning("compactor: LLM returned invalid summary, skipping compaction")
-            return None
+                result = _validate_summary(response, counter, original_estimate)
+                if result is None:
+                    return None, None
 
-        summary_tokens = (
-            response.usage.output_tokens
-            if response.usage
-            else counter.count(summary_text)
-        )
-        if summary_tokens >= original_estimate:
-            logger.warning(
-                "compactor: summary not beneficial original=%d summary=%d, skipping compaction",
-                original_estimate,
-                summary_tokens,
-            )
-            return None
+                new_messages = [
+                    {"role": "user", "content": _continuation_message(result.summary_text)},
+                    {"role": "assistant", "content": _continuation_ack_blocks()},
+                ]
+                return result, new_messages
 
-        return CompactionResult(
-            summary_text=summary_text,
-            original_token_estimate=original_estimate,
-            summary_tokens=summary_tokens,
-        )
+            preamble = turns[0]  # 始终保留序言（初始 goal）
+            body_turns = turns[1:]
+            old_turns = body_turns[:-sliding_window_size]
+            recent_turns = body_turns[-sliding_window_size:]
+
+            history_text = _turns_to_text(old_turns)
+            original_estimate = counter.count(history_text)
+            # 旧 turn 太小（< 2000 tokens），跳过但不计失败
+            # 返回 result 非 None 但 new_messages=None → compact_async 不增 failure_count
+            if original_estimate < 2000:
+                logger.info(
+                    "compactor: old turns too small (%d tok, %d turns), deferring",
+                    original_estimate, len(old_turns),
+                )
+                return CompactionResult(
+                    summary_text="",
+                    original_token_estimate=original_estimate,
+                    summary_tokens=0,
+                ), None
+            prompt = _COMPACT_PROMPT
+            if compaction_count > 0:
+                prompt += (
+                    f"\n\nThis is compaction #{compaction_count + 1}. "
+                    "The previous summary is already in the conversation prefix. "
+                    "Focus primarily on new information in the turns below."
+                )
+            if focus.strip():
+                prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
+
+            compress_request: list[dict[str, object]] = [
+                {"role": "user", "content": f"{prompt}\n\n---\n\n{history_text}"}
+            ]
+
+            try:
+                silent_bus = _Bus()
+                response = await provider.chat(
+                    messages=compress_request,
+                    tool_schemas=[],
+                    bus=silent_bus,
+                    run_id="compact",
+                    step=0,
+                    system="You are a helpful assistant that summarizes conversations.",
+                )
+            except Exception:
+                logger.exception("compactor: LLM call failed, skipping compaction")
+                return None, None
+
+            result = _validate_summary(response, counter, original_estimate)
+            if result is None:
+                return None, None
+
+            # 重构消息列表：序言 + 摘要对 + 最近 turn
+            new_messages: list[dict[str, Any]] = list(preamble) + [
+                {"role": "user", "content": _continuation_message(result.summary_text)},
+                {"role": "assistant", "content": _continuation_ack_blocks()},
+            ] + _flatten_turns(recent_turns)
+
+            return result, new_messages
+        else:
+            # ─── 全量替换模式（向后兼容）───
+            history_text = _messages_to_text(messages)
+            original_estimate = counter.count(history_text)
+            prompt = _COMPACT_PROMPT
+            if focus.strip():
+                prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
+
+            compress_request: list[dict[str, object]] = [
+                {"role": "user", "content": f"{prompt}\n\n---\n\n{history_text}"}
+            ]
+
+            try:
+                silent_bus = _Bus()
+                response = await provider.chat(
+                    messages=compress_request,
+                    tool_schemas=[],
+                    bus=silent_bus,
+                    run_id="compact",
+                    step=0,
+                    system="You are a helpful assistant that summarizes conversations.",
+                )
+            except Exception:
+                logger.exception("compactor: LLM call failed, skipping compaction")
+                return None
+
+            return _validate_summary(response, counter, original_estimate)
 
     # 将摘要文本写入 session 目录的 summary_<ts>.md
     def _write_summary(self, text: str) -> None:
@@ -268,6 +465,41 @@ class Compactor:
             path.write_text(text, encoding="utf-8")
         except Exception:
             logger.exception("compactor: failed to write summary file")
+
+
+# 验证 LLM 返回的摘要结果（截断、格式、大小检查）
+def _validate_summary(
+    response: Any,
+    counter: Any,
+    original_estimate: int,
+) -> CompactionResult | None:
+    if response.stop_reason == "max_tokens":
+        logger.warning("compactor: summary response truncated, skipping compaction")
+        return None
+
+    summary_text = response.text.strip()
+    if not summary_text or not _summary_is_well_formed(summary_text):
+        logger.warning("compactor: LLM returned invalid summary, skipping compaction")
+        return None
+
+    summary_tokens = (
+        response.usage.output_tokens
+        if response.usage
+        else counter.count(summary_text)
+    )
+    if summary_tokens >= original_estimate:
+        logger.warning(
+            "compactor: summary not beneficial original=%d summary=%d, skipping compaction",
+            original_estimate,
+            summary_tokens,
+        )
+        return None
+
+    return CompactionResult(
+        summary_text=summary_text,
+        original_token_estimate=original_estimate,
+        summary_tokens=summary_tokens,
+    )
 
 
 # 将消息列表序列化为可供 LLM 阅读的纯文本
