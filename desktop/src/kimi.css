@@ -158,8 +158,14 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .slash-menu > footer span { display: flex; align-items: center; gap: 4px; }
 .slash-menu kbd { min-width: 20px; padding: 3px 5px; color: #62676e; background: #fff; border: 1px solid #d9dbde; border-radius: 4px; box-shadow: 0 1px 0 #d5d7da; font: 9px/1 "SFMono-Regular", Consolas, monospace; text-align: center; }
 @keyframes slash-menu-in { from { opacity: 0; transform: translateY(4px) scale(.995); } to { opacity: 1; transform: translateY(0) scale(1); } }
-.attachment-strip { display: flex; gap: 5px; overflow: auto; padding: 0 12px 7px; }
-.attachment-strip span { max-width: 160px; overflow: hidden; padding: 4px 6px; color: #5b6169; background: #eef1f3; border-radius: 5px; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-strip { display: flex; gap: 6px; overflow-x: auto; padding: 0 12px 7px; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 190px; padding: 3px 5px; color: #5b6169; background: #eef1f3; border-radius: 6px; font-size: 10px; }
+.attachment-chip img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; }
+.attachment-chip b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip small { color: #8a9097; font-size: 9px; }
+.attachment-chip button { display: grid; width: 16px; height: 16px; flex: 0 0 auto; padding: 0; place-items: center; color: #8a9097; background: transparent; border-radius: 50%; }
+.attachment-chip button:hover { color: #c0453f; background: #e0e4e6; }
+.attachment-chip--image { padding: 3px 5px 3px 3px; }
 button.composer-project { width: 100%; border-radius: 0; background: transparent; }
 button.composer-project:hover { color: #1a70cf; }
 

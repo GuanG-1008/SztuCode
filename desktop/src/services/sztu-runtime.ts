@@ -9,6 +9,14 @@ export type FileReadResult = {
   content: string; encoding: string; binary: boolean; truncated: boolean;
   media_base64?: string | null; mime_type?: string | null;
 };
+// 「添加附件」读取结果：图片/二进制给 data_base64，文本给 text_content，超限/失败给 error
+export type Attachment = {
+  path: string; name: string; size: number;
+  mime_type?: string | null; is_text: boolean;
+  text_content?: string | null; data_base64?: string | null; error?: string | null;
+};
+// 随消息发送的图片内容块，字段与 daemon 的 MessageImageBlock 对齐
+export type ImageBlock = { media_type: string; data: string };
 export type ChangeSummary = {
   path: string; index_status: string; worktree_status: string;
   run_id?: string | null; agent_owned?: boolean; revertible?: boolean;
@@ -131,8 +139,8 @@ export async function sessionHistory(sessionId: string): Promise<SessionHistory>
   };
 }
 
-export async function sendPrompt(sessionId: string, message: string): Promise<string> {
-  const result = await client.request("session.send_message", { session_id: sessionId, content: message });
+export async function sendPrompt(sessionId: string, message: string, images: ImageBlock[] = []): Promise<string> {
+  const result = await client.request("session.send_message", { session_id: sessionId, content: message, images });
   return String(result.run_id ?? "");
 }
 
@@ -204,6 +212,11 @@ export async function readFile(workspaceId: string, path: string): Promise<FileR
     media_base64: typeof result.media_base64 === "string" ? result.media_base64 : null,
     mime_type: typeof result.mime_type === "string" ? result.mime_type : null,
   };
+}
+
+// 读取「添加附件」选中的本地文件（Tauri 侧），返回逐文件分类结果
+export async function readAttachments(paths: string[]): Promise<Attachment[]> {
+  return await invoke<Attachment[]>("read_attachment", { paths });
 }
 
 export async function listChanges(workspaceId: string, runId?: string | null): Promise<ChangeSummary[]> {

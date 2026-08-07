@@ -21,9 +21,9 @@ import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolC
 import { isMacOSPlatform } from "./lib/platform";
 import {
   applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
-  listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, respondPermission,
+  listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
   resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings,
-  type CcswitchProvider, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
+  type Attachment, type CcswitchProvider, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
 } from "./services/sztu-runtime";
 
 type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "settings" | "diff";
@@ -92,7 +92,15 @@ const filesRequest = ref<{ workspaceId: string; seq: number } | null>(null);
 let filesRequestSeq = 0;
 let inspectorCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let inspectorOpenFrame: number | undefined;
-const attachedFiles = ref<string[]>([]);
+// 待发送附件：图片走 base64 内容块，文本把内容注入消息
+type PendingAttachment = {
+  path: string; name: string; size: number;
+  kind: "image" | "text";
+  mime?: string;
+  textContent?: string;
+  dataBase64?: string;
+};
+const attachedFiles = ref<PendingAttachment[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
 const notifications = ref(localStorage.getItem("sztu.notifications") !== "false");
@@ -581,12 +589,13 @@ function beginTask(project: Workspace | null = workspace.value) {
   timeline.value = new Map();
   activeRunId.value = null;
   runActive.value = false;
+  attachedFiles.value = [];
   page.value = "work";
   prompt.value = "";
   selectedStarterTask.value = "";
   void nextTick(() => launcherPrompt.value?.focus());
 }
-async function submitTask(content: string, project: Workspace | null = workspace.value) {
+async function submitTask(content: string, project: Workspace | null = workspace.value, images: ImageBlock[] = []) {
   const trimmed = content.trim();
   if (!trimmed || !connected.value || sending.value) return;
   sending.value = true;
@@ -602,7 +611,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       page.value = "work";
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(sessionId, trimmed);
+      activeRunId.value = await sendPrompt(sessionId, trimmed, images);
       runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
       await refreshIndex(false);
@@ -610,7 +619,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       if (active.value?.archived || active.value?.status === "closed") return;
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(activeId.value, trimmed);
+      activeRunId.value = await sendPrompt(activeId.value, trimmed, images);
       runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
     }
@@ -714,7 +723,9 @@ async function submit() {
     void nextTick(() => (activeId.value ? activePrompt.value : launcherPrompt.value)?.focus());
     return;
   }
-  await submitTask(content, workspace.value);
+  const { content: payload, images } = buildMessagePayload(content);
+  await submitTask(payload, workspace.value, images);
+  attachedFiles.value = [];
 }
 // 回车直接发送；Ctrl/Shift/Alt + 回车保留默认换行行为，且忽略中文输入法候选确认
 function onComposerKeydown(event: KeyboardEvent) {
@@ -805,11 +816,87 @@ async function createLocalWorkspace() {
   await refreshIndex(false);
   beginTask(workspace.value);
 }
+// 按 1KB/1MB 格式化附件大小
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function removeAttachment(index: number) { attachedFiles.value = attachedFiles.value.filter((_, i) => i !== index); }
+// 从当前附件构造发送载荷：文本附件拼进 content，图片附件收集成 images 内容块
+function buildMessagePayload(baseText: string): { content: string; images: ImageBlock[] } {
+  const images: ImageBlock[] = [];
+  const sections: string[] = [];
+  for (const att of attachedFiles.value) {
+    if (att.kind === "image" && att.dataBase64) {
+      images.push({ media_type: att.mime ?? "image/png", data: att.dataBase64 });
+    } else if (att.kind === "text" && att.textContent) {
+      sections.push(`[附件: ${att.name}]\n\`\`\`\n${att.textContent}\n\`\`\``);
+    }
+  }
+  return { content: [baseText, ...sections].filter(Boolean).join("\n\n"), images };
+}
+// 处理「添加附件」读取结果：图片/文本归档，超限或二进制在 error 中提示并跳过
+function addReadAttachments(results: Attachment[]) {
+  const added: PendingAttachment[] = [];
+  for (const item of results) {
+    if (item.error) { window.alert(`${item.name}：${item.error}`); continue; }
+    if (item.mime_type?.startsWith("image/") && item.data_base64) {
+      added.push({ path: item.path, name: item.name, size: item.size, kind: "image", mime: item.mime_type, dataBase64: item.data_base64 });
+    } else if (item.is_text && item.text_content != null) {
+      added.push({ path: item.path, name: item.name, size: item.size, kind: "text", textContent: item.text_content });
+    } else {
+      window.alert(`${item.name}：暂不支持作为附件`);
+    }
+  }
+  if (added.length) attachedFiles.value = [...attachedFiles.value, ...added];
+}
 async function selectAttachments() {
-  const selected = await openDialog({ directory: false, multiple: true, title: "添加附件" });
-  const paths = typeof selected === "string" ? [selected] : selected ?? [];
-  attachedFiles.value = [...new Set([...attachedFiles.value, ...paths])];
-  if (paths.length) prompt.value += (prompt.value ? "\n\n" : "") + "附件：\n" + paths.map((path) => "- " + path).join("\n");
+  if ("__TAURI_INTERNALS__" in window) {
+    const selected = await openDialog({ directory: false, multiple: true, title: "添加附件" });
+    const paths = typeof selected === "string" ? [selected] : selected ?? [];
+    if (!paths.length) return;
+    addReadAttachments(await readAttachments(paths));
+  } else {
+    // 浏览器（非 Tauri）回退：用 file input 读取本地文件
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.style.display = "none";
+    input.addEventListener("change", () => {
+      for (const file of Array.from(input.files ?? [])) void addBrowserFile(file);
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  }
+}
+// 浏览器回退：把 File 读成图片 base64 或文本内容，附带同样的限制
+async function addBrowserFile(file: File) {
+  const isImage = file.type.startsWith("image/");
+  const limit = isImage ? 5 * 1024 * 1024 : 1024 * 1024;
+  if (file.size > limit) { window.alert(`${file.name} 超过 ${isImage ? "5MB" : "1MB"} 限制，已跳过`); return; }
+  if (isImage) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
+    }).catch(() => "");
+    const comma = dataUrl.indexOf(",");
+    const dataBase64 = comma >= 0 ? dataUrl.slice(comma + 1) : "";
+    if (dataBase64) attachedFiles.value = [...attachedFiles.value, { path: file.name, name: file.name, size: file.size, kind: "image", mime: file.type, dataBase64 }];
+    return;
+  }
+  const textLike = !file.type || file.type.startsWith("text/") || ["application/json", "application/xml"].includes(file.type);
+  if (!textLike) { window.alert(`${file.name}：暂不支持作为附件`); return; }
+  const text = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsText(file);
+  }).catch(() => "");
+  attachedFiles.value = [...attachedFiles.value, { path: file.name, name: file.name, size: file.size, kind: "text", mime: file.type || undefined, textContent: text.slice(0, 32 * 1024) }];
 }
 function chooseSkill(name: string) {
   prompt.value = "/" + name + " ";
@@ -918,7 +1005,13 @@ async function useCcswitchProvider(providerId: string) {
   }
 }
 function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; closeLauncherMenus(); if (next === "chat") chatView.value = "home"; }
-async function submitChat(content: string) { await submitTask(content, null); page.value = "chat"; chatView.value = "home"; }
+async function submitChat(content: string) {
+  const { content: payload, images } = buildMessagePayload(content);
+  await submitTask(payload, null, images);
+  attachedFiles.value = [];
+  page.value = "chat";
+  chatView.value = "home";
+}
 const isMacOS = isMacOSPlatform();
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
 async function toggleMaximizeWindow() { await getCurrentWindow().toggleMaximize(); }
@@ -1226,7 +1319,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
-                  <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
+                  <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
                   <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
@@ -1237,7 +1330,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 :workspace-id="activeWorkspace.workspace_id"
                 :run-id="active?.latest_run_id"
                 :steps="orderedTimeline"
-                :attachments="attachedFiles"
+                :attachments="attachedFiles.map((item) => item.path)"
                 :workspace-name="activeWorkspace.name"
                 :workspace-path="activeWorkspace.path"
                 :obscured="modelManagerOpen || permissionConfirmOpen"
@@ -1259,7 +1352,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <form class="kimi-composer landing-composer" @submit.prevent="submit()">
               <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
               <textarea ref="launcherPrompt" v-model="prompt" placeholder="描述你要完成的开发任务，输入 / 调用技能" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
-              <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
+              <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
               <div class="composer-toolbar launcher-toolbar">
                 <button type="button" class="round" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>
                 <div class="launcher-permission-control">
