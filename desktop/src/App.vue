@@ -6,7 +6,7 @@ import {
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
-import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
 import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
@@ -50,8 +50,6 @@ const sidebarCollapseArmed = ref(false);
 const sidebarPull = ref(0);
 let stopSidebarDragListeners: (() => void) | undefined;
 let sidebarAnimTimer: number | undefined;
-type MacWindowBounds = { x: number; y: number; width: number; height: number };
-let macRestoreBounds: MacWindowBounds | null = null;
 const connected = ref(false);
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
@@ -879,48 +877,13 @@ function openPage(next: Page) { page.value = next; projectMenuOpen.value = false
 async function submitChat(content: string) { await submitTask(content, null); page.value = "chat"; chatView.value = "home"; }
 const isMacOS = isMacOSPlatform();
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
-// macOS: work-area setSize 代替 zoom，避免主面板与窗口动画不同步
+// macOS：Rust 无动画 work-area fill，避开 NSWindow.zoom 与主面板不同步
 async function toggleMaximizeWindow() {
-  const win = getCurrentWindow();
-  if (!isMacOS) {
-    await win.toggleMaximize();
+  if (isMacOS) {
+    await invoke("macos_toggle_work_area");
     return;
   }
-  try {
-    if (macRestoreBounds) {
-      const current = await win.outerSize();
-      const monitor = await win.currentMonitor();
-      const work = monitor?.workArea.size;
-      const stillFilled = Boolean(
-        work
-        && Math.abs(current.width - work.width) < 4
-        && Math.abs(current.height - work.height) < 4,
-      );
-      if (stillFilled) {
-        const { x, y, width, height } = macRestoreBounds;
-        macRestoreBounds = null;
-        await win.setPosition(new LogicalPosition(x, y));
-        await win.setSize(new LogicalSize(width, height));
-        return;
-      }
-      macRestoreBounds = null;
-    }
-    const factor = await win.scaleFactor();
-    const pos = (await win.outerPosition()).toLogical(factor);
-    const size = (await win.outerSize()).toLogical(factor);
-    const monitor = await win.currentMonitor();
-    if (!monitor) {
-      await win.toggleMaximize();
-      return;
-    }
-    macRestoreBounds = { x: pos.x, y: pos.y, width: size.width, height: size.height };
-    await win.setPosition(monitor.workArea.position);
-    await win.setSize(monitor.workArea.size);
-  } catch (error) {
-    console.error("macOS setSize maximize failed, falling back to toggleMaximize", error);
-    macRestoreBounds = null;
-    await win.toggleMaximize();
-  }
+  await getCurrentWindow().toggleMaximize();
 }
 async function closeWindow() { await getCurrentWindow().close(); }
 let stopMacTitlebandDragArm: (() => void) | undefined;

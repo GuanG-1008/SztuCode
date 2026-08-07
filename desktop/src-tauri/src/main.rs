@@ -5,13 +5,13 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex as StdMutex, OnceLock,
+        Arc, Mutex as StdMutex,
     },
 };
 
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State, Window};
+use tauri::{Emitter, Manager, State, WebviewWindow, Window};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{tcp::OwnedWriteHalf, TcpStream},
@@ -19,6 +19,9 @@ use tokio::{
     sync::Mutex,
     time::{sleep, Duration},
 };
+
+#[cfg(target_os = "macos")]
+mod macos_work_area;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -572,6 +575,20 @@ async fn ipc_send(payload: String, state: State<'_, IpcConnection>) -> Result<()
     Ok(())
 }
 
+// macOS：无动画铺满/还原工作区（避开 NSWindow.zoom 与 WKWebView 不同步）
+#[tauri::command]
+fn macos_toggle_work_area(window: WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_work_area::toggle_work_area(&window)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        Err("macos_toggle_work_area is only available on macOS".into())
+    }
+}
+
 // 主入口：注册受控 IPC 桥与系统目录选择能力。
 fn main() {
     tauri::Builder::default()
@@ -589,7 +606,8 @@ fn main() {
             sandbox_pty_start,
             sandbox_pty_write,
             sandbox_pty_resize,
-            sandbox_pty_close
+            sandbox_pty_close,
+            macos_toggle_work_area
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").expect("main window exists");
@@ -603,6 +621,8 @@ fn main() {
                 let _ = window.set_theme(Some(tauri::Theme::Light));
                 // Sidebar 材质更透一些，贴近 Cursor/Codex 浅色毛玻璃
                 let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None);
+                // 拦截系统 zoom，标题栏双击/绿色按钮改走无动画 work-area fill
+                macos_work_area::install_zoom_intercept();
             }
             window.set_focus().expect("focus main window");
             Ok(())
