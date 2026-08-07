@@ -599,6 +599,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                // 锁定浅色窗口主题，避免 Sidebar vibrancy 跟随系统深色模式
+                let _ = window.set_theme(Some(tauri::Theme::Light));
                 // Sidebar 材质更透一些，贴近 Cursor/Codex 浅色毛玻璃
                 let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None);
             }
