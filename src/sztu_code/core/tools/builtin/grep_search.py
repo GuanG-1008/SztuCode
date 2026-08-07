@@ -104,7 +104,9 @@ class GrepSearchTool(BaseTool):
         root = (self._workspace_root or Path.cwd()).resolve()
         matches: list[str] = []
         for file in self._iter_files(target, p.glob):
-            raw = file.read_bytes()[:_MAX_BYTES]
+            # 流式读取最多 _MAX_BYTES 字节，避免 read_bytes 先加载完整文件
+            with file.open("rb") as fh:
+                raw = fh.read(_MAX_BYTES)
             if b"\x00" in raw[:8192]:
                 continue  # 跳过二进制文件
             text = raw.decode("utf-8", errors="replace")
