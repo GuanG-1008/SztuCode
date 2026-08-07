@@ -990,7 +990,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
     :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
   >
     <!-- macOS: fixed toolbar — toggle never moves between titlebar / sidebar. -->
-    <header v-if="isMacOS" class="sidebar-macos-toolbar" data-tauri-drag-region>
+    <header v-if="isMacOS" class="sidebar-macos-toolbar" data-tauri-drag-region @dblclick="toggleMaximizeWindow">
       <div class="nav-toggle-wrap">
         <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
           <PanelLeftOpen v-if="sidebarCollapsed" :size="16" :stroke-width="1.8" />

@@ -596,6 +596,12 @@ fn main() {
             if let Some(icon) = app.default_window_icon() {
                 window.set_icon(icon.clone())?;
             }
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                // Sidebar 材质更透一些，贴近 Cursor/Codex 浅色毛玻璃
+                let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None);
+            }
             window.set_focus().expect("focus main window");
             Ok(())
         })

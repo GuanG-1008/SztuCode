@@ -501,6 +501,19 @@
     linear-gradient(110deg, rgb(255 255 255 / 12%), rgb(255 255 255 / 3%) 42%, rgb(255 255 255 / 10%));
   content: "";
 }
+/* macOS: translucent chrome over system vibrancy; main panel stays opaque. */
+.kimi-shell.is-macos {
+  background: rgb(246 247 248 / 0.15);
+}
+.kimi-shell.is-macos::before {
+  content: none;
+}
+.kimi-shell.is-macos .kimi-main {
+  border-radius: 8px;
+}
+.kimi-shell.is-macos .kimi-main.chat-main {
+  border-radius: 8px;
+}
 .kimi-titlebar,
 .sidebar-viewport {
   background: transparent;
