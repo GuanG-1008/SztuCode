@@ -35,6 +35,16 @@
 - 每份详细文档顶部提供返回 `docs/README.md` 的链接。
 - 外部资料链接到官方或一手来源，避免依赖不稳定的转载。
 
+调整文档位置或链接后，运行本地链接检查：
+
+```bash
+uv run python scripts/check_markdown_links.py
+```
+
+该脚本检查根目录 Markdown 与 `docs/**/*.md` 中的相对链接是否指向存在的路径，发现坏链时按
+`文档路径:行号 -> 目标` 输出全部问题并以非零状态退出。它不访问网络，因此不校验外部站点是否在线，
+也不校验标题锚点是否存在；外部 URL、邮箱、纯锚点、图片和围栏代码块中的示例链接都会跳过。
+
 ## 自动生成文档
 
 `docs/reference/wire-protocol.md` 由 `scripts/gen_protocol_doc.py` 生成，不手工编辑：

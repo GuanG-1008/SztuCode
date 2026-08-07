@@ -60,6 +60,16 @@ uv run python scripts/gen_protocol_doc.py --check
 
 第一条重新生成 `docs/reference/wire-protocol.md`，第二条验证生成结果与模型一致。协议变更必须提交生成文件。
 
+## 文档链接
+
+```bash
+uv run python scripts/check_markdown_links.py
+uv run pytest tests/unit/test_markdown_links.py -v
+```
+
+第一条检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效，第二条覆盖解析与退出行为。
+移动或重命名文档后应运行，规则见[文档规范](documentation.md)。
+
 ## 桌面端
 
 ```bash
