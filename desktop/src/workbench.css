@@ -869,6 +869,12 @@
 .model-table-name > span { display: grid; min-width: 0; gap: 3px; }
 .model-provider-logo { display: grid; width: 28px; height: 28px; place-items: center; color: #535960; background: #fff; border: 1px solid #e2e4e6; border-radius: 6px; font-size: 9px; font-style: normal; font-weight: 700; }
 .model-provider-logo img { width: 18px; height: 18px; object-fit: contain; }
+.model-table-row button.model-toggle { position: relative; display: flex; width: 28px; height: 16px; flex: 0 0 auto; padding: 0; align-items: center; background: #d9dce0; border-radius: 999px; transition: background .18s; }
+.model-table-row button.model-toggle i { display: block; width: 12px; height: 12px; margin-left: 2px; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px #0003; transition: transform .18s; }
+.model-table-row button.model-toggle.on { background: #2582f7; }
+.model-table-row button.model-toggle.on i { transform: translateX(12px); }
+.model-table-row button.model-toggle:hover:not(.on) { background: #c9cdd2; }
+.model-table-row button.model-toggle.on:hover { background: #1f74e0; }
 .model-table-row b { overflow: hidden; font-size: 13px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
 .model-table-row small { overflow: hidden; color: #8f949a; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .model-table-row > span:last-child { display: flex; justify-content: flex-end; }

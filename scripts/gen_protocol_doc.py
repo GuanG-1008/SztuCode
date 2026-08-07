@@ -159,7 +159,7 @@ def generate() -> str:
     session_create_resp_example = {
         "jsonrpc": "2.0",
         "id": "u-4",
-        "result": {"session_id": session_id, "status": "active"},
+        "result": {"session_id": session_id, "status": "waiting_for_input"},
     }
     session_send_req_example = {
         "jsonrpc": "2.0",

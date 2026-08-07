@@ -19,15 +19,18 @@ test("task conversation prioritizes outcome, evidence, and optional work records
   await expect(page.getByText("第一次命令不可用，我已切换到项目中存在的测试入口并完成验证。", { exact: true })).toBeVisible();
   await expect(page.getByText("执行遇到问题", { exact: true })).toHaveCount(0);
 
+  const historyToggles = page.locator(".turn-history-toggle");
+  await expect(historyToggles).toHaveCount(4);
+  await expect(page.locator(".turn-history")).toHaveCount(2);
+  await historyToggles.first().click();
+  await expect(page.locator(".turn-history")).toHaveCount(3);
   const turnTokenTotals = await page.locator(".turn-usage b").allTextContents();
-  expect(turnTokenTotals).toHaveLength(3);
+  expect(turnTokenTotals).toHaveLength(2);
   expect(new Set(turnTokenTotals).size).toBe(turnTokenTotals.length);
-
-  const records = page.locator(".work-record");
-  await expect(records).toHaveCount(4);
-  await records.first().locator("summary").click();
-  await expect(records.first().getByText("定位重复跳转入口", { exact: true })).toBeVisible();
-  await expect(records.first().getByRole("button", { name: "过程说明" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /已搜索 session expired/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /已编辑 src\/auth\/session.ts/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /已运行 npm test -- auth/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "过程说明" })).toBeVisible();
 });
 
 test("task conversation remains readable in a narrow window", async ({ page }) => {
