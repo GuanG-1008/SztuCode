@@ -183,34 +183,43 @@ class Compactor:
         sliding_window_size: int = 0,
     ) -> CompactionResult | None:
         await self.notify_compacting(context.run_id)
+        final_result: CompactionResult | None = None
         if sliding_window_size > 0:
-            result, new_msgs = await self.compact_messages(
+            ret = await self.compact_messages(
                 context.messages, provider, focus=focus,
                 sliding_window_size=sliding_window_size,
                 compaction_count=context.compaction_count,
             )
-            if result is None or new_msgs is None:
+            if isinstance(ret, tuple):
+                sliding_result, new_msgs = ret
+                if sliding_result is None or new_msgs is None:
+                    return None
+                context.messages = new_msgs
+                final_result = sliding_result
+            else:
                 return None
-            context.messages = new_msgs
         else:
-            result = await self.compact_messages(context.messages, provider, focus=focus)
-            if result is None:
+            ret = await self.compact_messages(context.messages, provider, focus=focus)
+            if ret is None or isinstance(ret, tuple):
                 return None
             context.messages = [
-                {"role": "user", "content": _continuation_message(result.summary_text)},
+                {"role": "user", "content": _continuation_message(ret.summary_text)},
                 {"role": "assistant", "content": _continuation_ack_blocks()},
             ]
+            final_result = ret
+        if final_result is None:
+            return None
         context.compacted = True
         context.compaction_count += 1
         context.compaction_failure_count = 0  # 成功一次重置熔断器
-        await self.record_compaction(context.run_id, result)
+        await self.record_compaction(context.run_id, final_result)
         logger.info(
             "context compacted session=%s run=%s original≈%d summary=%d tokens mode=%s",
             self._session_id, context.run_id,
-            result.original_token_estimate, result.summary_tokens,
+            final_result.original_token_estimate, final_result.summary_tokens,
             "sliding" if sliding_window_size > 0 else "full",
         )
-        return result
+        return final_result
 
     # 异步压缩：在后台执行压缩，不阻塞 AgentLoop
     # 借鉴 Claude Code precomputeCompactionEnabled — 后台预计算摘要
@@ -227,13 +236,22 @@ class Compactor:
 
         async def _run() -> None:
             await self.notify_compacting(context.run_id)
+            final_result: CompactionResult | None = None
             if sliding_window_size > 0:
-                result, new_msgs = await self.compact_messages(
+                ret = await self.compact_messages(
                     snapshot, provider, focus=focus,
                     sliding_window_size=sliding_window_size,
                     compaction_count=context.compaction_count,
                 )
-                if result is None:
+                if not isinstance(ret, tuple):
+                    context.compaction_failure_count += 1
+                    logger.warning(
+                        "compactor: sliding compaction attempt %d failed (session=%s)",
+                        context.compaction_failure_count, context.run_id,
+                    )
+                    return
+                sliding_result, new_msgs = ret
+                if sliding_result is None:
                     context.compaction_failure_count += 1
                     logger.warning(
                         "compactor: sliding compaction attempt %d failed (session=%s)",
@@ -249,9 +267,10 @@ class Compactor:
                     context.messages = new_msgs + new_messages_since
                 else:
                     context.messages = new_msgs
+                final_result = sliding_result
             else:
-                result = await self.compact_messages(snapshot, provider, focus=focus)
-                if result is None:
+                ret = await self.compact_messages(snapshot, provider, focus=focus)
+                if ret is None or isinstance(ret, tuple):
                     context.compaction_failure_count += 1
                     logger.warning(
                         "compactor: full compaction attempt %d failed (session=%s)",
@@ -261,23 +280,24 @@ class Compactor:
                 # 检查快照后是否有新消息追加
                 if len(context.messages) > len(snapshot):
                     new_messages = context.messages[len(snapshot):]
-                    context.messages = [
-                        {"role": "user", "content": _continuation_message(result.summary_text)},
+                    context.messages = [  # type: ignore[assignment]
+                        {"role": "user", "content": _continuation_message(ret.summary_text)},
                         {"role": "assistant", "content": _continuation_ack_blocks()},
                     ] + new_messages
                 else:
                     context.messages = [
-                        {"role": "user", "content": _continuation_message(result.summary_text)},
+                        {"role": "user", "content": _continuation_message(ret.summary_text)},
                         {"role": "assistant", "content": _continuation_ack_blocks()},
                     ]
+                final_result = ret
             context.compacted = True
             context.compaction_count += 1
             context.compaction_failure_count = 0  # 成功一次重置熔断器
-            await self.record_compaction(context.run_id, result)
+            await self.record_compaction(context.run_id, final_result)
             logger.info(
                 "context compacted (async) session=%s run=%s original≈%d summary=%d tokens mode=%s",
                 self._session_id, context.run_id,
-                result.original_token_estimate, result.summary_tokens,
+                final_result.original_token_estimate, final_result.summary_tokens,
                 "sliding" if sliding_window_size > 0 else "full",
             )
 
@@ -343,14 +363,14 @@ class Compactor:
                 if focus.strip():
                     prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
 
-                compress_request = [
+                compact_req: list[dict[str, object]] = [
                     {"role": "user", "content": f"{prompt}\n\n---\n\n{history_text}"}
                 ]
 
                 try:
                     silent_bus = _Bus()
                     response = await provider.chat(
-                        messages=compress_request,
+                        messages=compact_req,
                         tool_schemas=[],
                         bus=silent_bus,
                         run_id="compact",
@@ -365,11 +385,11 @@ class Compactor:
                 if result is None:
                     return None, None
 
-                new_messages = [
+                fallback_msgs: list[dict[str, Any]] = [
                     {"role": "user", "content": _continuation_message(result.summary_text)},
                     {"role": "assistant", "content": _continuation_ack_blocks()},
                 ]
-                return result, new_messages
+                return result, fallback_msgs
 
             preamble = turns[0]  # 始终保留序言（初始 goal）
             body_turns = turns[1:]
@@ -400,14 +420,14 @@ class Compactor:
             if focus.strip():
                 prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
 
-            compress_request: list[dict[str, object]] = [
+            compact_req2: list[dict[str, object]] = [
                 {"role": "user", "content": f"{prompt}\n\n---\n\n{history_text}"}
             ]
 
             try:
                 silent_bus = _Bus()
                 response = await provider.chat(
-                    messages=compress_request,
+                    messages=compact_req2,
                     tool_schemas=[],
                     bus=silent_bus,
                     run_id="compact",
@@ -423,12 +443,12 @@ class Compactor:
                 return None, None
 
             # 重构消息列表：序言 + 摘要对 + 最近 turn
-            new_messages: list[dict[str, Any]] = list(preamble) + [
+            rebuilt_msgs: list[dict[str, Any]] = list(preamble) + [
                 {"role": "user", "content": _continuation_message(result.summary_text)},
                 {"role": "assistant", "content": _continuation_ack_blocks()},
             ] + _flatten_turns(recent_turns)
 
-            return result, new_messages
+            return result, rebuilt_msgs
         else:
             # ─── 全量替换模式（向后兼容）───
             history_text = _messages_to_text(messages)
