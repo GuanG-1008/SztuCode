@@ -98,9 +98,18 @@ npm run test:unit
 ```
 
 UI 变更应验证至少一个常规桌面宽度和一个窄窗口，重点检查文本溢出、权限卡、时间线、Diff 页面和空/错误状态。macOS 上还应确认系统 traffic lights 与导航按钮不重叠。
+
 ## 评估
 
-Agent 任务质量评估与普通回归测试用途不同。SWE-bench、轨迹分析和评测报告的运行方式见 [评估指南](../guides/evaluation.md)。评估产物可能体积较大或包含外部仓库内容，不应默认提交。
+Agent 任务质量评估与普通回归测试用途不同。无需模型凭据的基础设施门禁为：
+
+```bash
+uv run sztu-eval validate --suite internal
+uv run sztu-eval run --suite internal --runner reference --repeat 3
+```
+
+真实 daemon、外部 command runner、SWE-bench 和指标语义见
+[评估指南](../guides/evaluation.md)。评估报告可能含 patch、外部仓库内容或个人路径，不应默认提交。
 
 ## PR 中报告验证结果
 
