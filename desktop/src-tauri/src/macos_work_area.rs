@@ -118,19 +118,37 @@ fn sync_ns_window_content(ns_window: &NSWindow) {
     }
 }
 
-/// 在窗口 Resized 时强制 webview 跟 contentView 对齐（须在主线程调用）。
+/// 在窗口 Resized 时强制 webview 跟 contentView 对齐到 bounds 并标记重绘。
 pub fn sync_webview_to_content_view(window: &WebviewWindow) {
-    let Ok(ptr) = window.ns_window() else {
-        return;
-    };
-    if ptr.is_null() {
+    if MainThreadMarker::new().is_some() {
+        let Ok(ptr) = window.ns_window() else {
+            return;
+        };
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: 主线程上调用 AppKit API
+        unsafe {
+            let ns_window = &*(ptr as *const NSWindow);
+            sync_ns_window_content(ns_window);
+        }
         return;
     }
-    // SAFETY: ptr 来自 Tauri 主窗口的 ns_window，主线程上有效
-    unsafe {
-        let ns_window = &*(ptr as *const NSWindow);
-        sync_ns_window_content(ns_window);
-    }
+
+    let window_for_thread = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let Ok(ptr) = window_for_thread.ns_window() else {
+            return;
+        };
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: run_on_main_thread 保证在主线程上调用 AppKit API
+        unsafe {
+            let ns_window = &*(ptr as *const NSWindow);
+            sync_ns_window_content(ns_window);
+        }
+    });
 }
 
 /// 在主线程上解析 toggle 的起止 frame；若无需动画返回 None。
