@@ -53,6 +53,10 @@ class SessionManager:
         self._workspace_resolver = workspace_resolver
         restored = self._store.list_sessions(include_archived=True)
         for session in restored:
+            # daemon 重启后不存在任何在途 run，磁盘遗留的 active 统一回落为等待输入
+            if session.status == "active":
+                session.status = "waiting_for_input"
+                self._store.write_meta(session)
             self._store.backfill_run_stats(session)
         self._sessions: dict[str, Session] = {session.id: session for session in restored}
         self._locks: dict[str, asyncio.Lock] = {
@@ -75,7 +79,7 @@ class SessionManager:
         session = Session(
             id=sid,
             mode=mode,
-            status="active",
+            status="waiting_for_input",
             title=title,
             created_at=ts,
             updated_at=ts,
@@ -136,6 +140,8 @@ class SessionManager:
                 session.title = content[:40]
 
             session.run_ids.append(run_id)
+            # run 开始执行：状态切为 active，结束后统一回落到 waiting_for_input / closed
+            session.status = "active"
             session.updated_at = _now()
             self._store.write_meta(session)
 

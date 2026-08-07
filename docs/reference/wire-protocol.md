@@ -1201,7 +1201,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "id": "u-4",
   "result": {
     "session_id": "sess-abc123def456",
-    "status": "active"
+    "status": "waiting_for_input"
   }
 }
 ```

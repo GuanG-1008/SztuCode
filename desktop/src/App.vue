@@ -353,6 +353,8 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     void refreshIndex();
     return;
   }
+  // run 开始后刷新会话列表，让侧栏中的会话及时从"等待输入"移入"运行中"
+  if (type === "run.started") void refreshIndex(false);
   // 权限审批是全局的：即使切到其他会话，后台任务的权限也要能审批，避免任务停滞
   if (type === "permission.requested") {
     const toolUseId = String(event.tool_use_id);
@@ -1193,7 +1195,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="!normalizedTaskQuery && (attentionTasks.length || runningTasks.length)" class="side-section task-focus">
           <span class="side-label">任务</span>
           <div v-if="attentionTasks.length" class="task-state-group attention">
-            <div class="task-state-heading"><span><ShieldCheck :size="14" />需要处理</span><b>{{ attentionTasks.length }}</b></div>
+            <div class="task-state-heading"><span><ShieldCheck :size="14" />等待输入</span><b>{{ attentionTasks.length }}</b></div>
             <div v-for="task in attentionTasks" :key="`attention-${task.session_id}`" class="sidebar-session status-session">
               <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
                 <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
