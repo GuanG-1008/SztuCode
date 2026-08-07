@@ -25,7 +25,6 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -41,7 +40,6 @@ SZTU_SRC = Path(__file__).resolve().parents[2] / "src"
 sys.path.insert(0, str(SZTU_SRC))
 
 from sztu_code.core.transport.socket_client import IpcError, SocketClient  # noqa: E402
-
 
 # ──────────────────── 数据模型 ────────────────────
 
@@ -85,6 +83,8 @@ class RunResult:
     status: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     events_log: list[dict] = field(default_factory=list)
 
     def to_pred_dict(self) -> dict:
@@ -93,6 +93,28 @@ class RunResult:
             "model_patch": self.model_patch,
             "model_name_or_path": self.model_name_or_path,
         }
+
+
+@dataclass
+class TokenUsage:
+    """一次运行的 LLM token 用量汇总"""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+
+
+# 汇总事件流中的 llm.usage 顶层字段，缺失按 0 处理且忽略无关事件
+def summarize_token_usage(events: list[dict[str, Any]]) -> TokenUsage:
+    usage = TokenUsage()
+    for ev in events:
+        if ev.get("type") != "llm.usage":
+            continue
+        usage.input_tokens += ev.get("input_tokens", 0) or 0
+        usage.output_tokens += ev.get("output_tokens", 0) or 0
+        usage.cache_read_input_tokens += ev.get("cache_read_input_tokens", 0) or 0
+        usage.cache_creation_input_tokens += ev.get("cache_creation_input_tokens", 0) or 0
+    return usage
 
 
 # ──────────────────── Prompt 构造 ────────────────────
@@ -105,7 +127,8 @@ Here is an issue that needs to be fixed:
 
 {instance.problem_statement}
 
-Please analyze the issue, locate the problematic code in the repository, and make the necessary changes to fix it.
+Please analyze the issue, locate the problematic code in the repository, and make the necessary \
+changes to fix it.
 
 Guidelines:
 - Read the relevant source files first to understand the codebase structure
@@ -133,7 +156,10 @@ def clone_repo(instance: SWEbenchInstance, workspace: Path) -> Path:
 
     # 浅拷贝元数据 + 按需拉取 blob，显著加快大仓库克隆；checkout 需要的提交历史仍会拉取
     subprocess.run(
-        ["git", "clone", "--quiet", "--filter=blob:none", "--single-branch", repo_url, str(repo_dir)],
+        [
+            "git", "clone", "--quiet", "--filter=blob:none",
+            "--single-branch", repo_url, str(repo_dir),
+        ],
         check=True,
         timeout=600,
     )
@@ -214,7 +240,7 @@ async def run_instance_via_rpc(
     try:
         # 1. 设置权限模式为 auto
         await client.send_command("permission.set_mode", {"mode": "auto"})
-        logger.info(f"  Permission mode: auto")
+        logger.info("  Permission mode: auto")
 
         # 2. 打开 workspace
         ws_result = await client.send_command("workspace.open", {
@@ -250,7 +276,7 @@ async def run_instance_via_rpc(
         # 6. 等待 run.finished
         try:
             await asyncio.wait_for(run_finished.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result.error = f"Timeout after {timeout}s"
             # 尝试取消
             try:
@@ -262,12 +288,12 @@ async def run_instance_via_rpc(
         result.steps = run_status["steps"]
         result.events_log = collected_events
 
-        # 提取 token usage
-        for ev in collected_events:
-            if ev.get("type") == "llm.usage":
-                usage = ev.get("usage", {})
-                result.input_tokens += usage.get("input_tokens", 0)
-                result.output_tokens += usage.get("output_tokens", 0)
+        # 提取 token usage（顶层字段，缺失按 0）
+        usage = summarize_token_usage(collected_events)
+        result.input_tokens = usage.input_tokens
+        result.output_tokens = usage.output_tokens
+        result.cache_read_input_tokens = usage.cache_read_input_tokens
+        result.cache_creation_input_tokens = usage.cache_creation_input_tokens
 
         # 7. 获取 diff
         if run_status["status"] in ("success", "max_steps", "cancelled"):
@@ -317,7 +343,8 @@ def _find_local_parquet(dataset_name: str, split: str) -> Path | None:
     """定位本地 SWE-bench parquet（含常见别名），不存在返回 None"""
     candidates = [
         Path(f"data/{dataset_name.replace('/', '_')}_{split}.parquet"),
-        Path(f"data/swebench_{dataset_name.split('/')[-1].replace('SWE-bench_', '').lower()}_{split}.parquet"),
+        Path(f"data/swebench_{dataset_name.split('/')[-1].replace('SWE-bench_', '').lower()}_"
+             f"{split}.parquet"),
     ]
     for path in candidates:
         if path.exists():
@@ -387,7 +414,10 @@ async def run_batch_async(
         )
         results.append(result)
 
-        status_str = result.model_patch[:50] + "..." if result.model_patch else f"FAIL: {result.error}"
+        if result.model_patch:
+            status_str = result.model_patch[:50] + "..."
+        else:
+            status_str = f"FAIL: {result.error}"
         logger.info(
             f"[{i+1}/{total}] {instance.instance_id} -> "
             f"{'PATCHED' if result.model_patch else 'FAILED'} "
@@ -413,6 +443,8 @@ async def run_batch_async(
                 "elapsed_seconds": result.elapsed_seconds,
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
+                "cache_read_input_tokens": result.cache_read_input_tokens,
+                "cache_creation_input_tokens": result.cache_creation_input_tokens,
                 "error": result.error,
                 "has_patch": bool(result.model_patch),
                 "patch_length": len(result.model_patch),
@@ -441,7 +473,10 @@ def main():
     )
     parser.add_argument("--split", default="test", help="数据集 split")
     parser.add_argument("--max-instances", type=int, default=None, help="最多运行多少个实例")
-    parser.add_argument("--instance-ids", default="", help="逗号分隔的 instance_id 列表，只运行这些")
+    parser.add_argument(
+        "--instance-ids", default="",
+        help="逗号分隔的 instance_id 列表，只运行这些",
+    )
     parser.add_argument(
         "--workspace", default="eval/reports/swebench-workspace",
         help="工作目录（存放克隆的仓库）"
@@ -495,7 +530,7 @@ def main():
 
     # 提示下一步
     run_id = time.strftime("%Y%m%d-%H%M%S")
-    logger.info(f"\nNext step — run official harness to score:")
+    logger.info("\nNext step — run official harness to score:")
     logger.info(
         f"  uv run python -m swebench.harness.run_evaluation \\\n"
         f"    --dataset_name {args.dataset} \\\n"
