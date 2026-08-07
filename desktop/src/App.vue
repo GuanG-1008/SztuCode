@@ -986,16 +986,26 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 <template>
   <div
     class="kimi-shell"
-    :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-collapse-armed': sidebarCollapseArmed }"
+    :class="{ 'is-macos': isMacOS, 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-collapse-armed': sidebarCollapseArmed }"
     :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
   >
-    <header class="kimi-titlebar" :class="{ 'is-macos': isMacOS }">
+    <!-- macOS: fixed toolbar — toggle never moves between titlebar / sidebar. -->
+    <header v-if="isMacOS" class="sidebar-macos-toolbar" data-tauri-drag-region>
       <div class="nav-toggle-wrap">
         <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
           <PanelLeftOpen v-if="sidebarCollapsed" :size="16" :stroke-width="1.8" />
           <PanelLeftClose v-else :size="16" :stroke-width="1.8" />
         </button>
-        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>{{ isMacOS ? '⌘' : 'Ctrl' }}</kbd><kbd>B</kbd></div>
+        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>⌘</kbd><kbd>B</kbd></div>
+      </div>
+    </header>
+    <header class="kimi-titlebar" :class="{ 'is-macos': isMacOS }">
+      <div v-if="!isMacOS" class="nav-toggle-wrap">
+        <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
+          <PanelLeftOpen v-if="sidebarCollapsed" :size="16" :stroke-width="1.8" />
+          <PanelLeftClose v-else :size="16" :stroke-width="1.8" />
+        </button>
+        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>Ctrl</kbd><kbd>B</kbd></div>
       </div>
       <div class="titlebar-drag-region" data-tauri-drag-region @dblclick="toggleMaximizeWindow" />
       <div v-if="!isMacOS" class="window-actions" aria-label="Window controls">
