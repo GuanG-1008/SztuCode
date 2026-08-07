@@ -27,8 +27,8 @@ class BashParams(BaseModel):
 _READ_ONLY_COMMANDS: set[str] = {
     "cat", "head", "tail", "less", "more", "ls", "dir",
     "grep", "rg", "awk", "sed", "wc", "file", "stat",
-    "find", "which", "whereis", "type", "echo", "printf",
-    "date", "env", "printenv", "pwd", "whoami", "uname",
+    "find", "which", "where", "whereis", "type", "echo", "printf",
+    "date", "env", "printenv", "pwd", "whoami", "uname", "cls",
     "git", "python", "python3", "node",
 }
 
@@ -100,12 +100,37 @@ def _git_bash_path() -> str | None:
     return shutil.which("bash")
 
 
-# 预处理 agent 常见的 Windows 风格命令，让其在 git-bash 下可用
+# 预处理 agent 常见的 Windows/cmd 风格命令，让其在 git-bash 下可用
 def _preprocess_command(command: str) -> str:
     # cmd 风格 `cd /d X` → `cd X`（/d 是 cmd 切换盘符的标志，bash 不认）
     cmd = re.sub(r"\bcd\s+/d\b", "cd", command)
+    # cmd 的 `dir /s`（递归）/`/b`（裸名）标志 → ls 的 -R/-1
+    cmd = re.sub(
+        r"^\s*dir(\s+/[sb]){1,2}\b",
+        lambda m: "ls -R" if "/s" in m.group(0).lower() else "ls -1",
+        cmd,
+        flags=re.IGNORECASE,
+    )
     # 前导 `dir` → `ls`（git-bash 下无 dir 命令）
     cmd = re.sub(r"^\s*dir(?=\s|$)", "ls", cmd)
+    # cmd 的 `where X` → git-bash `which X`
+    cmd = re.sub(r"\bwhere\s+(?=[A-Za-z0-9_./\\-])", "which ", cmd)
+    # cmd 的重定向到 NUL 设备 → /dev/null
+    cmd = re.sub(r"(?<![\w.])2>nul\b", "2>/dev/null", cmd, flags=re.IGNORECASE)
+    cmd = re.sub(r"(?<![\w.])>nul\b", ">/dev/null", cmd, flags=re.IGNORECASE)
+    # cmd 的 `set VAR=val` → bash 环境变量导出
+    cmd = re.sub(r"\bset\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)", r"export \1=\2", cmd)
+    # cmd 的 `%VAR%` → bash `$VAR`
+    cmd = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", r"$\1", cmd)
+    # cmd 的 `cls` → `clear`
+    cmd = re.sub(r"^\s*cls(?=\s|$)", "clear", cmd)
+    # cmd 的 `type <文件>`（读文件）→ `cat`，仅当后跟疑似路径时转换，避免误伤 bash 内建 type
+    cmd = re.sub(r"^\s*type\s+(?=[^\s;|&]*[./\\])", "cat ", cmd, flags=re.IGNORECASE)
+    # cmd 的 del/copy/move/ren → bash 的 rm/cp/mv/mv（bash 无这些内建，转换安全）
+    cmd = re.sub(r"^\s*del\s+", "rm ", cmd, flags=re.IGNORECASE)
+    cmd = re.sub(r"^\s*copy\s+", "cp ", cmd, flags=re.IGNORECASE)
+    cmd = re.sub(r"^\s*move\s+", "mv ", cmd, flags=re.IGNORECASE)
+    cmd = re.sub(r"^\s*ren\s+", "mv ", cmd, flags=re.IGNORECASE)
     # 含 Windows 盘符路径（C:\a\b 或 C:/a/b）时转成 git-bash 风格 /c/a/b，并把反斜杠转正斜杠
     if re.search(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]", cmd):
         cmd = re.sub(

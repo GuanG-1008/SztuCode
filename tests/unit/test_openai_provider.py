@@ -207,6 +207,19 @@ def test_system_prompt_converted_to_message() -> None:
     assert result[0] == {"role": "system", "content": "Custom system prompt"}
 
 
+# 功能：cache_control=True 时 system 消息携带 cache 断点标记，稳定前缀可被缓存
+# 设计：对比开/关两个分支，确认标记只附加在 system 消息上且结构为 ephemeral
+def test_system_message_cache_control_marker() -> None:
+    off = _anth_to_openai_messages([], system="S", cache_control=False)
+    assert "cache_control" not in off[0]
+    on = _anth_to_openai_messages([], system="S", cache_control=True)
+    assert on[0] == {
+        "role": "system",
+        "content": "S",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
 # 功能：验证 thinking 块在转换为 OpenAI 消息时被静默丢弃
 # 设计：OpenAI 请求不需要传回 reasoning，thinking 块仅内部保留用于历史重建
 def test_thinking_blocks_skipped_in_translation() -> None:
@@ -309,6 +322,21 @@ def test_tool_schema_translated() -> None:
     assert fn["name"] == "bash"  # type: ignore[index]
     assert fn["description"] == "Run a command"  # type: ignore[index]
     assert fn["parameters"]["type"] == "object"  # type: ignore[index]
+
+
+# 功能：cache_control=True 时只有最后一个 tool 携带 cache 断点标记
+# 设计：传 3 个 schema，断言仅 result[2] 有 cache_control，前两个不受影响
+def test_tools_cache_control_on_last_only() -> None:
+    schemas = [
+        {"name": f"t{i}", "description": "d", "input_schema": {"type": "object"}}
+        for i in range(3)
+    ]
+    off = _anth_to_openai_tools(schemas)
+    assert all("cache_control" not in t for t in off)
+    on = _anth_to_openai_tools(schemas, cache_control=True)
+    assert "cache_control" not in on[0]
+    assert "cache_control" not in on[1]
+    assert on[2]["cache_control"] == {"type": "ephemeral"}
 
 
 # --- finish reason mapping tests ---------------------------------------------

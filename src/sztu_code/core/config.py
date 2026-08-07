@@ -76,6 +76,10 @@ class LlmConfig:
     api_key: str = ""  # 导入的凭证，优先于 .env 注入 provider 环境
     api_key_env: str = ""  # 内置模型使用的凭证变量名，避免把密钥写入模型配置
     keyless: bool = False  # 免 key 端点（如 opencode Zen 免费模型），跳过凭证校验
+    # OpenAI 兼容端点是否发送 cache_control 标记（system + 最后一个 tool）。
+    # 部分端点（DeepSeek/Zen）是自动前缀缓存、忽略此字段，纯 OpenAI 规范端点也忽略；
+    # 仅对识别该标记的网关有命中收益；端点拒收未知字段时可关掉。
+    cache_control: bool = True
 
 
 @dataclass
@@ -390,6 +394,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             "provider",
             "router",
             "context_window",
+            "cache_control",
         }
         if unknown_llm:
             raise SystemExit(f"Unknown [llm] keys: {', '.join(sorted(unknown_llm))}")
@@ -415,6 +420,11 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, int) or val <= 0:
                 raise SystemExit("Config error: llm.context_window must be a positive integer")
             config.llm.context_window = val
+        if "cache_control" in llm:
+            val = llm["cache_control"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: llm.cache_control must be a boolean")
+            config.llm.cache_control = val
 
     if "trace" in data:
         trace = data["trace"]
@@ -723,6 +733,10 @@ def _apply_env(config: SztuConfig) -> None:
                 "Config error: SZTU_LLM_CONTEXT_WINDOW must be an integer, "
                 f"got: {llm_context_window!r}"
             )
+
+    llm_cache_control = os.environ.get("SZTU_LLM_CACHE_CONTROL")
+    if llm_cache_control is not None:
+        config.llm.cache_control = llm_cache_control.lower() not in ("0", "false", "no")
 
     compact_threshold = os.environ.get("SZTU_COMPACT_THRESHOLD")
     if compact_threshold is not None:

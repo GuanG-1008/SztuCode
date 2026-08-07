@@ -63,6 +63,7 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | `SZTU_LLM_PROVIDER` | `anthropic` | `anthropic` 或 `openai` |
 | `SZTU_LLM_DEFAULT_MODEL` | 空 | 服务商模型 ID |
 | `SZTU_LLM_CONTEXT_WINDOW` | Provider 默认 | 正整数上下文窗口 |
+| `SZTU_LLM_CACHE_CONTROL` | `true` | OpenAI 兼容端点是否发送 cache_control 断点（system + 最后一个 tool）；端点拒收未知字段时设 `false` |
 | `SZTU_MAX_STEPS` | `20` | 单次运行最大 Agent 步数 |
 | `SZTU_PERMISSION_MODE` | `normal` | `normal`、`plan`、`accept_edits`、`auto` |
 | `SZTU_PERMISSION_TIMEOUT_S` | `60` | 审批超时秒数；`0` 表示不超时 |
@@ -110,6 +111,7 @@ max_retries = 1
 provider = "anthropic"
 default_model = "<your-provider-model-id>"
 context_window = 128000
+cache_control = true   # OpenAI 兼容端点发送 cache_control 断点（system + 最后一个 tool）；端点拒收未知字段时改 false
 
 [trace]
 enabled = true

@@ -268,6 +268,7 @@ class AgentLoop:
                         summary="; ".join(canvas_summaries[:3]),
                         refs=canvas_refs,
                     )
+                    context.add_canvas_update()
 
             elif response.stop_reason == "max_tokens" and response.tool_calls:
                 # Output token limit hit mid-tool-call; input is incomplete.
