@@ -1,7 +1,6 @@
 """合成长对话 — 验证滑动窗口压缩在实际长对话中的效果"""
 from __future__ import annotations
 
-import asyncio
 import uuid
 from pathlib import Path
 from typing import Any
@@ -10,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sztu_code.core.compact.compactor import (
-    CompactionResult,
     Compactor,
     _flatten_turns,
     _split_into_turns,

@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -17,14 +16,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sztu_code.core.compact.compactor import (
-    CompactionResult,
     Compactor,
-    _flatten_turns,
     _split_into_turns,
 )
 from sztu_code.core.compact.token_counter import TokenCounter
 from sztu_code.core.events.bus import EventBus
-
 
 # ─── 模拟 LLM provider，返回可定制的响应 ───
 

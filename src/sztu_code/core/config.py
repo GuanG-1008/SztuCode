@@ -525,7 +525,10 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     "Config error: compaction.tool_result_keep must be a positive integer"
                 )
             config.compaction.tool_result_keep = val
-        for _key in ("sliding_window_size", "compact_cooldown_steps", "circuit_breaker_max_failures"):
+        _compaction_keys = (
+            "sliding_window_size", "compact_cooldown_steps", "circuit_breaker_max_failures"
+        )
+        for _key in _compaction_keys:
             if _key in comp:
                 val = comp[_key]
                 if not isinstance(val, int) or val < 0:

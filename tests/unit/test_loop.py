@@ -713,7 +713,6 @@ async def test_wall_clock_exceeded_stops_loop() -> None:
     ctx.max_wall_clock_s = 1
     ctx.started_at = 0.0  # 确保 elapsed_s > 0
     # 模拟已运行超时：elapsed_s 会 >= max_wall_clock_s
-    import time
     ctx.started_at = time.monotonic() - 10.0  # 10 秒前开始
     await loop.run(ctx)
     # 无 result 时 wall_clock 超时标记为 failed（区别于有结果的中断）
@@ -734,7 +733,6 @@ async def test_wall_clock_exceeded_preserves_result() -> None:
     assert ctx.result == "final answer"
     # 再次 run（模拟 resume），墙钟已超时
     ctx.status = "running"
-    import time
     ctx.started_at = time.monotonic() - 10.0
     ctx.max_wall_clock_s = 1
     await loop.run(ctx)
