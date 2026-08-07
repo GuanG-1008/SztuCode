@@ -93,11 +93,27 @@ def _anth_to_openai_messages(
                 openai_msgs.append({"role": "user", "content": content})
             elif isinstance(content, list):
                 text_parts: list[str] = []
+                image_parts: list[dict[str, object]] = []
                 tool_msgs: list[dict[str, object]] = []
                 for block in content:
                     btype = block.get("type", "")
                     if btype == "text":
                         text_parts.append(str(block.get("text", "")))
+                    elif btype == "image":
+                        # Anthropic image block → OpenAI image_url（data URL）
+                        source = block.get("source", {})
+                        if isinstance(source, dict):
+                            media_type = str(source.get("media_type", ""))
+                            data = str(source.get("data", ""))
+                            if media_type and data:
+                                image_parts.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{media_type};base64,{data}"
+                                        },
+                                    }
+                                )
                     elif btype == "tool_result":
                         tc_id = str(block.get("tool_use_id", ""))
                         tc_content = str(block.get("content", ""))
@@ -114,7 +130,16 @@ def _anth_to_openai_messages(
                                     "content": tc_content,
                                 }
                             )
-                if text_parts:
+                if image_parts:
+                    # OpenAI 多模态要求 content 为数组：text + image_url
+                    user_content: list[dict[str, object]] = []
+                    if text_parts:
+                        user_content.append(
+                            {"type": "text", "text": "\n".join(text_parts)}
+                        )
+                    user_content.extend(image_parts)
+                    openai_msgs.append({"role": "user", "content": user_content})
+                elif text_parts:
                     openai_msgs.append({"role": "user", "content": "\n".join(text_parts)})
                 openai_msgs.extend(tool_msgs)
 

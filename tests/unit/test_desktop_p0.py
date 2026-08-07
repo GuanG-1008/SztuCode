@@ -4,6 +4,7 @@ import asyncio
 import json
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,6 +29,7 @@ class _BlockingSessions:
         content: str,
         *,
         run_id: str | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> str:
         self.calls.append((session_id, content, run_id))
         self.started.set()

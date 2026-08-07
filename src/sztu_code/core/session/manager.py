@@ -89,7 +89,14 @@ class SessionManager:
         return session
 
     # 处理用户消息，追加 thread 并启动一次 agent run
-    async def send_message(self, sid: str, content: str, *, run_id: str | None = None) -> str:
+    async def send_message(
+        self,
+        sid: str,
+        content: str,
+        *,
+        run_id: str | None = None,
+        images: list[dict[str, Any]] | None = None,
+    ) -> str:
         session = self._get_session(sid)
         lock = self._locks[sid]
         if lock.locked():
@@ -103,7 +110,24 @@ class SessionManager:
                 await self._bus.publish(SessionResumedEvent(session_id=sid, ts=_now()))
 
             run_id = run_id or new_run_id()
-            self._store.append_message(sid, "user", content, run_id=run_id)
+            stored_content: str | list[dict[str, Any]] = content
+            if images:
+                stored_content = [
+                    {"type": "text", "text": content},
+                    *[
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": str(image.get("media_type", "")),
+                                "data": str(image.get("data", "")),
+                            },
+                        }
+                        for image in images
+                        if image.get("data")
+                    ],
+                ]
+            self._store.append_message(sid, "user", stored_content, run_id=run_id)
             await self._bus.publish(
                 SessionMessageReceivedEvent(session_id=sid, content=content, ts=_now())
             )

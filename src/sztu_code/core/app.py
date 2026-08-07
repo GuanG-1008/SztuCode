@@ -572,7 +572,12 @@ class CoreApp:
 
         run_id = new_run_id()
         run_task = asyncio.create_task(
-            self._sessions.send_message(cmd.session_id, cmd.content, run_id=run_id)
+            self._sessions.send_message(
+                cmd.session_id,
+                cmd.content,
+                run_id=run_id,
+                images=[image.model_dump() for image in cmd.images],
+            )
         )
         self._active_session_runs[cmd.session_id] = run_task
         self._track_run(run_id, run_task)

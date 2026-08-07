@@ -109,6 +109,31 @@ async def test_send_message_chat_enters_waiting_and_writes_thread(tmp_path: Path
     assert history[0]["run_id"] == run_id
 
 
+# 功能：验证 send_message 带 images 时把用户消息存为多模态内容块（文本 + 图片 base64）
+# 设计：传一条图片内容块断言 thread 首条消息为 [text, image] 结构，确保回放/重连时模型仍能看到图片
+async def test_send_message_stores_image_content_blocks(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    manager = SessionManager(store, lambda: _Runner(), EventBus())  # type: ignore[arg-type]
+    session = await manager.create("chat")
+
+    run_id = await manager.send_message(
+        session.id,
+        "describe this image",
+        images=[{"media_type": "image/png", "data": "aGVsbG8="}],
+    )
+
+    assert run_id
+    messages = store.read_messages(session.id)
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == [
+        {"type": "text", "text": "describe this image"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="},
+        },
+    ]
+
+
 # 功能：验证切换会话读取历史时会从完成事件恢复尚未写入 meta 的运行统计
 # 设计：在 manager 已加载 session 后再落入 run.finished，模拟旧后台产生的数据，无需重启即可自愈
 async def test_get_history_backfills_run_stats_without_restart(tmp_path: Path) -> None:

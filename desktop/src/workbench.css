@@ -197,12 +197,17 @@
 .task-intro { align-items: flex-start; max-width: 600px; padding-top: 34px; }
 .task-intro b { display: block; margin: 1px 0 6px; color: #292d31; font-size: 16px; }
 .task-intro p { max-width: 520px; margin: 0; color: #737980; font-size: 13px; line-height: 1.75; }
-.task-conversation > .kimi-composer { border-radius: 10px; border-color: #d9dcdf; box-shadow: 0 7px 24px rgb(28 36 44 / 8%); }
+.task-conversation > .kimi-composer { border-radius: 16px; border-color: #d9dcdf; box-shadow: 0 7px 24px rgb(28 36 44 / 8%); }
 .task-conversation > .kimi-composer textarea { min-height: 72px; }
 .task-conversation > .kimi-composer textarea { font-size: 15px; }
-.task-conversation > .kimi-composer .permission { border: 0; background: #f3f5f5; border-radius: 6px; }
-.task-conversation > .kimi-composer .round { width: 32px; height: 32px; border: 0; background: #f3f5f5; border-radius: 6px; }
-.task-conversation > .kimi-composer .send { width: 32px; height: 32px; border-radius: 7px; }
+.task-conversation > .kimi-composer .round,
+.task-conversation > .kimi-composer .permission { border: 0; background: transparent; border-radius: 8px; }
+.task-conversation > .kimi-composer .round { width: 32px; height: 32px; }
+.task-conversation > .kimi-composer .round:hover,
+.task-conversation > .kimi-composer .round:focus-visible,
+.task-conversation > .kimi-composer .permission:hover,
+.task-conversation > .kimi-composer .permission:focus-visible { background: #f3f5f5; }
+.task-conversation > .kimi-composer .send { width: 32px; height: 32px; border-radius: 9px; }
 
 @keyframes task-progress { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
