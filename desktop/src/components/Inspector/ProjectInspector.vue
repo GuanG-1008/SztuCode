@@ -325,6 +325,7 @@ function closeToolMenuOnEscape(event: KeyboardEvent) {
   if (event.key === "Escape") {
     toolMenuOpen.value = false;
     closePreview();
+    if (expandedPanel.value) expandedPanel.value = false; // 全屏态按 Esc 退出全屏
   }
 }
 
@@ -384,7 +385,7 @@ onBeforeUnmount(() => {
       </nav>
       <button type="button" class="workspace-browser-add" aria-label="新建浏览器标签页" @click="createBrowserTab"><Plus :size="16" /></button>
       <span class="workspace-header-divider" />
-      <button type="button" class="workspace-expand" :aria-label="expandedPanel ? '还原功能区' : '展开功能区'" @click="expandedPanel = !expandedPanel"><Minimize2 v-if="expandedPanel" :size="15" /><Maximize2 v-else :size="15" /></button>
+      <button type="button" class="workspace-expand" :aria-label="expandedPanel ? '退出全屏' : '全屏'" @click="expandedPanel = !expandedPanel"><Minimize2 v-if="expandedPanel" :size="15" /><Maximize2 v-else :size="15" /></button>
       <button type="button" class="workspace-panel-close" aria-label="退出分屏布局" @click="emit('close')"><PanelRightClose :size="16" /></button>
     </header>
 
