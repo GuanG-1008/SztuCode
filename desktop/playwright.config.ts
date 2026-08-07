@@ -1,4 +1,7 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, type PlaywrightTestConfig } from "@playwright/test";
+import { resolveChromiumLaunchOptions } from "./tests/playwright-chromium";
+
+const chromiumLaunchOptions = resolveChromiumLaunchOptions(process.env);
 
 export default defineConfig({
   testDir: "./tests/visual",
@@ -9,6 +12,9 @@ export default defineConfig({
     browserName: "chromium",
     colorScheme: "dark",
     deviceScaleFactor: 1,
+    ...(Object.keys(chromiumLaunchOptions).length
+      ? { launchOptions: chromiumLaunchOptions }
+      : {}),
   },
   webServer: {
     command: "npm run dev -- --host 127.0.0.1 --port 1424",
@@ -16,4 +22,4 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 30_000,
   },
-});
+} satisfies PlaywrightTestConfig);

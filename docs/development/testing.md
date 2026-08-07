@@ -74,13 +74,20 @@ cargo check
 
 ```bash
 cd desktop
+npx playwright install chromium
 npm run test:visual
 ```
 
-当前 `desktop/playwright.config.ts` 包含本机 Chromium 路径，其他环境运行前需要改为可移植的 Playwright 浏览器配置。不要把个人绝对路径作为新的测试依赖。
+默认使用 Playwright 安装的 Chromium，不向 `launchOptions` 写入硬编码本机路径。如需覆盖，可设置环境变量 `PLAYWRIGHT_CHROMIUM_PATH` 指向浏览器可执行文件。不要把个人绝对路径提交进仓库。
 
-UI 变更应验证至少一个常规桌面宽度和一个窄窗口，重点检查文本溢出、权限卡、时间线、Diff 页面和空/错误状态。
+轻量配置单元测试：
 
+```bash
+cd desktop
+npm run test:unit
+```
+
+UI 变更应验证至少一个常规桌面宽度和一个窄窗口，重点检查文本溢出、权限卡、时间线、Diff 页面和空/错误状态。macOS 上还应确认系统 traffic lights 与导航按钮不重叠。
 ## 评估
 
 Agent 任务质量评估与普通回归测试用途不同。SWE-bench、轨迹分析和评测报告的运行方式见 [评估指南](../guides/evaluation.md)。评估产物可能体积较大或包含外部仓库内容，不应默认提交。

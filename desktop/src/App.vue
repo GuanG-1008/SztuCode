@@ -18,6 +18,7 @@ import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
+import { isMacOSPlatform } from "./lib/platform";
 import {
   applyCcswitchProvider, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, respondPermission,
@@ -871,6 +872,7 @@ async function useCcswitchProvider(providerId: string) {
 }
 function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; closeLauncherMenus(); if (next === "chat") chatView.value = "home"; }
 async function submitChat(content: string) { await submitTask(content, null); page.value = "chat"; chatView.value = "home"; }
+const isMacOS = isMacOSPlatform();
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
 async function toggleMaximizeWindow() { await getCurrentWindow().toggleMaximize(); }
 async function closeWindow() { await getCurrentWindow().close(); }
@@ -987,16 +989,16 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
     :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-collapse-armed': sidebarCollapseArmed }"
     :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
   >
-    <header class="kimi-titlebar">
+    <header class="kimi-titlebar" :class="{ 'is-macos': isMacOS }">
       <div class="nav-toggle-wrap">
         <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
           <PanelLeftOpen v-if="sidebarCollapsed" :size="16" :stroke-width="1.8" />
           <PanelLeftClose v-else :size="16" :stroke-width="1.8" />
         </button>
-        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>Ctrl</kbd><kbd>B</kbd></div>
+        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>{{ isMacOS ? '⌘' : 'Ctrl' }}</kbd><kbd>B</kbd></div>
       </div>
       <div class="titlebar-drag-region" data-tauri-drag-region @dblclick="toggleMaximizeWindow" />
-      <div class="window-actions" aria-label="Window controls">
+      <div v-if="!isMacOS" class="window-actions" aria-label="Window controls">
         <button class="window-action" type="button" title="Minimize" aria-label="Minimize window" @click="minimizeWindow"><Minus :size="15" :stroke-width="1.8" /></button>
         <button class="window-action" type="button" title="Maximize or restore" aria-label="Maximize or restore window" @click="toggleMaximizeWindow"><Square :size="13" :stroke-width="1.8" /></button>
         <button class="window-action window-action--close" type="button" title="Close" aria-label="Close window" @click="closeWindow"><X :size="17" :stroke-width="1.8" /></button>

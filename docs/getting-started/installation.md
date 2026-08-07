@@ -78,6 +78,13 @@ npm run tauri dev
 
 Tauri 在不同操作系统上的系统依赖不同，请按 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) 安装对应工具链。
 
+### macOS 补充
+
+- 安装 Xcode Command Line Tools：`xcode-select --install`
+- 需要 Node.js 20+ 与 Rust stable（`rustup`）
+- 本机打包：`cd desktop && npm run tauri build`，产物通常在 `desktop/src-tauri/target/release/bundle/macos/`（`.app`）与 `bundle/dmg/`（若生成）
+- 更完整的桌面端说明见 [Desktop README](../../desktop/README.md)
+
 ## 验证连通性
 
 ```bash
