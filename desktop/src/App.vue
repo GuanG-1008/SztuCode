@@ -945,7 +945,7 @@ function handleWindowResize() {
   }
 }
 function handleGlobalShortcut(event: KeyboardEvent) {
-  if (event.ctrlKey && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); beginTask(); }
   if (event.key === "Escape") {
     if (permissionConfirmOpen.value) permissionConfirmOpen.value = false;
@@ -1021,7 +1021,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       </label>
 
       <div class="sidebar-command">
-        <button class="new-task-button" @click="beginTask()"><CirclePlus :size="18" />新建任务 <kbd>Ctrl K</kbd></button>
+        <button class="new-task-button" @click="beginTask()"><CirclePlus :size="18" />新建任务 <kbd>{{ isMacOS ? '⌘' : 'Ctrl' }} K</kbd></button>
       </div>
 
       <nav class="sidebar-tools" aria-label="工作台工具">

@@ -42,7 +42,7 @@ npm run tauri dev
 
 桌面端通过一个持久 TCP 连接与 daemon 通信。Rust 桥只转发 NDJSON 帧，所有 JSON-RPC 请求关联、事件订阅与重连状态由 `src/lib/ipc.ts` 集中处理。
 
-macOS 使用系统 traffic lights 与 Overlay 标题栏（见 `src-tauri/tauri.macos.conf.json`）；Windows / Linux 继续使用自绘窗口按钮。
+macOS 使用系统 traffic lights 与 Overlay 标题栏（见 `src-tauri/tauri.macos.conf.json`）；该文件由 Tauri 构建与 `generate_context!()` 按平台自动合并进主配置（[Configuration Files](https://v2.tauri.app/develop/configuration-files/#platform-specific-configuration)），无需在 `main.rs` 中手动加载。Windows / Linux 继续使用自绘窗口按钮。
 
 ## 验证
 
