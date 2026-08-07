@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, ArrowLeft, BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  AlertTriangle, Archive, ArrowLeft, BookOpen, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
   Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
-  Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Trash2, Wrench, X,
+  Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -21,10 +21,10 @@ import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
 import {
-  applyCcswitchProvider, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
-  listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, respondPermission,
+  applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
+  listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
   resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings,
-  type CcswitchProvider, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
+  type Attachment, type CcswitchProvider, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
 } from "./services/sztu-runtime";
 
 type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "settings" | "diff";
@@ -35,6 +35,10 @@ const FULL_SIDEBAR_MIN_HEIGHT = 640;
 const SIDEBAR_MIN_WIDTH = 224;
 const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_COLLAPSE_PULL = 48;
+// 会话区保留的最小宽度，用于钳制右侧功能栏宽度，避免窗口变窄时被挤没
+const CONVERSATION_MIN_WIDTH = 320;
+// 窗口窄于该宽度时自动收起右侧功能栏
+const INSPECTOR_AUTO_COLLAPSE_WIDTH = 1000;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
 // 正式界面暂时隐藏入口；视觉测试可用开发态查询参数覆盖，避免整套 ChatPortal 回归被跳过。
@@ -60,6 +64,8 @@ const sessions = ref<Session[]>([]);
 const activeId = ref<string | null>(null);
 const timeline = ref<Map<number, TimelineStep>>(new Map());
 const activeRunId = ref<string | null>(null);
+// 当前会话是否正在执行 run（区别于 activeRunId：加载历史任务时 activeRunId 可能是已结束的 run）
+const runActive = ref(false);
 const prompt = ref("");
 const activePrompt = ref<HTMLTextAreaElement | null>(null);
 const launcherPrompt = ref<HTMLTextAreaElement | null>(null);
@@ -83,9 +89,23 @@ const taskSearchInput = ref<HTMLInputElement | null>(null);
 const inspectorOpen = ref(true);
 const inspectorRendered = ref(true);
 const inspectorWidth = ref(Math.min(720, Math.max(340, Number(localStorage.getItem("sztu.inspectorWidth")) || 390)));
+// 响应式窗口宽度 + 窄窗自动收起右侧功能栏的追踪标志
+const windowWidth = ref(window.innerWidth);
+let inspectorAutoCollapsed = false;
+// 「查看项目文件」请求：通知右侧功能栏切到文件标签页并浏览指定项目
+const filesRequest = ref<{ workspaceId: string; seq: number } | null>(null);
+let filesRequestSeq = 0;
 let inspectorCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let inspectorOpenFrame: number | undefined;
-const attachedFiles = ref<string[]>([]);
+// 待发送附件：图片走 base64 内容块，文本把内容注入消息
+type PendingAttachment = {
+  path: string; name: string; size: number;
+  kind: "image" | "text";
+  mime?: string;
+  textContent?: string;
+  dataBase64?: string;
+};
+const attachedFiles = ref<PendingAttachment[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
 const notifications = ref(localStorage.getItem("sztu.notifications") !== "false");
@@ -108,6 +128,8 @@ const ccswitchProviders = ref<CcswitchProvider[]>([]);
 const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
+// 发送请求中或正在执行 run 时，把发送按钮切换为停止按钮
+const isRunActive = computed(() => sending.value || runActive.value);
 const activeWorkspace = computed(() => workspaces.value.find((item) => item.workspace_id === active.value?.workspace_id) ?? workspace.value);
 const activeWorkspaces = computed(() => workspaces.value.filter((item) => !item.archived));
 const archivedProjects = computed(() => workspaces.value.filter((item) => item.archived));
@@ -147,10 +169,15 @@ function formatSessionUsage(item: Session): string {
   const durationText = seconds < 60 ? `${Math.round(seconds)}秒` : `${Math.floor(seconds / 60)}分${Math.round(seconds % 60)}秒`;
   return item.status === "active" && !tokens ? "计时中" : `${durationText} · ${tokenText}`;
 }
-// 工作区布局：保留三列结构，让分隔线和面板宽度在收起时连续归零
+// 工作区布局：仅传 CSS 变量，grid 列由样式表定义，
+// 这样媒体查询能按窗口宽度覆盖列结构（内联 grid-template-columns 会锁死响应式，窗口变窄不重排）。
+// 同时按当前窗口宽度钳制 inspector 宽度，保证会话区始终有 CONVERSATION_MIN_WIDTH 可用。
 const workLayoutStyle = computed(() => {
-  if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr) 0px 0px" };
-  return { gridTemplateColumns: `minmax(0, 1fr) 6px ${inspectorWidth.value}px` };
+  if (!inspectorOpen.value || !activeWorkspace.value) return { "--inspector-width": "0px" };
+  const sidebarW = sidebarCollapsed.value ? 0 : sidebarWidth.value;
+  const available = windowWidth.value - sidebarW - 6 - CONVERSATION_MIN_WIDTH;
+  const clamped = Math.min(inspectorWidth.value, Math.max(280, available));
+  return { "--inspector-width": `${clamped}px` };
 });
 
 async function toggleTaskSearch() {
@@ -536,6 +563,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       } : current);
     }
     if (runId === activeRunId.value) activeRunId.value = null;
+    runActive.value = false;
     liveRunUsage.delete(relatedRunId);
     void refreshIndex(false);
     return;
@@ -565,12 +593,14 @@ function beginTask(project: Workspace | null = workspace.value) {
   liveRunUsage.clear();
   timeline.value = new Map();
   activeRunId.value = null;
+  runActive.value = false;
+  attachedFiles.value = [];
   page.value = "work";
   prompt.value = "";
   selectedStarterTask.value = "";
   void nextTick(() => launcherPrompt.value?.focus());
 }
-async function submitTask(content: string, project: Workspace | null = workspace.value) {
+async function submitTask(content: string, project: Workspace | null = workspace.value, images: ImageBlock[] = []) {
   const trimmed = content.trim();
   if (!trimmed || !connected.value || sending.value) return;
   sending.value = true;
@@ -586,17 +616,29 @@ async function submitTask(content: string, project: Workspace | null = workspace
       page.value = "work";
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(sessionId, trimmed);
+      activeRunId.value = await sendPrompt(sessionId, trimmed, images);
+      runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
       await refreshIndex(false);
     } else {
       if (active.value?.archived || active.value?.status === "closed") return;
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(activeId.value, trimmed);
+      activeRunId.value = await sendPrompt(activeId.value, trimmed, images);
+      runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
     }
   } finally { sending.value = false; }
+}
+// 停止当前正在执行的 run；后端取消后通过 run.finished 事件更新界面状态
+async function stopActiveRun() {
+  const runId = activeRunId.value;
+  if (!runId) return;
+  try {
+    await cancelRun(runId);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+  }
 }
 async function chooseTask(id: string) {
   activeId.value = id;
@@ -608,6 +650,8 @@ async function chooseTask(id: string) {
   const history = await sessionHistory(id);
   hydrateTimeline(history.messages, history.run_stats);
   activeRunId.value = latestRunId;
+  // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
+  runActive.value = !!latestRunId && sessions.value.find((item) => item.session_id === id)?.status === "active";
   page.value = "work";
 }
 async function chooseWorkspace(item: Workspace) { workspace.value = item; projectMenuOpen.value = false; const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id); if (matching) await chooseTask(matching.session_id); }
@@ -625,11 +669,23 @@ async function createProjectTask(item: Workspace) {
 }
 async function showProjectFiles(item: Workspace) {
   projectActionsOpen.value = null;
-  setInspectorOpen(true);
+  // 跳转到右侧功能栏的「文件」标签页并浏览该项目（seq 递增保证重复点击也能触发）
+  filesRequest.value = { workspaceId: item.workspace_id, seq: ++filesRequestSeq };
   workspace.value = item;
+  setInspectorOpen(true);
   const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id);
-  if (matching) await chooseTask(matching.session_id);
-  else beginTask(item);
+  if (matching) {
+    await chooseTask(matching.session_id);
+  } else if (!activeId.value) {
+    // 无活动会话：为该工作区建一个会话，保证会话区 UI 不空白、可恢复
+    const sessionId = await createSession(item);
+    activeId.value = sessionId;
+    currentStepByRun.clear();
+    runStepBase.clear();
+    timeline.value = new Map();
+    page.value = "work";
+    await refreshIndex(false);
+  }
 }
 async function deleteProject(item: Workspace) {
   projectActionsOpen.value = null;
@@ -672,7 +728,9 @@ async function submit() {
     void nextTick(() => (activeId.value ? activePrompt.value : launcherPrompt.value)?.focus());
     return;
   }
-  await submitTask(content, workspace.value);
+  const { content: payload, images } = buildMessagePayload(content);
+  await submitTask(payload, workspace.value, images);
+  attachedFiles.value = [];
 }
 // 回车直接发送；Ctrl/Shift/Alt + 回车保留默认换行行为，且忽略中文输入法候选确认
 function onComposerKeydown(event: KeyboardEvent) {
@@ -763,11 +821,87 @@ async function createLocalWorkspace() {
   await refreshIndex(false);
   beginTask(workspace.value);
 }
+// 按 1KB/1MB 格式化附件大小
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+function removeAttachment(index: number) { attachedFiles.value = attachedFiles.value.filter((_, i) => i !== index); }
+// 从当前附件构造发送载荷：文本附件拼进 content，图片附件收集成 images 内容块
+function buildMessagePayload(baseText: string): { content: string; images: ImageBlock[] } {
+  const images: ImageBlock[] = [];
+  const sections: string[] = [];
+  for (const att of attachedFiles.value) {
+    if (att.kind === "image" && att.dataBase64) {
+      images.push({ media_type: att.mime ?? "image/png", data: att.dataBase64 });
+    } else if (att.kind === "text" && att.textContent) {
+      sections.push(`[附件: ${att.name}]\n\`\`\`\n${att.textContent}\n\`\`\``);
+    }
+  }
+  return { content: [baseText, ...sections].filter(Boolean).join("\n\n"), images };
+}
+// 处理「添加附件」读取结果：图片/文本归档，超限或二进制在 error 中提示并跳过
+function addReadAttachments(results: Attachment[]) {
+  const added: PendingAttachment[] = [];
+  for (const item of results) {
+    if (item.error) { window.alert(`${item.name}：${item.error}`); continue; }
+    if (item.mime_type?.startsWith("image/") && item.data_base64) {
+      added.push({ path: item.path, name: item.name, size: item.size, kind: "image", mime: item.mime_type, dataBase64: item.data_base64 });
+    } else if (item.is_text && item.text_content != null) {
+      added.push({ path: item.path, name: item.name, size: item.size, kind: "text", textContent: item.text_content });
+    } else {
+      window.alert(`${item.name}：暂不支持作为附件`);
+    }
+  }
+  if (added.length) attachedFiles.value = [...attachedFiles.value, ...added];
+}
 async function selectAttachments() {
-  const selected = await openDialog({ directory: false, multiple: true, title: "添加附件" });
-  const paths = typeof selected === "string" ? [selected] : selected ?? [];
-  attachedFiles.value = [...new Set([...attachedFiles.value, ...paths])];
-  if (paths.length) prompt.value += (prompt.value ? "\n\n" : "") + "附件：\n" + paths.map((path) => "- " + path).join("\n");
+  if ("__TAURI_INTERNALS__" in window) {
+    const selected = await openDialog({ directory: false, multiple: true, title: "添加附件" });
+    const paths = typeof selected === "string" ? [selected] : selected ?? [];
+    if (!paths.length) return;
+    addReadAttachments(await readAttachments(paths));
+  } else {
+    // 浏览器（非 Tauri）回退：用 file input 读取本地文件
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.style.display = "none";
+    input.addEventListener("change", () => {
+      for (const file of Array.from(input.files ?? [])) void addBrowserFile(file);
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  }
+}
+// 浏览器回退：把 File 读成图片 base64 或文本内容，附带同样的限制
+async function addBrowserFile(file: File) {
+  const isImage = file.type.startsWith("image/");
+  const limit = isImage ? 5 * 1024 * 1024 : 1024 * 1024;
+  if (file.size > limit) { window.alert(`${file.name} 超过 ${isImage ? "5MB" : "1MB"} 限制，已跳过`); return; }
+  if (isImage) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
+    }).catch(() => "");
+    const comma = dataUrl.indexOf(",");
+    const dataBase64 = comma >= 0 ? dataUrl.slice(comma + 1) : "";
+    if (dataBase64) attachedFiles.value = [...attachedFiles.value, { path: file.name, name: file.name, size: file.size, kind: "image", mime: file.type, dataBase64 }];
+    return;
+  }
+  const textLike = !file.type || file.type.startsWith("text/") || ["application/json", "application/xml"].includes(file.type);
+  if (!textLike) { window.alert(`${file.name}：暂不支持作为附件`); return; }
+  const text = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("读取文件失败"));
+    reader.readAsText(file);
+  }).catch(() => "");
+  attachedFiles.value = [...attachedFiles.value, { path: file.name, name: file.name, size: file.size, kind: "text", mime: file.type || undefined, textContent: text.slice(0, 32 * 1024) }];
 }
 function chooseSkill(name: string) {
   prompt.value = "/" + name + " ";
@@ -784,7 +918,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; void refreshIndex(false); }
+function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function loadNativeSettings() {
   try {
     const settings = await getNativeSettings();
@@ -876,7 +1010,13 @@ async function useCcswitchProvider(providerId: string) {
   }
 }
 function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; closeLauncherMenus(); if (next === "chat") chatView.value = "home"; }
-async function submitChat(content: string) { await submitTask(content, null); page.value = "chat"; chatView.value = "home"; }
+async function submitChat(content: string) {
+  const { content: payload, images } = buildMessagePayload(content);
+  await submitTask(payload, null, images);
+  attachedFiles.value = [];
+  page.value = "chat";
+  chatView.value = "home";
+}
 const isMacOS = isMacOSPlatform();
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
 // macOS：Rust 无动画 work-area fill，避开 NSWindow.zoom 与主面板不同步
@@ -1002,13 +1142,29 @@ function applySidebarAutoCollapse() {
     sidebarAutoCollapsed = false;
   }
 }
+function applyInspectorAutoCollapse() {
+  // 窄窗口自动收起右侧功能栏，避免会话区被挤没
+  if (window.innerWidth < INSPECTOR_AUTO_COLLAPSE_WIDTH) {
+    if (inspectorOpen.value) {
+      setInspectorOpen(false);
+      inspectorAutoCollapsed = true;
+    }
+  } else if (inspectorAutoCollapsed) {
+    inspectorAutoCollapsed = false;
+    setInspectorOpen(true);
+  }
+}
 function handleWindowResize() {
+  windowWidth.value = window.innerWidth;
   windowResizing.value = true;
   window.clearTimeout(windowResizeEndTimer);
   windowResizeEndTimer = window.setTimeout(() => {
     windowResizing.value = false;
     // 先卸掉 window-resizing（transition:none），再播侧栏列宽动画
-    void nextTick(() => { applySidebarAutoCollapse(); });
+    void nextTick(() => {
+      applySidebarAutoCollapse();
+      applyInspectorAutoCollapse();
+    });
   }, 120);
 }
 function handleGlobalShortcut(event: KeyboardEvent) {
@@ -1029,6 +1185,7 @@ let stopDisconnect: (() => void) | undefined;
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("resize", handleWindowResize);
+  handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
   void loadNativeSettings();
@@ -1240,16 +1397,16 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
                 </div>
               </div>
-              <div class="task-conversation">
+              <div class="task-conversation" :class="{ 'task-conversation--empty': !orderedTimeline.length }">
                 <div class="task-stream">
-                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><div><b>从一个明确目标开始</b><p>SztuCode 会在当前项目中完成工作，并把验证结果、文件变更和可回滚记录留在这里。</p></div></div>
+                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>要在「{{ activeWorkspace?.name || '当前项目' }}」里构建什么？</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
-                  <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || sending || active.archived || active.status === 'closed'">↑</button></div>
+                  <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
               </div>
             </section>
@@ -1257,12 +1414,13 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
               <div class="layout-divider" role="separator" aria-orientation="vertical" title="拖拽调整面板宽度" @mousedown="startDividerDrag" />
               <ProjectInspector
                 :workspace-id="activeWorkspace.workspace_id"
-                :run-id="active.latest_run_id"
+                :run-id="active?.latest_run_id"
                 :steps="orderedTimeline"
-                :attachments="attachedFiles"
+                :attachments="attachedFiles.map((item) => item.path)"
                 :workspace-name="activeWorkspace.name"
                 :workspace-path="activeWorkspace.path"
                 :obscured="modelManagerOpen || permissionConfirmOpen"
+                :files-request="filesRequest"
                 @close="setInspectorOpen(false)"
               />
             </template>
@@ -1280,7 +1438,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <form class="kimi-composer landing-composer" @submit.prevent="submit()">
               <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
               <textarea ref="launcherPrompt" v-model="prompt" placeholder="描述你要完成的开发任务，输入 / 调用技能" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
-              <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="file in attachedFiles" :key="file">{{ file.split(/[\\/]/).pop() }}</span></div>
+              <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
               <div class="composer-toolbar launcher-toolbar">
                 <button type="button" class="round" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>
                 <div class="launcher-permission-control">
@@ -1292,7 +1450,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 </div>
                 <span />
                 <ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" />
-                <button class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
+                <button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
               </div>
               <div class="launcher-project-control">
                 <button type="button" class="composer-project" aria-haspopup="menu" :aria-expanded="launcherProjectMenuOpen" @click.stop="toggleLauncherProjectMenu"><FolderOpen :size="15" /><span>{{ workspace?.name || '选择本地项目' }}</span><ChevronDown :size="13" /></button>

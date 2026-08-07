@@ -89,7 +89,14 @@ class SessionManager:
         return session
 
     # 处理用户消息，追加 thread 并启动一次 agent run
-    async def send_message(self, sid: str, content: str, *, run_id: str | None = None) -> str:
+    async def send_message(
+        self,
+        sid: str,
+        content: str,
+        *,
+        run_id: str | None = None,
+        images: list[dict[str, Any]] | None = None,
+    ) -> str:
         session = self._get_session(sid)
         lock = self._locks[sid]
         if lock.locked():
@@ -103,7 +110,24 @@ class SessionManager:
                 await self._bus.publish(SessionResumedEvent(session_id=sid, ts=_now()))
 
             run_id = run_id or new_run_id()
-            self._store.append_message(sid, "user", content, run_id=run_id)
+            stored_content: str | list[dict[str, Any]] = content
+            if images:
+                stored_content = [
+                    {"type": "text", "text": content},
+                    *[
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": str(image.get("media_type", "")),
+                                "data": str(image.get("data", "")),
+                            },
+                        }
+                        for image in images
+                        if image.get("data")
+                    ],
+                ]
+            self._store.append_message(sid, "user", stored_content, run_id=run_id)
             await self._bus.publish(
                 SessionMessageReceivedEvent(session_id=sid, content=content, ts=_now())
             )
@@ -226,17 +250,17 @@ class SessionManager:
             session_dir = self._store.session_dir(sid)
             compactor = Compactor(self._bus, session_dir, sid)
             await compactor.notify_compacting("")
-            result = await compactor.compact_messages(messages, self._provider, focus=focus)
-            if result is None:
+            ret = await compactor.compact_messages(messages, self._provider, focus=focus)
+            if ret is None or isinstance(ret, tuple):
                 raise HandlerError(-32021, "compaction failed or not beneficial")
             self._store.write_compacted(sid, [
-                {"role": "user", "content": _continuation_message(result.summary_text)},
+                {"role": "user", "content": _continuation_message(ret.summary_text)},
                 {"role": "assistant", "content": "Understood, I'll continue from this summary."},
             ])
-            await compactor.record_compaction(run_id="", result=result)
+            await compactor.record_compaction(run_id="", result=ret)
             return SessionCompactResult(
-                summary_tokens=result.summary_tokens,
-                saved_tokens=max(0, result.original_token_estimate - result.summary_tokens),
+                summary_tokens=ret.summary_tokens,
+                saved_tokens=max(0, ret.original_token_estimate - ret.summary_tokens),
             )
 
     # 读取指定 session 的完整 thread 历史

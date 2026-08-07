@@ -18,7 +18,7 @@ from sztu_code.core.llm import create_provider
 from sztu_code.core.llm.base import LLMProvider
 from sztu_code.core.loop import AgentLoop
 from sztu_code.core.mcp.server import McpServerManager
-from sztu_code.core.memory.loader import load_context_file
+from sztu_code.core.memory.loader import MemoryCatalog, MemoryDocument, load_context_file
 from sztu_code.core.permissions.denial_tracker import DenialTracker
 from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.runs import RUNS_DIR, new_run_id
@@ -32,6 +32,7 @@ from sztu_code.core.tools.builtin import (
     BashTool,
     EditFileTool,
     ListDirTool,
+    MemoryReadTool,
     NoteSaveTool,
     NoteUpdateTool,
     ReadFileTool,
@@ -100,6 +101,7 @@ class AgentRunner:
         workspace_root: Path | None = None,
         parent_context: ExecutionContext | None = None,
         offload_manager: OffloadManager | None = None,
+        memory_catalog: MemoryCatalog | None = None,
     ) -> ToolRegistry:
         allowed: set[str] | None = set(tool_whitelist) if tool_whitelist else None
 
@@ -113,6 +115,12 @@ class AgentRunner:
         ]:
             if _ok(t.name):
                 registry.register(t)
+        if (
+            memory_catalog is not None
+            and memory_catalog.requires_reader()
+            and _ok("memory_read")
+        ):
+            registry.register(MemoryReadTool(memory_catalog))
         for t in [
             TaskCreateTool(task_manager, bus, run_id or "", session_id),
             TaskUpdateTool(task_manager, bus, run_id or "", session_id),
@@ -199,6 +207,13 @@ class AgentRunner:
 
         global_ctx = load_context_file(Path("~/.sztu/context.md").expanduser())
         project_ctx = load_context_file((workspace_root or Path.cwd()) / ".sztu/context.md")
+        memory_catalog = MemoryCatalog(
+            [
+                MemoryDocument("global", global_ctx, "~/.sztu/context.md"),
+                MemoryDocument("project", project_ctx, ".sztu/context.md"),
+                MemoryDocument("session", notes, "session/notes.md"),
+            ]
+        )
 
         task_manager = TaskManager(run_path / ".tasks")
         change_tracker: WorkspaceChangeTracker | None = None
@@ -223,9 +238,9 @@ class AgentRunner:
             max_steps=self._config.agent.max_steps,
             max_budget_usd=self._config.agent.max_budget_usd,
             prefill_messages=history,
-            session_notes=notes,
-            global_context=global_ctx,
-            project_context=project_ctx,
+            session_notes=memory_catalog.prompt_content("session"),
+            global_context=memory_catalog.prompt_content("global"),
+            project_context=memory_catalog.prompt_content("project"),
             base_system_prompt=base_prompt,
             system_prompt_override=system_prompt_override,
             max_tokens=self._config.budget.max_tokens,
@@ -284,6 +299,7 @@ class AgentRunner:
                     workspace_root=workspace_root,
                     parent_context=context,
                     offload_manager=offload_manager,
+                    memory_catalog=memory_catalog,
                 )
                 compactor = Compactor(bus, session_dir, session_id_str)
                 denial_tracker = DenialTracker()
@@ -293,6 +309,8 @@ class AgentRunner:
                     denial_tracker=denial_tracker,
                     compactor=compactor,
                     compact_threshold=self._config.compaction.auto_threshold,
+                    auto_compact_min_tokens=self._config.compaction.auto_compact_min_tokens,
+                    auto_compact_min_steps=self._config.compaction.auto_compact_min_steps,
                     tool_result_limit=self._config.compaction.tool_result_limit,
                     tool_result_keep=self._config.compaction.tool_result_keep,
                     session_id=session_id_str,
@@ -304,6 +322,9 @@ class AgentRunner:
                         max_failures=self._config.agent.stuck_max_failures,
                         max_total=self._config.agent.stuck_max_total,
                     ),
+                    sliding_window_size=self._config.compaction.sliding_window_size,
+                    compact_cooldown_steps=self._config.compaction.compact_cooldown_steps,
+                    circuit_breaker_max_failures=self._config.compaction.circuit_breaker_max_failures,
                 )
                 await loop.run(context)
             except asyncio.CancelledError:

@@ -96,6 +96,37 @@ p {
   line-height: 1.5;
 }
 
+/* 会话区空状态引导文案：超大细体、图标在上、位置偏下 */
+.task-conversation--empty .task-stream {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 10vh;   /* 用随窗口缩放的 padding 实现"偏下"，参与布局 */
+}
+.task-conversation--empty .task-intro {
+  flex-direction: column;
+  gap: 18px;
+  margin-top: auto;    /* margin auto 居中：空间足则居中，不足则贴顶但不溢出 */
+  margin-bottom: auto;
+}
+.task-intro-icon {
+  display: grid;
+  place-items: center;
+  color: #a2a9ad;                 /* 纯线条灰色终端图标 */
+}
+.task-stream .task-intro b {
+  font-size: 26px;
+  font-weight: 400;               /* 细字体基础上稍微加粗 */
+}
+
+/* 矮窗口：压缩引导文案，保证能放得下且不被裁切 */
+@media (max-height: 600px) {
+  .task-conversation--empty .task-stream { padding-top: 3vh; }
+  .task-conversation--empty .task-intro { gap: 10px; }
+  .task-intro-icon svg { width: 24px; height: 24px; }
+  .task-stream .task-intro b { font-size: 19px; }
+}
+
 /* Reading surfaces use the reference's open, neutral rhythm. */
 .timeline-user-message,
 .token-stream,

@@ -2001,9 +2001,36 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | `type` | `string` | no |
 | `session_id` | `string` | yes |
 | `content` | `string` | yes |
+| `images` | `array` | no |
 
 ```json
 {
+  "$defs": {
+    "MessageImageBlock": {
+      "properties": {
+        "type": {
+          "const": "image",
+          "default": "image",
+          "title": "Type",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "data": {
+          "title": "Data",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "data"
+      ],
+      "title": "MessageImageBlock",
+      "type": "object"
+    }
+  },
   "properties": {
     "type": {
       "const": "session.send_message",
@@ -2018,6 +2045,13 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     "content": {
       "title": "Content",
       "type": "string"
+    },
+    "images": {
+      "items": {
+        "$ref": "#/$defs/MessageImageBlock"
+      },
+      "title": "Images",
+      "type": "array"
     }
   },
   "required": [

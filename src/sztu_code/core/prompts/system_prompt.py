@@ -66,8 +66,10 @@ ACTIONS = (
 TOOL_GUIDE = (
     "# Tool usage\n"
     " - File paths must be relative to the working directory; do not use absolute paths.\n"
-    " - The shell is git-bash on Windows: use `ls`/`pwd`/`cat` (not `dir`), use forward "
-    "slashes (`src/foo.py`), and write `cd path` (the `cd /d X` cmd form is invalid).\n"
+    " - The shell is git-bash on Windows, not cmd: use `ls`/`pwd`/`cat`/`which` (not "
+    "`dir`/`type`/`where`), forward slashes (`src/foo.py`), `export VAR=val` (not "
+    "`set VAR=val`), `$VAR` (not `%VAR%`), `/dev/null` (not `nul`), and `cd path` "
+    "(`cd /d X` is invalid).\n"
     " - Do NOT install packages or modify the environment (pip/apt/brew) unless explicitly "
     "required — assume dependencies are already available.\n"
     " - Prefer the dedicated `grep_search` and `glob_search` tools over shell `grep`/`find` "

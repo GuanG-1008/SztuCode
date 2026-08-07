@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use base64::Engine;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State, WebviewWindow, Window};
@@ -503,6 +504,133 @@ async fn daemon_start(state: State<'_, DaemonProcess>) -> Result<DaemonStartResu
     ))
 }
 
+// 附件读取结果：图片/二进制走 base64，文本走 UTF-8 内容，超限或不支持在 error 里说明
+#[derive(Serialize)]
+struct AttachmentData {
+    path: String,
+    name: String,
+    size: u64,
+    mime_type: Option<String>,
+    is_text: bool,
+    text_content: Option<String>,
+    data_base64: Option<String>,
+    error: Option<String>,
+}
+
+const IMAGE_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const TEXT_MAX_BYTES: u64 = 1024 * 1024;
+const TEXT_READ_LIMIT: usize = 32 * 1024;
+
+// 按扩展名推断常见文件的 MIME 类型；未知类型返回 None
+fn guess_mime(path: &PathBuf) -> Option<String> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "txt" | "md" | "markdown" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" | "cjs" => "text/javascript",
+        "ts" | "tsx" => "text/typescript",
+        "jsx" => "text/jsx",
+        "py" => "text/x-python",
+        "rs" => "text/x-rust",
+        "go" => "text/x-go",
+        "java" => "text/x-java",
+        "c" | "h" => "text/x-c",
+        "cpp" | "cc" | "hpp" => "text/x-c++",
+        "sh" | "bash" => "text/x-sh",
+        "yaml" | "yml" => "text/yaml",
+        "toml" => "text/toml",
+        "xml" => "text/xml",
+        "sql" => "text/x-sql",
+        "json" | "json5" => "application/json",
+        _ => return None,
+    };
+    Some(mime.to_string())
+}
+
+fn is_image(mime: &str) -> bool {
+    mime.starts_with("image/")
+}
+
+// 前 8KB 出现 NUL 字节即视为二进制
+fn looks_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8192).any(|&byte| byte == 0)
+}
+
+// 读取单个附件：任何失败都落到 error 字段，不中断整批
+fn read_one_attachment(path: &str) -> AttachmentData {
+    let pb = PathBuf::from(path);
+    let name = pb
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    let failed = |size: u64, mime: Option<String>, error: String| AttachmentData {
+        path: path.to_string(),
+        name: name.clone(),
+        size,
+        mime_type: mime,
+        is_text: false,
+        text_content: None,
+        data_base64: None,
+        error: Some(error),
+    };
+    let metadata = match std::fs::metadata(&pb) {
+        Ok(meta) => meta,
+        Err(error) => return failed(0, None, format!("无法读取文件：{error}")),
+    };
+    let size = metadata.len();
+    let mime = guess_mime(&pb);
+    let is_img = mime.as_deref().is_some_and(is_image);
+    if is_img && size > IMAGE_MAX_BYTES {
+        return failed(size, mime, "图片超过 5MB 限制".into());
+    }
+    if !is_img && size > TEXT_MAX_BYTES {
+        return failed(size, mime, "文件超过 1MB 限制".into());
+    }
+    let mut data = Vec::new();
+    if let Err(error) = std::fs::File::open(&pb).and_then(|mut file| file.read_to_end(&mut data)) {
+        return failed(size, mime, format!("读取失败：{error}"));
+    }
+    if !looks_binary(&data) {
+        let text: String = String::from_utf8_lossy(&data).chars().take(TEXT_READ_LIMIT).collect();
+        return AttachmentData {
+            path: path.to_string(),
+            name,
+            size,
+            mime_type: mime,
+            is_text: true,
+            text_content: Some(text),
+            data_base64: None,
+            error: None,
+        };
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    AttachmentData {
+        path: path.to_string(),
+        name,
+        size,
+        mime_type: mime,
+        is_text: false,
+        text_content: None,
+        data_base64: Some(encoded),
+        error: None,
+    }
+}
+
+// 读取「添加附件」选中的文件内容：图片/二进制返回 base64，文本返回内容，逐文件报告错误
+#[tauri::command]
+fn read_attachment(paths: Vec<String>) -> Result<Vec<AttachmentData>, String> {
+    Ok(paths.iter().map(|path| read_one_attachment(path)).collect())
+}
+
 // 连接 Python daemon，并将 NDJSON 消息广播给 React 客户端 SDK。
 #[tauri::command]
 async fn ipc_connect(
@@ -607,6 +735,7 @@ fn main() {
             sandbox_pty_write,
             sandbox_pty_resize,
             sandbox_pty_close,
+            read_attachment,
             macos_toggle_work_area
         ])
         .setup(|app| {

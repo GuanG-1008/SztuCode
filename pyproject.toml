@@ -29,6 +29,7 @@ sztu-code = "sztu_code.core.app:run"
 sztu-tui = "sztu_code.tui.__main__:main"
 sztu-desktop = "sztu_code.desktop.__main__:main"
 sztucode = "sztu_code.tui.launcher:main"
+sztu-eval = "sztu_code.evaluation.cli:entrypoint"
 
 [project.urls]
 Homepage = "https://github.com/rojim666/SztuCode"

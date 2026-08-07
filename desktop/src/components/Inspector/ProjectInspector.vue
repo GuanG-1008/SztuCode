@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  BookOpen, Check, ChevronDown, Circle, ExternalLink, FileCode2, FileText, Globe2,
+  ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Check, ChevronDown, Circle, EllipsisVertical,
+  ExternalLink, FileCode2, FileText, FolderOpen, Globe2,
   ListChecks, LoaderCircle, Maximize2, Minimize2, PackageOpen, PanelRightClose,
-  Plus, RefreshCw, RotateCw, Send, SquareTerminal, X,
+  Plus, RefreshCw, RotateCw, SquareTerminal, X,
 } from "@lucide/vue";
 import {
   changeDiff, listChanges, readFile,
@@ -11,6 +12,8 @@ import {
 } from "../../services/sztu-runtime";
 import BrowserWebview from "./BrowserWebview.vue";
 import CodePreview from "./CodePreview.vue";
+import FileTree from "./FileTree.vue";
+import { fileTypeIconUrl } from "../../utils/fileIcon";
 import type { TimelineStep } from "../timeline/types";
 
 const SandboxTerminal = defineAsyncComponent(() => import("./SandboxTerminal.vue"));
@@ -23,14 +26,25 @@ const props = defineProps<{
   workspaceName?: string;
   workspacePath?: string;
   obscured?: boolean;
+  // 「查看项目文件」请求：seq 递增触发切换到文件标签页，workspaceId 覆盖要浏览的项目
+  filesRequest?: { workspaceId: string; seq: number } | null;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
 
 type SectionKey = "todo" | "artifacts" | "references";
-type BrowserTab = { id: number; label: string; input: string; url: string; frameKey: number; loading: boolean };
-type ActiveTab = "summary" | `sandbox-${number}` | `browser-${number}` | "";
-type WorkspaceTab = { key: ActiveTab; kind: "summary" | "browser" | "sandbox" };
+type BrowserTab = {
+  id: number;
+  label: string;
+  input: string;
+  url: string;
+  history: string[];
+  historyIndex: number;
+  frameKey: number;
+  loading: boolean;
+};
+type ActiveTab = "summary" | "files" | `sandbox-${number}` | `browser-${number}` | "";
+type WorkspaceTab = { key: ActiveTab; kind: "summary" | "files" | "browser" | "sandbox" };
 type Artifact = { path: string; source: "change" | "attachment"; change?: ChangeSummary; previewPath?: string };
 
 const activeTab = ref<ActiveTab>("summary");
@@ -50,6 +64,14 @@ const previewTruncated = ref(false);
 const previewMediaBase64 = ref<string | null>(null);
 const previewMimeType = ref<string | null>(null);
 const previewLanguage = ref("");
+// 代码预览弹窗：fixed + CSS 居中，脱离父级滚动/裁剪上下文，固定尺寸不被遮挡
+const previewModalRef = ref<HTMLElement | null>(null);
+
+// 点击弹窗外部关闭预览（点击遮罩或弹窗外任意处）
+function closePreviewOnOutside(event: PointerEvent) {
+  if (!selectedPath.value) return;
+  if (previewModalRef.value && !previewModalRef.value.contains(event.target as Node)) closePreview();
+}
 const expandedPanel = ref(false);
 const toolMenuOpen = ref(false);
 const toolMenuRoot = ref<HTMLElement | null>(null);
@@ -92,6 +114,21 @@ function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
+// 任务产物 → 本地打包的类型图标 URL 映射（缺失的扩展名不映射，回退通用图标）
+const artifactIconUrls = computed(() => {
+  const map = new Map<string, string>();
+  for (const a of artifacts.value) {
+    const url = fileTypeIconUrl(basename(a.path));
+    if (url) map.set(a.path, url);
+  }
+  return map;
+});
+// 类型图标加载失败（本地缺失/损坏）的产物路径，回退 FileCode2/FileText
+const failedArtifactIcons = ref(new Set<string>());
+function onArtifactIconError(path: string) {
+  failedArtifactIcons.value = new Set(failedArtifactIcons.value).add(path);
+}
+
 function toggleSection(section: SectionKey) {
   const next = new Set(openSections.value);
   if (next.has(section)) next.delete(section);
@@ -107,7 +144,7 @@ function activateBrowser(id: number) {
 function createBrowserTab() {
   const id = ++browserSequence.value;
   const key = `browser-${id}` as const;
-  browserTabs.value.push({ id, label: "新标签页", input: "", url: "", frameKey: 0, loading: false });
+  browserTabs.value.push({ id, label: "新标签页", input: "", url: "", history: [], historyIndex: -1, frameKey: 0, loading: false });
   workspaceTabs.value.push({ key, kind: "browser" });
   activateBrowser(id);
   toolMenuOpen.value = false;
@@ -135,6 +172,13 @@ function browserForKey(key: ActiveTab) {
 function openSummary() {
   if (!workspaceTabs.value.some((tab) => tab.kind === "summary")) workspaceTabs.value.push({ key: "summary", kind: "summary" });
   activeTab.value = "summary";
+  selectedPath.value = "";
+  toolMenuOpen.value = false;
+}
+
+function openFiles() {
+  if (!workspaceTabs.value.some((tab) => tab.kind === "files")) workspaceTabs.value.push({ key: "files", kind: "files" });
+  activeTab.value = "files";
   selectedPath.value = "";
   toolMenuOpen.value = false;
 }
@@ -176,11 +220,26 @@ function navigateBrowser(tab: BrowserTab) {
     tab.url = parsed.toString();
     tab.input = tab.url;
     tab.label = parsed.hostname.replace(/^www\./, "") || "新标签页";
+    tab.history = [...tab.history.slice(0, tab.historyIndex + 1), tab.url];
+    tab.historyIndex = tab.history.length - 1;
     tab.loading = true;
     tab.frameKey += 1;
   } catch {
     notice.value = "请输入有效的网址";
   }
+}
+
+function moveBrowserHistory(tab: BrowserTab, offset: -1 | 1) {
+  const nextIndex = tab.historyIndex + offset;
+  const url = tab.history[nextIndex];
+  if (!url) return;
+  const parsed = new URL(url);
+  tab.historyIndex = nextIndex;
+  tab.url = url;
+  tab.input = url;
+  tab.label = parsed.hostname.replace(/^www\./, "") || "新标签页";
+  tab.loading = true;
+  tab.frameKey += 1;
 }
 
 function reloadBrowser(tab: BrowserTab) {
@@ -216,6 +275,11 @@ async function openArtifact(artifact: Artifact) {
     return;
   }
   selectedPath.value = artifact.path;
+  await loadArtifact(artifact);
+}
+
+// 加载指定产物的内容到预览区（openArtifact 与弹窗内文件切换共用）
+async function loadArtifact(artifact: Artifact) {
   preview.value = "";
   previewLanguage.value = artifact.change ? "diff" : "";
   previewEncoding.value = "UTF-8";
@@ -241,12 +305,28 @@ async function openArtifact(artifact: Artifact) {
   }
 }
 
+// 弹窗顶部下拉切换查看其他文件
+function onSelectFile() {
+  const artifact = artifacts.value.find((a) => a.path === selectedPath.value);
+  if (artifact) void loadArtifact(artifact);
+}
+
 function closeToolMenu(event: PointerEvent) {
   if (toolMenuOpen.value && !toolMenuRoot.value?.contains(event.target as Node)) toolMenuOpen.value = false;
 }
 
+// 关闭代码预览浮窗（点击遮罩或 Escape 触发），同时清空选中态
+function closePreview() {
+  selectedPath.value = "";
+  preview.value = "";
+}
+
 function closeToolMenuOnEscape(event: KeyboardEvent) {
-  if (event.key === "Escape") toolMenuOpen.value = false;
+  if (event.key === "Escape") {
+    toolMenuOpen.value = false;
+    closePreview();
+    if (expandedPanel.value) expandedPanel.value = false; // 全屏态按 Esc 退出全屏
+  }
 }
 
 watch(() => [props.workspaceId, props.runId], () => {
@@ -259,12 +339,20 @@ watch(() => [props.workspaceId, props.runId], () => {
   void refreshArtifacts();
 }, { immediate: true });
 
+// 「查看项目文件」信号：seq 变化时切换到文件标签页（在 workspaceId/runId 重置之后执行）。
+// immediate 保证「先建会话再挂载 inspector」的路径（无活动会话点查看项目文件）也能打开文件标签页
+watch(() => props.filesRequest?.seq, (seq, prev) => {
+  if (seq !== undefined && seq !== prev) openFiles();
+}, { immediate: true });
+
 onMounted(() => {
   document.addEventListener("pointerdown", closeToolMenu);
+  document.addEventListener("pointerdown", closePreviewOnOutside);
   document.addEventListener("keydown", closeToolMenuOnEscape);
 });
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", closeToolMenu);
+  document.removeEventListener("pointerdown", closePreviewOnOutside);
   document.removeEventListener("keydown", closeToolMenuOnEscape);
 });
 </script>
@@ -278,6 +366,7 @@ onBeforeUnmount(() => {
           <button type="button" role="menuitem" :class="{ active: activeTab === 'summary' }" @click="openSummary"><ListChecks :size="15" /><span>任务摘要</span></button>
           <button type="button" role="menuitem" :class="{ active: currentBrowser }" @click="openBrowser"><Globe2 :size="15" /><span>浏览器</span></button>
           <button type="button" role="menuitem" :class="{ active: activeTab.startsWith('sandbox-') }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
+          <button type="button" role="menuitem" :class="{ active: activeTab === 'files' }" @click="openFiles"><FolderOpen :size="15" /><span>文件</span></button>
         </nav>
       </div>
       <nav class="workspace-open-tabs" aria-label="已打开功能">
@@ -285,17 +374,18 @@ onBeforeUnmount(() => {
           <button type="button" :aria-pressed="activeTab === tab.key" @click="activeTab = tab.key">
             <span class="workspace-tab-icon">
               <ListChecks v-if="tab.kind === 'summary'" class="workspace-tab-kind-icon" :size="14" />
+              <FolderOpen v-else-if="tab.kind === 'files'" class="workspace-tab-kind-icon" :size="14" />
               <Globe2 v-else-if="tab.kind === 'browser'" class="workspace-tab-kind-icon" :size="14" />
               <SquareTerminal v-else class="workspace-tab-kind-icon" :size="14" />
             </span>
-            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
+            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'files' ? '文件' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
           </button>
-          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
+          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'files' ? '文件' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
         </div>
       </nav>
       <button type="button" class="workspace-browser-add" aria-label="新建浏览器标签页" @click="createBrowserTab"><Plus :size="16" /></button>
       <span class="workspace-header-divider" />
-      <button type="button" class="workspace-expand" :aria-label="expandedPanel ? '还原功能区' : '展开功能区'" @click="expandedPanel = !expandedPanel"><Minimize2 v-if="expandedPanel" :size="15" /><Maximize2 v-else :size="15" /></button>
+      <button type="button" class="workspace-expand" :aria-label="expandedPanel ? '退出全屏' : '全屏'" @click="expandedPanel = !expandedPanel"><Minimize2 v-if="expandedPanel" :size="15" /><Maximize2 v-else :size="15" /></button>
       <button type="button" class="workspace-panel-close" aria-label="退出分屏布局" @click="emit('close')"><PanelRightClose :size="16" /></button>
     </header>
 
@@ -329,7 +419,11 @@ onBeforeUnmount(() => {
         <div v-if="openSections.has('artifacts')" class="summary-section-body">
           <div v-if="artifacts.length" class="artifact-list">
             <button v-for="artifact in artifacts" :key="artifact.path" type="button" :title="artifact.path" @click="openArtifact(artifact)">
-              <span><FileCode2 v-if="artifact.source === 'change'" :size="15" /><FileText v-else :size="15" /></span>
+              <span>
+                <img v-if="!failedArtifactIcons.has(artifact.path) && artifactIconUrls.get(artifact.path)" :src="artifactIconUrls.get(artifact.path)" class="artifact-type-icon" alt="" draggable="false" @error="onArtifactIconError(artifact.path)" />
+                <FileCode2 v-else-if="artifact.source === 'change'" :size="15" />
+                <FileText v-else :size="15" />
+              </span>
               <span><b>{{ basename(artifact.path) }}</b><small>{{ artifact.source === 'change' ? '代码变更' : '任务附件' }}</small></span>
               <code v-if="artifact.change">{{ artifact.change.index_status }}{{ artifact.change.worktree_status }}</code>
               <ExternalLink v-else :size="13" />
@@ -365,13 +459,16 @@ onBeforeUnmount(() => {
 
     <main v-else-if="currentBrowser" class="browser-workspace">
       <form class="browser-toolbar" aria-label="网页导航" @submit.prevent="navigateBrowser(currentBrowser)">
-        <button type="button" class="browser-toolbar-action" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url || currentBrowser.loading" @click="reloadBrowser(currentBrowser)"><RotateCw :size="14" :class="{ spin: currentBrowser.loading }" /></button>
-        <div class="browser-address">
-          <Globe2 :size="14" aria-hidden="true" />
-          <input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入网址" spellcheck="false" autocomplete="url" />
-          <button v-if="currentBrowser.input" type="button" class="browser-address-clear" title="清除地址" aria-label="清除地址" @click="clearBrowserInput(currentBrowser)"><X :size="13" /></button>
+        <div class="browser-navigation-actions">
+          <button type="button" class="browser-toolbar-action" title="后退" aria-label="后退" :disabled="currentBrowser.historyIndex <= 0 || currentBrowser.loading" @click="moveBrowserHistory(currentBrowser, -1)"><ArrowLeft :size="17" /></button>
+          <button type="button" class="browser-toolbar-action" title="前进" aria-label="前进" :disabled="currentBrowser.historyIndex >= currentBrowser.history.length - 1 || currentBrowser.loading" @click="moveBrowserHistory(currentBrowser, 1)"><ArrowRight :size="17" /></button>
+          <button type="button" class="browser-toolbar-action" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url || currentBrowser.loading" @click="reloadBrowser(currentBrowser)"><RotateCw :size="16" :class="{ spin: currentBrowser.loading }" /></button>
         </div>
-        <button type="submit" class="browser-toolbar-submit" title="访问网页" aria-label="访问网页" :disabled="!currentBrowser.input.trim() || currentBrowser.loading"><Send :size="14" /></button>
+        <div class="browser-address">
+          <input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入 URL" spellcheck="false" autocomplete="url" />
+          <button type="submit" class="browser-toolbar-submit" title="访问网页" aria-label="访问网页" :disabled="!currentBrowser.input.trim() || currentBrowser.loading"><ArrowUpRight :size="18" /></button>
+        </div>
+        <button type="button" class="browser-toolbar-menu" title="更多选项" aria-label="更多选项"><EllipsisVertical :size="18" /></button>
       </form>
       <div class="browser-stage">
         <BrowserWebview
@@ -389,13 +486,23 @@ onBeforeUnmount(() => {
       </div>
     </main>
 
+    <main v-else-if="activeTab === 'files'" class="files-workspace"><FileTree :workspace-id="filesRequest?.workspaceId || workspaceId" :workspace-name="workspaceName" :workspace-path="workspacePath" /></main>
     <main v-for="tab in sandboxTabs" v-show="activeTab === tab.key" :key="`${workspacePath}-${tab.key}`" class="sandbox-workspace"><SandboxTerminal :workspace-path="workspacePath || ''" /></main>
     <main v-if="!activeTab" class="workspace-empty-view" />
 
-    <section v-if="selectedPath" class="file-preview file-preview--flyout">
-      <header><span class="preview-tab"><FileText :size="15" /><b>{{ selectedName }}</b><i /></span><button title="关闭预览" @click="selectedPath = ''; preview = ''"><X :size="17" /></button></header>
-      <CodePreview :content="preview" :path="selectedPath" :encoding="previewEncoding" :binary="previewBinary" :truncated="previewTruncated" :force-language="previewLanguage" :media-base64="previewMediaBase64" :mime-type="previewMimeType" />
-    </section>
+    <Teleport to="body">
+      <div v-if="selectedPath" class="preview-modal-backdrop" @click="closePreview" />
+      <section v-if="selectedPath" ref="previewModalRef" class="preview-modal">
+        <header>
+          <span class="preview-modal__title"><FileText :size="15" /><b>{{ selectedName }}</b></span>
+          <select v-model="selectedPath" class="preview-modal__select" aria-label="查看其他文件" @change="onSelectFile">
+            <option v-for="artifact in artifacts" :key="artifact.path" :value="artifact.path">{{ basename(artifact.path) }}</option>
+          </select>
+          <button title="关闭预览" @click="closePreview"><X :size="17" /></button>
+        </header>
+        <CodePreview :content="preview" :path="selectedPath" :encoding="previewEncoding" :binary="previewBinary" :truncated="previewTruncated" :force-language="previewLanguage" :media-base64="previewMediaBase64" :mime-type="previewMimeType" />
+      </section>
+    </Teleport>
     <p v-if="notice" class="inspector-notice"><span>{{ notice }}</span><button type="button" aria-label="关闭提示" @click="notice = ''"><X :size="13" /></button></p>
   </aside>
 </template>

@@ -1,3 +1,3 @@
-from sztu_code.core.memory.loader import load_context_file
+from sztu_code.core.memory.loader import MemoryCatalog, MemoryDocument, load_context_file
 
-__all__ = ["load_context_file"]
+__all__ = ["MemoryCatalog", "MemoryDocument", "load_context_file"]

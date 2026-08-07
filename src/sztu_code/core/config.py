@@ -16,7 +16,7 @@ _DEFAULT_LOG_FILE = "~/.sztu/logs/core.log"
 _DEFAULT_LOG_FORMAT = "text"
 _DEFAULT_CONFIG_PATH = "~/.sztu/config.toml"
 _DEFAULT_CLIENT_SETTINGS_PATH = "~/.sztu/client-settings.json"
-_DEFAULT_MAX_STEPS = 0  # 0 = 不限步数（预算驱动，由 token/墙钟兜底）
+_DEFAULT_MAX_STEPS = 100  # 硬止损；SWE-bench 极少需要 >100 步；显式设为 0 可恢复不限
 _DEFAULT_WRAP_UP_ON_MAX_STEPS = True
 _DEFAULT_GRACE_STEP_ON_MAX_STEPS = True
 _DEFAULT_STUCK_MAX_FAILURES = 3
@@ -50,9 +50,10 @@ class AgentConfig:
 @dataclass
 class BudgetConfig:
     # 本 run 累计 input+output tokens 上限；0=不限
-    max_tokens: int = 0
+    # 参考 Claude Code task_budget (128K)，但我们的压缩为全量替换，设 500K 更保守
+    max_tokens: int = 500_000
     # 本 run 累计墙钟秒数上限；0=不限
-    max_wall_clock_s: int = 0
+    max_wall_clock_s: int = 1_200  # 20 分钟
 
 
 @dataclass
@@ -76,6 +77,10 @@ class LlmConfig:
     api_key: str = ""  # 导入的凭证，优先于 .env 注入 provider 环境
     api_key_env: str = ""  # 内置模型使用的凭证变量名，避免把密钥写入模型配置
     keyless: bool = False  # 免 key 端点（如 opencode Zen 免费模型），跳过凭证校验
+    # OpenAI 兼容端点是否发送 cache_control 标记（system + 最后一个 tool）。
+    # 部分端点（DeepSeek/Zen）是自动前缀缓存、忽略此字段，纯 OpenAI 规范端点也忽略；
+    # 仅对识别该标记的网关有命中收益；端点拒收未知字段时可关掉。
+    cache_control: bool = True
 
 
 @dataclass
@@ -93,9 +98,23 @@ class PermissionConfig:
 
 @dataclass
 class CompactionConfig:
-    auto_threshold: float = 0.0  # 0 disables auto compaction; manual /compact remains available
+    # context_pct 触发压缩的阈值；0 表示禁用百分比触发
+    # 70% × 200K 窗口 = 140K 上下文才触发，避免过早失忆
+    auto_threshold: float = 0.70
+    # 累计 input tokens 超过此值触发压缩（绝对值触发，不受窗口大小影响）；0=禁用
+    # 全量替换压缩架构下设为 300K，仅在上下文真正膨胀时才压缩
+    auto_compact_min_tokens: int = 300_000
+    # 步数触发压缩（全量替换架构下默认关闭，步数触发容易在"刚理解完代码"的时刻失忆）
+    auto_compact_min_steps: int = 0
     tool_result_limit: int = 8_000
     tool_result_keep: int = 4_000
+    # --- 滑动窗口压缩（借鉴 Claude Code keepRecent=5）---
+    # 保留最近 N 个 turn 完整细节，仅摘要更早的 turn；0=回退全量替换
+    sliding_window_size: int = 5
+    # 两次压缩之间的最小步数间隔（滑动窗口下可大幅降低，因为不丢失即时上下文）
+    compact_cooldown_steps: int = 3
+    # 连续压缩失败 N 次后熔断，不再尝试自动压缩（借鉴 Claude Code circuit breaker）
+    circuit_breaker_max_failures: int = 3
 
 
 @dataclass
@@ -390,6 +409,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             "provider",
             "router",
             "context_window",
+            "cache_control",
         }
         if unknown_llm:
             raise SystemExit(f"Unknown [llm] keys: {', '.join(sorted(unknown_llm))}")
@@ -415,6 +435,11 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, int) or val <= 0:
                 raise SystemExit("Config error: llm.context_window must be a positive integer")
             config.llm.context_window = val
+        if "cache_control" in llm:
+            val = llm["cache_control"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: llm.cache_control must be a boolean")
+            config.llm.cache_control = val
 
     if "trace" in data:
         trace = data["trace"]
@@ -463,8 +488,13 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             raise SystemExit("Config error: [compaction] must be a table")
         unknown_comp: set[str] = set(comp.keys()) - {
             "auto_threshold",
+            "auto_compact_min_tokens",
+            "auto_compact_min_steps",
             "tool_result_limit",
             "tool_result_keep",
+            "sliding_window_size",
+            "compact_cooldown_steps",
+            "circuit_breaker_max_failures",
         }
         if unknown_comp:
             raise SystemExit(f"Unknown [compaction] keys: {', '.join(sorted(unknown_comp))}")
@@ -473,6 +503,14 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
                 raise SystemExit("Config error: compaction.auto_threshold must be between 0 and 1")
             config.compaction.auto_threshold = float(val)
+        for _key in ("auto_compact_min_tokens", "auto_compact_min_steps"):
+            if _key in comp:
+                val = comp[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(
+                        f"Config error: compaction.{_key} must be a non-negative integer"
+                    )
+                setattr(config.compaction, _key, val)
         if "tool_result_limit" in comp:
             val = comp["tool_result_limit"]
             if not isinstance(val, int) or val <= 0:
@@ -487,6 +525,17 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     "Config error: compaction.tool_result_keep must be a positive integer"
                 )
             config.compaction.tool_result_keep = val
+        _compaction_keys = (
+            "sliding_window_size", "compact_cooldown_steps", "circuit_breaker_max_failures"
+        )
+        for _key in _compaction_keys:
+            if _key in comp:
+                val = comp[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(
+                        f"Config error: compaction.{_key} must be a non-negative integer"
+                    )
+                setattr(config.compaction, _key, val)
 
     if "offload" in data:
         off = data["offload"]
@@ -724,6 +773,10 @@ def _apply_env(config: SztuConfig) -> None:
                 f"got: {llm_context_window!r}"
             )
 
+    llm_cache_control = os.environ.get("SZTU_LLM_CACHE_CONTROL")
+    if llm_cache_control is not None:
+        config.llm.cache_control = llm_cache_control.lower() not in ("0", "false", "no")
+
     compact_threshold = os.environ.get("SZTU_COMPACT_THRESHOLD")
     if compact_threshold is not None:
         try:
@@ -771,6 +824,27 @@ def _apply_env(config: SztuConfig) -> None:
                 "Config error: SZTU_COMPACT_TOOL_KEEP must be an integer, "
                 f"got: {compact_tool_keep!r}"
             )
+
+    for _env, _attr in (
+        ("SZTU_COMPACT_MIN_TOKENS", "auto_compact_min_tokens"),
+        ("SZTU_COMPACT_MIN_STEPS", "auto_compact_min_steps"),
+        ("SZTU_SLIDING_WINDOW_SIZE", "sliding_window_size"),
+        ("SZTU_COMPACT_COOLDOWN", "compact_cooldown_steps"),
+        ("SZTU_COMPACT_CIRCUIT_BREAKER", "circuit_breaker_max_failures"),
+    ):
+        _str = os.environ.get(_env)
+        if _str is not None:
+            try:
+                val = int(_str)
+                if val < 0:
+                    raise SystemExit(
+                        f"Config error: {_env} must be a non-negative integer, got: {_str!r}"
+                    )
+                setattr(config.compaction, _attr, val)
+            except ValueError:
+                raise SystemExit(
+                    f"Config error: {_env} must be an integer, got: {_str!r}"
+                )
 
     # --- 上下文卸载环境变量 ---
     offload_enabled = os.environ.get("SZTU_OFFLOAD_ENABLED")

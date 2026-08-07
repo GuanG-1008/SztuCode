@@ -173,12 +173,13 @@ def test_grace_step_env_var_overrides(tmp_path: Path, monkeypatch: pytest.Monkey
     assert cfg.agent.grace_step_on_max_steps is True
 
 
-# 功能：验证 max_steps 默认值为 0（不限步数），TOML 显式写 0 也合法
-# 设计：无覆盖时默认 0；写 [agent] max_steps=0 不报错仍为 0（0 从"第 1 步即终止"改为"不限"）
+# 功能：验证 max_steps 默认值为 100（硬止损），TOML 显式写 0 可恢复不限
+# 设计：默认 100 提供软着陆；用户显式设 0 仍为不限（0 语义保留）
 def test_max_steps_default_unlimited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SZTU_MAX_STEPS", raising=False)
     cfg = get_config()
-    assert cfg.agent.max_steps == 0
+    assert cfg.agent.max_steps == 100  # 新默认：硬止损，而非 0 不限
+    # 用户显式设 0 仍为不限步数
     toml_path = tmp_path / "sztu.toml"
     toml_path.write_bytes(b"[agent]\nmax_steps = 0\n")
     monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
@@ -253,3 +254,61 @@ def test_workflow_concurrency_rejects_zero(
     monkeypatch.setenv("SZTU_WORKFLOW_MAX_CONCURRENCY", "0")
     with pytest.raises(SystemExit):
         get_config()
+
+
+# ============================================================
+# P0 兜底线新增配置测试
+# ============================================================
+
+
+# 功能：验证预算默认值非零 — max_tokens=500K, max_wall_clock_s=1200
+# 设计：无覆盖时默认值提供硬止损，不再全零
+def test_budget_defaults_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for env in ("SZTU_BUDGET_MAX_TOKENS", "SZTU_BUDGET_MAX_WALL_CLOCK_S"):
+        monkeypatch.delenv(env, raising=False)
+    cfg = get_config()
+    assert cfg.budget.max_tokens == 500_000
+    assert cfg.budget.max_wall_clock_s == 1_200
+
+
+# 功能：验证压缩新字段 auto_compact_min_tokens/min_steps 的 TOML 解析
+# 设计：TOML 正确解析并写入 CompactionConfig
+def test_compaction_min_tokens_toml_parsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    toml_path = tmp_path / "comp.toml"
+    toml_path.write_bytes(
+        b"[compaction]\n"
+        b"auto_threshold = 0.50\n"
+        b"auto_compact_min_tokens = 120000\n"
+        b"auto_compact_min_steps = 50\n"
+    )
+    monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
+    cfg = get_config()
+    assert cfg.compaction.auto_threshold == 0.50
+    assert cfg.compaction.auto_compact_min_tokens == 120_000
+    assert cfg.compaction.auto_compact_min_steps == 50
+
+
+# 功能：验证压缩新字段的环境变量覆盖
+# 设计：SZTU_COMPACT_MIN_TOKENS / SZTU_COMPACT_MIN_STEPS 覆盖默认值
+def test_compaction_min_tokens_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SZTU_COMPACT_MIN_TOKENS", "160000")
+    monkeypatch.setenv("SZTU_COMPACT_MIN_STEPS", "40")
+    cfg = get_config()
+    assert cfg.compaction.auto_compact_min_tokens == 160_000
+    assert cfg.compaction.auto_compact_min_steps == 40
+
+
+# 功能：验证压缩百分比阈值默认值从 0 改为 0.70
+# 设计：context_pct 超过 70% 自动触发压缩，而非完全禁用
+def test_compaction_threshold_default_changed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SZTU_COMPACT_THRESHOLD", raising=False)
+    cfg = get_config()
+    assert cfg.compaction.auto_threshold == 0.70
+
+
+# 功能：验证 agent 默认 max_steps 从 0 改为 100
+# 设计：默认提供步数硬止损，防止无限步数
+def test_agent_max_steps_default_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SZTU_MAX_STEPS", raising=False)
+    cfg = get_config()
+    assert cfg.agent.max_steps == 100

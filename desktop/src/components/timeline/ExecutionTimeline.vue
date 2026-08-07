@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
-  Activity, Check, CheckCircle2, ChevronDown, CircleAlert, FileDiff,
-  LoaderCircle, PauseCircle, Play, ShieldAlert,
+  Activity, CheckCircle2, ChevronDown, CircleAlert, FileDiff, Play,
 } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
 import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
@@ -235,13 +234,6 @@ const turns = computed<TurnView[]>(() => {
         <span v-if="turn.model || turn.userMessageTime" class="timeline-user-message__meta">{{ turn.model || "未记录模型" }} · {{ formatTime(turn.userMessageTime) }}</span>
       </div>
       <div v-if="turn.hasContent" class="timeline-assistant">
-        <span class="assistant-avatar" :class="turn.state" aria-label="SztuCode">
-          <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="15" />
-          <ShieldAlert v-else-if="turn.state === 'waiting'" :size="15" />
-          <PauseCircle v-else-if="turn.state === 'interrupted'" :size="15" />
-          <CircleAlert v-else-if="turn.state === 'failed'" :size="15" />
-          <Check v-else :size="15" />
-        </span>
         <div class="timeline-step__content">
           <div class="turn-status" :class="turn.state">
             <b>{{ turn.stateLabel }}</b>
