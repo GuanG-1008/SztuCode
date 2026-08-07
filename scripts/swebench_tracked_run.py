@@ -18,12 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval.swebench.adapter import (
     SWEbenchInstance,
-    RunResult,
     build_prompt,
     clone_repo,
     get_diff_via_git,
     load_dataset,
 )
+
 from sztu_code.core.transport.socket_client import IpcError, SocketClient
 
 logger = logging.getLogger("swebench.tracked")
@@ -147,7 +147,7 @@ async def run_instance_tracked(
 
         try:
             await asyncio.wait_for(run_finished.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             result["error"] = f"Timeout after {timeout}s"
             try:
                 await client.send_command("run.cancel", {"run_id": run_id})
@@ -266,7 +266,7 @@ def print_final_report(results: list[dict]) -> None:
     print(f"FINAL REPORT — {n} instances")
     print(f"{'='*72}")
 
-    print(f"\n  Outcomes:")
+    print("\n  Outcomes:")
     print(f"    Success:      {len(successful)}/{n}")
     print(f"    Interrupted:  {len(interrupted)}/{n}")
     print(f"    Failed:       {len(failed)}/{n}")
@@ -275,7 +275,7 @@ def print_final_report(results: list[dict]) -> None:
     # 步数统计
     all_steps = [r["steps"] for r in results if not r["error"]]
     if all_steps:
-        print(f"\n  Steps:")
+        print("\n  Steps:")
         print(f"    Min:    {min(all_steps)}")
         print(f"    Max:    {max(all_steps)}")
         print(f"    Avg:    {sum(all_steps)/len(all_steps):.1f}")
@@ -287,7 +287,7 @@ def print_final_report(results: list[dict]) -> None:
     all_in = [r["total_input_tokens"] for r in results if not r["error"]]
     all_out = [r["total_output_tokens"] for r in results if not r["error"]]
     if all_in:
-        print(f"\n  Tokens:")
+        print("\n  Tokens:")
         print(f"    Total Input:  {sum(all_in):,}")
         print(f"    Total Output: {sum(all_out):,}")
         print(f"    Avg Input:    {sum(all_in)/len(all_in):,.0f}")
@@ -304,7 +304,7 @@ def print_final_report(results: list[dict]) -> None:
                 rate = r["total_cache_read_tokens"] / r["total_input_tokens"] * 100
                 cache_rates.append(rate)
         if cache_rates:
-            print(f"\n  Cache Hit Rate:")
+            print("\n  Cache Hit Rate:")
             print(f"    Min:    {min(cache_rates):.1f}%")
             print(f"    Max:    {max(cache_rates):.1f}%")
             print(f"    Avg:    {sum(cache_rates)/len(cache_rates):.1f}%")
@@ -317,7 +317,7 @@ def print_final_report(results: list[dict]) -> None:
 
     # 时间统计
     all_time = [r["elapsed_seconds"] for r in results]
-    print(f"\n  Time:")
+    print("\n  Time:")
     print(f"    Total:  {sum(all_time):.0f}s ({sum(all_time)/60:.1f}min)")
     print(f"    Avg:    {sum(all_time)/len(all_time):.0f}s")
 
@@ -334,11 +334,11 @@ def print_final_report(results: list[dict]) -> None:
         if reasons:
             budget_triggers.append(f"    {r['instance_id']}: {', '.join(reasons)}")
     if budget_triggers:
-        print(f"\n  Guardrail Triggers:")
+        print("\n  Guardrail Triggers:")
         for bt in budget_triggers:
             print(bt)
     else:
-        print(f"\n  Guardrail Triggers: None (all completed naturally)")
+        print("\n  Guardrail Triggers: None (all completed naturally)")
 
     print(f"\n{'='*72}")
 
