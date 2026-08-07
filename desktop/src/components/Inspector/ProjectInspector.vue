@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  BookOpen, Check, ChevronDown, Circle, ExternalLink, FileCode2, FileText, Globe2,
+  ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Check, ChevronDown, Circle, EllipsisVertical,
+  ExternalLink, FileCode2, FileText, FolderOpen, Globe2,
   ListChecks, LoaderCircle, Maximize2, Minimize2, PackageOpen, PanelRightClose,
-  Plus, RefreshCw, RotateCw, Send, SquareTerminal, X,
+  Plus, RefreshCw, RotateCw, SquareTerminal, X,
 } from "@lucide/vue";
 import {
   changeDiff, listChanges, readFile,
@@ -11,6 +12,7 @@ import {
 } from "../../services/sztu-runtime";
 import BrowserWebview from "./BrowserWebview.vue";
 import CodePreview from "./CodePreview.vue";
+import FileTree from "./FileTree.vue";
 import type { TimelineStep } from "../timeline/types";
 
 const SandboxTerminal = defineAsyncComponent(() => import("./SandboxTerminal.vue"));
@@ -23,14 +25,25 @@ const props = defineProps<{
   workspaceName?: string;
   workspacePath?: string;
   obscured?: boolean;
+  // 「查看项目文件」请求：seq 递增触发切换到文件标签页，workspaceId 覆盖要浏览的项目
+  filesRequest?: { workspaceId: string; seq: number } | null;
 }>();
 
 const emit = defineEmits<{ close: [] }>();
 
 type SectionKey = "todo" | "artifacts" | "references";
-type BrowserTab = { id: number; label: string; input: string; url: string; frameKey: number; loading: boolean };
-type ActiveTab = "summary" | `sandbox-${number}` | `browser-${number}` | "";
-type WorkspaceTab = { key: ActiveTab; kind: "summary" | "browser" | "sandbox" };
+type BrowserTab = {
+  id: number;
+  label: string;
+  input: string;
+  url: string;
+  history: string[];
+  historyIndex: number;
+  frameKey: number;
+  loading: boolean;
+};
+type ActiveTab = "summary" | "files" | `sandbox-${number}` | `browser-${number}` | "";
+type WorkspaceTab = { key: ActiveTab; kind: "summary" | "files" | "browser" | "sandbox" };
 type Artifact = { path: string; source: "change" | "attachment"; change?: ChangeSummary; previewPath?: string };
 
 const activeTab = ref<ActiveTab>("summary");
@@ -107,7 +120,7 @@ function activateBrowser(id: number) {
 function createBrowserTab() {
   const id = ++browserSequence.value;
   const key = `browser-${id}` as const;
-  browserTabs.value.push({ id, label: "新标签页", input: "", url: "", frameKey: 0, loading: false });
+  browserTabs.value.push({ id, label: "新标签页", input: "", url: "", history: [], historyIndex: -1, frameKey: 0, loading: false });
   workspaceTabs.value.push({ key, kind: "browser" });
   activateBrowser(id);
   toolMenuOpen.value = false;
@@ -135,6 +148,13 @@ function browserForKey(key: ActiveTab) {
 function openSummary() {
   if (!workspaceTabs.value.some((tab) => tab.kind === "summary")) workspaceTabs.value.push({ key: "summary", kind: "summary" });
   activeTab.value = "summary";
+  selectedPath.value = "";
+  toolMenuOpen.value = false;
+}
+
+function openFiles() {
+  if (!workspaceTabs.value.some((tab) => tab.kind === "files")) workspaceTabs.value.push({ key: "files", kind: "files" });
+  activeTab.value = "files";
   selectedPath.value = "";
   toolMenuOpen.value = false;
 }
@@ -176,11 +196,26 @@ function navigateBrowser(tab: BrowserTab) {
     tab.url = parsed.toString();
     tab.input = tab.url;
     tab.label = parsed.hostname.replace(/^www\./, "") || "新标签页";
+    tab.history = [...tab.history.slice(0, tab.historyIndex + 1), tab.url];
+    tab.historyIndex = tab.history.length - 1;
     tab.loading = true;
     tab.frameKey += 1;
   } catch {
     notice.value = "请输入有效的网址";
   }
+}
+
+function moveBrowserHistory(tab: BrowserTab, offset: -1 | 1) {
+  const nextIndex = tab.historyIndex + offset;
+  const url = tab.history[nextIndex];
+  if (!url) return;
+  const parsed = new URL(url);
+  tab.historyIndex = nextIndex;
+  tab.url = url;
+  tab.input = url;
+  tab.label = parsed.hostname.replace(/^www\./, "") || "新标签页";
+  tab.loading = true;
+  tab.frameKey += 1;
 }
 
 function reloadBrowser(tab: BrowserTab) {
@@ -245,8 +280,17 @@ function closeToolMenu(event: PointerEvent) {
   if (toolMenuOpen.value && !toolMenuRoot.value?.contains(event.target as Node)) toolMenuOpen.value = false;
 }
 
+// 关闭代码预览浮窗（点击遮罩或 Escape 触发），同时清空选中态
+function closePreview() {
+  selectedPath.value = "";
+  preview.value = "";
+}
+
 function closeToolMenuOnEscape(event: KeyboardEvent) {
-  if (event.key === "Escape") toolMenuOpen.value = false;
+  if (event.key === "Escape") {
+    toolMenuOpen.value = false;
+    closePreview();
+  }
 }
 
 watch(() => [props.workspaceId, props.runId], () => {
@@ -257,6 +301,12 @@ watch(() => [props.workspaceId, props.runId], () => {
   workspaceTabs.value = [{ key: "summary", kind: "summary" }];
   selectedPath.value = "";
   void refreshArtifacts();
+}, { immediate: true });
+
+// 「查看项目文件」信号：seq 变化时切换到文件标签页（在 workspaceId/runId 重置之后执行）。
+// immediate 保证「先建会话再挂载 inspector」的路径（无活动会话点查看项目文件）也能打开文件标签页
+watch(() => props.filesRequest?.seq, (seq, prev) => {
+  if (seq !== undefined && seq !== prev) openFiles();
 }, { immediate: true });
 
 onMounted(() => {
@@ -278,6 +328,7 @@ onBeforeUnmount(() => {
           <button type="button" role="menuitem" :class="{ active: activeTab === 'summary' }" @click="openSummary"><ListChecks :size="15" /><span>任务摘要</span></button>
           <button type="button" role="menuitem" :class="{ active: currentBrowser }" @click="openBrowser"><Globe2 :size="15" /><span>浏览器</span></button>
           <button type="button" role="menuitem" :class="{ active: activeTab.startsWith('sandbox-') }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
+          <button type="button" role="menuitem" :class="{ active: activeTab === 'files' }" @click="openFiles"><FolderOpen :size="15" /><span>文件</span></button>
         </nav>
       </div>
       <nav class="workspace-open-tabs" aria-label="已打开功能">
@@ -285,12 +336,13 @@ onBeforeUnmount(() => {
           <button type="button" :aria-pressed="activeTab === tab.key" @click="activeTab = tab.key">
             <span class="workspace-tab-icon">
               <ListChecks v-if="tab.kind === 'summary'" class="workspace-tab-kind-icon" :size="14" />
+              <FolderOpen v-else-if="tab.kind === 'files'" class="workspace-tab-kind-icon" :size="14" />
               <Globe2 v-else-if="tab.kind === 'browser'" class="workspace-tab-kind-icon" :size="14" />
               <SquareTerminal v-else class="workspace-tab-kind-icon" :size="14" />
             </span>
-            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
+            <span>{{ tab.kind === 'summary' ? '任务摘要' : tab.kind === 'files' ? '文件' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页') }}</span>
           </button>
-          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
+          <button type="button" class="workspace-tab-close" :aria-label="`关闭${tab.kind === 'summary' ? '任务摘要' : tab.kind === 'files' ? '文件' : tab.kind === 'sandbox' ? sandboxLabel(tab.key) : (browserForKey(tab.key)?.label ?? '新标签页')}`" @click.stop="closeWorkspaceTab(tab.key)"><X :size="12" /></button>
         </div>
       </nav>
       <button type="button" class="workspace-browser-add" aria-label="新建浏览器标签页" @click="createBrowserTab"><Plus :size="16" /></button>
@@ -365,13 +417,16 @@ onBeforeUnmount(() => {
 
     <main v-else-if="currentBrowser" class="browser-workspace">
       <form class="browser-toolbar" aria-label="网页导航" @submit.prevent="navigateBrowser(currentBrowser)">
-        <button type="button" class="browser-toolbar-action" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url || currentBrowser.loading" @click="reloadBrowser(currentBrowser)"><RotateCw :size="14" :class="{ spin: currentBrowser.loading }" /></button>
-        <div class="browser-address">
-          <Globe2 :size="14" aria-hidden="true" />
-          <input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入网址" spellcheck="false" autocomplete="url" />
-          <button v-if="currentBrowser.input" type="button" class="browser-address-clear" title="清除地址" aria-label="清除地址" @click="clearBrowserInput(currentBrowser)"><X :size="13" /></button>
+        <div class="browser-navigation-actions">
+          <button type="button" class="browser-toolbar-action" title="后退" aria-label="后退" :disabled="currentBrowser.historyIndex <= 0 || currentBrowser.loading" @click="moveBrowserHistory(currentBrowser, -1)"><ArrowLeft :size="17" /></button>
+          <button type="button" class="browser-toolbar-action" title="前进" aria-label="前进" :disabled="currentBrowser.historyIndex >= currentBrowser.history.length - 1 || currentBrowser.loading" @click="moveBrowserHistory(currentBrowser, 1)"><ArrowRight :size="17" /></button>
+          <button type="button" class="browser-toolbar-action" title="刷新网页" aria-label="刷新网页" :disabled="!currentBrowser.url || currentBrowser.loading" @click="reloadBrowser(currentBrowser)"><RotateCw :size="16" :class="{ spin: currentBrowser.loading }" /></button>
         </div>
-        <button type="submit" class="browser-toolbar-submit" title="访问网页" aria-label="访问网页" :disabled="!currentBrowser.input.trim() || currentBrowser.loading"><Send :size="14" /></button>
+        <div class="browser-address">
+          <input v-model="currentBrowser.input" aria-label="网页地址" placeholder="输入 URL" spellcheck="false" autocomplete="url" />
+          <button type="submit" class="browser-toolbar-submit" title="访问网页" aria-label="访问网页" :disabled="!currentBrowser.input.trim() || currentBrowser.loading"><ArrowUpRight :size="18" /></button>
+        </div>
+        <button type="button" class="browser-toolbar-menu" title="更多选项" aria-label="更多选项"><EllipsisVertical :size="18" /></button>
       </form>
       <div class="browser-stage">
         <BrowserWebview
@@ -389,11 +444,13 @@ onBeforeUnmount(() => {
       </div>
     </main>
 
+    <main v-else-if="activeTab === 'files'" class="files-workspace"><FileTree :workspace-id="filesRequest?.workspaceId || workspaceId" :workspace-name="workspaceName" :workspace-path="workspacePath" /></main>
     <main v-for="tab in sandboxTabs" v-show="activeTab === tab.key" :key="`${workspacePath}-${tab.key}`" class="sandbox-workspace"><SandboxTerminal :workspace-path="workspacePath || ''" /></main>
     <main v-if="!activeTab" class="workspace-empty-view" />
 
+    <div v-if="selectedPath" class="file-preview-backdrop" @click="closePreview" />
     <section v-if="selectedPath" class="file-preview file-preview--flyout">
-      <header><span class="preview-tab"><FileText :size="15" /><b>{{ selectedName }}</b><i /></span><button title="关闭预览" @click="selectedPath = ''; preview = ''"><X :size="17" /></button></header>
+      <header><span class="preview-tab"><FileText :size="15" /><b>{{ selectedName }}</b><i /></span><button title="关闭预览" @click="closePreview"><X :size="17" /></button></header>
       <CodePreview :content="preview" :path="selectedPath" :encoding="previewEncoding" :binary="previewBinary" :truncated="previewTruncated" :force-language="previewLanguage" :media-base64="previewMediaBase64" :mime-type="previewMimeType" />
     </section>
     <p v-if="notice" class="inspector-notice"><span>{{ notice }}</span><button type="button" aria-label="关闭提示" @click="notice = ''"><X :size="13" /></button></p>
