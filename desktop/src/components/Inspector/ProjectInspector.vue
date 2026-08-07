@@ -13,6 +13,7 @@ import {
 import BrowserWebview from "./BrowserWebview.vue";
 import CodePreview from "./CodePreview.vue";
 import FileTree from "./FileTree.vue";
+import { fileTypeIconUrl } from "../../utils/fileIcon";
 import type { TimelineStep } from "../timeline/types";
 
 const SandboxTerminal = defineAsyncComponent(() => import("./SandboxTerminal.vue"));
@@ -63,6 +64,14 @@ const previewTruncated = ref(false);
 const previewMediaBase64 = ref<string | null>(null);
 const previewMimeType = ref<string | null>(null);
 const previewLanguage = ref("");
+// 代码预览弹窗：fixed + CSS 居中，脱离父级滚动/裁剪上下文，固定尺寸不被遮挡
+const previewModalRef = ref<HTMLElement | null>(null);
+
+// 点击弹窗外部关闭预览（点击遮罩或弹窗外任意处）
+function closePreviewOnOutside(event: PointerEvent) {
+  if (!selectedPath.value) return;
+  if (previewModalRef.value && !previewModalRef.value.contains(event.target as Node)) closePreview();
+}
 const expandedPanel = ref(false);
 const toolMenuOpen = ref(false);
 const toolMenuRoot = ref<HTMLElement | null>(null);
@@ -103,6 +112,21 @@ const sandboxTabs = computed(() => workspaceTabs.value.filter((tab) => tab.kind 
 
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+// 任务产物 → 本地打包的类型图标 URL 映射（缺失的扩展名不映射，回退通用图标）
+const artifactIconUrls = computed(() => {
+  const map = new Map<string, string>();
+  for (const a of artifacts.value) {
+    const url = fileTypeIconUrl(basename(a.path));
+    if (url) map.set(a.path, url);
+  }
+  return map;
+});
+// 类型图标加载失败（本地缺失/损坏）的产物路径，回退 FileCode2/FileText
+const failedArtifactIcons = ref(new Set<string>());
+function onArtifactIconError(path: string) {
+  failedArtifactIcons.value = new Set(failedArtifactIcons.value).add(path);
 }
 
 function toggleSection(section: SectionKey) {
@@ -251,6 +275,11 @@ async function openArtifact(artifact: Artifact) {
     return;
   }
   selectedPath.value = artifact.path;
+  await loadArtifact(artifact);
+}
+
+// 加载指定产物的内容到预览区（openArtifact 与弹窗内文件切换共用）
+async function loadArtifact(artifact: Artifact) {
   preview.value = "";
   previewLanguage.value = artifact.change ? "diff" : "";
   previewEncoding.value = "UTF-8";
@@ -274,6 +303,12 @@ async function openArtifact(artifact: Artifact) {
   } catch (error) {
     notice.value = error instanceof Error ? error.message : String(error);
   }
+}
+
+// 弹窗顶部下拉切换查看其他文件
+function onSelectFile() {
+  const artifact = artifacts.value.find((a) => a.path === selectedPath.value);
+  if (artifact) void loadArtifact(artifact);
 }
 
 function closeToolMenu(event: PointerEvent) {
@@ -311,10 +346,12 @@ watch(() => props.filesRequest?.seq, (seq, prev) => {
 
 onMounted(() => {
   document.addEventListener("pointerdown", closeToolMenu);
+  document.addEventListener("pointerdown", closePreviewOnOutside);
   document.addEventListener("keydown", closeToolMenuOnEscape);
 });
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", closeToolMenu);
+  document.removeEventListener("pointerdown", closePreviewOnOutside);
   document.removeEventListener("keydown", closeToolMenuOnEscape);
 });
 </script>
@@ -381,7 +418,11 @@ onBeforeUnmount(() => {
         <div v-if="openSections.has('artifacts')" class="summary-section-body">
           <div v-if="artifacts.length" class="artifact-list">
             <button v-for="artifact in artifacts" :key="artifact.path" type="button" :title="artifact.path" @click="openArtifact(artifact)">
-              <span><FileCode2 v-if="artifact.source === 'change'" :size="15" /><FileText v-else :size="15" /></span>
+              <span>
+                <img v-if="!failedArtifactIcons.has(artifact.path) && artifactIconUrls.get(artifact.path)" :src="artifactIconUrls.get(artifact.path)" class="artifact-type-icon" alt="" draggable="false" @error="onArtifactIconError(artifact.path)" />
+                <FileCode2 v-else-if="artifact.source === 'change'" :size="15" />
+                <FileText v-else :size="15" />
+              </span>
               <span><b>{{ basename(artifact.path) }}</b><small>{{ artifact.source === 'change' ? '代码变更' : '任务附件' }}</small></span>
               <code v-if="artifact.change">{{ artifact.change.index_status }}{{ artifact.change.worktree_status }}</code>
               <ExternalLink v-else :size="13" />
@@ -448,11 +489,19 @@ onBeforeUnmount(() => {
     <main v-for="tab in sandboxTabs" v-show="activeTab === tab.key" :key="`${workspacePath}-${tab.key}`" class="sandbox-workspace"><SandboxTerminal :workspace-path="workspacePath || ''" /></main>
     <main v-if="!activeTab" class="workspace-empty-view" />
 
-    <div v-if="selectedPath" class="file-preview-backdrop" @click="closePreview" />
-    <section v-if="selectedPath" class="file-preview file-preview--flyout">
-      <header><span class="preview-tab"><FileText :size="15" /><b>{{ selectedName }}</b><i /></span><button title="关闭预览" @click="closePreview"><X :size="17" /></button></header>
-      <CodePreview :content="preview" :path="selectedPath" :encoding="previewEncoding" :binary="previewBinary" :truncated="previewTruncated" :force-language="previewLanguage" :media-base64="previewMediaBase64" :mime-type="previewMimeType" />
-    </section>
+    <Teleport to="body">
+      <div v-if="selectedPath" class="preview-modal-backdrop" @click="closePreview" />
+      <section v-if="selectedPath" ref="previewModalRef" class="preview-modal">
+        <header>
+          <span class="preview-modal__title"><FileText :size="15" /><b>{{ selectedName }}</b></span>
+          <select v-model="selectedPath" class="preview-modal__select" aria-label="查看其他文件" @change="onSelectFile">
+            <option v-for="artifact in artifacts" :key="artifact.path" :value="artifact.path">{{ basename(artifact.path) }}</option>
+          </select>
+          <button title="关闭预览" @click="closePreview"><X :size="17" /></button>
+        </header>
+        <CodePreview :content="preview" :path="selectedPath" :encoding="previewEncoding" :binary="previewBinary" :truncated="previewTruncated" :force-language="previewLanguage" :media-base64="previewMediaBase64" :mime-type="previewMimeType" />
+      </section>
+    </Teleport>
     <p v-if="notice" class="inspector-notice"><span>{{ notice }}</span><button type="button" aria-label="关闭提示" @click="notice = ''"><X :size="13" /></button></p>
   </aside>
 </template>

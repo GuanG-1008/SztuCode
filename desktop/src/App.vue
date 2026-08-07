@@ -34,6 +34,10 @@ const FULL_SIDEBAR_MIN_HEIGHT = 640;
 const SIDEBAR_MIN_WIDTH = 224;
 const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_COLLAPSE_PULL = 48;
+// 会话区保留的最小宽度，用于钳制右侧功能栏宽度，避免窗口变窄时被挤没
+const CONVERSATION_MIN_WIDTH = 320;
+// 窗口窄于该宽度时自动收起右侧功能栏
+const INSPECTOR_AUTO_COLLAPSE_WIDTH = 1000;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
 // 正式界面暂时隐藏入口；视觉测试可用开发态查询参数覆盖，避免整套 ChatPortal 回归被跳过。
@@ -78,6 +82,9 @@ const taskSearchInput = ref<HTMLInputElement | null>(null);
 const inspectorOpen = ref(true);
 const inspectorRendered = ref(true);
 const inspectorWidth = ref(Math.min(720, Math.max(340, Number(localStorage.getItem("sztu.inspectorWidth")) || 390)));
+// 响应式窗口宽度 + 窄窗自动收起右侧功能栏的追踪标志
+const windowWidth = ref(window.innerWidth);
+let inspectorAutoCollapsed = false;
 // 「查看项目文件」请求：通知右侧功能栏切到文件标签页并浏览指定项目
 const filesRequest = ref<{ workspaceId: string; seq: number } | null>(null);
 let filesRequestSeq = 0;
@@ -146,11 +153,14 @@ function formatSessionUsage(item: Session): string {
   return item.status === "active" && !tokens ? "计时中" : `${durationText} · ${tokenText}`;
 }
 // 工作区布局：仅传 CSS 变量，grid 列由样式表定义，
-// 这样媒体查询能按窗口宽度覆盖列结构（内联 grid-template-columns 会锁死响应式，窗口变窄不重排）
+// 这样媒体查询能按窗口宽度覆盖列结构（内联 grid-template-columns 会锁死响应式，窗口变窄不重排）。
+// 同时按当前窗口宽度钳制 inspector 宽度，保证会话区始终有 CONVERSATION_MIN_WIDTH 可用。
 const workLayoutStyle = computed(() => {
-  return {
-    "--inspector-width": inspectorOpen.value && activeWorkspace.value ? `${inspectorWidth.value}px` : "0px",
-  };
+  if (!inspectorOpen.value || !activeWorkspace.value) return { "--inspector-width": "0px" };
+  const sidebarW = sidebarCollapsed.value ? 0 : sidebarWidth.value;
+  const available = windowWidth.value - sidebarW - 6 - CONVERSATION_MIN_WIDTH;
+  const clamped = Math.min(inspectorWidth.value, Math.max(280, available));
+  return { "--inspector-width": `${clamped}px` };
 });
 
 async function toggleTaskSearch() {
@@ -948,6 +958,17 @@ function resizeSidebarWithKeyboard(event: KeyboardEvent) {
   localStorage.setItem("sztu.sidebarWidth", String(sidebarWidth.value));
 }
 function handleWindowResize() {
+  windowWidth.value = window.innerWidth;
+  // 窄窗口自动收起右侧功能栏，避免会话区被挤没
+  if (window.innerWidth < INSPECTOR_AUTO_COLLAPSE_WIDTH) {
+    if (inspectorOpen.value) {
+      setInspectorOpen(false);
+      inspectorAutoCollapsed = true;
+    }
+  } else if (inspectorAutoCollapsed) {
+    inspectorAutoCollapsed = false;
+    setInspectorOpen(true);
+  }
   const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
   if (belowFullSidebarSize) {
     if (!sidebarCollapsed.value) {
@@ -979,6 +1000,7 @@ let stopDisconnect: (() => void) | undefined;
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("resize", handleWindowResize);
+  handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
   void loadNativeSettings();

@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { ChevronRight, FileText, Folder, FolderOpen, LoaderCircle } from "@lucide/vue";
+import { fileTypeIconUrl } from "../../utils/fileIcon";
 import type { TreeNode } from "./FileTree.vue";
 
 // 递归组件：显式命名保证模板内自引用 `<FileTreeNode>` 可靠解析
@@ -11,6 +13,13 @@ const props = defineProps<{
   selectedPath: string;
 }>();
 const emit = defineEmits<{ toggle: [node: TreeNode]; open: [node: TreeNode] }>();
+
+// 文件类型图标加载失败（本地缺失）时回退到 Lucide 通用文件图标
+const iconFailed = ref(false);
+
+const typeIconUrl = computed(() =>
+  props.node.kind === "file" ? fileTypeIconUrl(props.node.name) : "",
+);
 
 // 点击目录行：折叠/展开由父组件懒加载 children；点击文件行：请求预览内容
 function onRowClick() {
@@ -34,9 +43,10 @@ function onRowClick() {
     >
       <ChevronRight v-if="node.kind === 'directory'" :size="13" class="row-chevron" :class="{ expanded: node.children }" />
       <span class="row-icon">
-        <FolderOpen v-if="node.kind === 'directory' && node.children" :size="15" />
-        <Folder v-else-if="node.kind === 'directory'" :size="15" />
-        <FileText v-else :size="15" />
+        <FolderOpen v-if="node.kind === 'directory' && node.children" :size="17" />
+        <Folder v-else-if="node.kind === 'directory'" :size="17" />
+        <img v-else-if="!iconFailed && typeIconUrl" :src="typeIconUrl" class="file-type-icon" alt="" draggable="false" @error="iconFailed = true" />
+        <FileText v-else :size="17" />
       </span>
       <span class="row-name">{{ node.name }}</span>
       <LoaderCircle v-if="node.loading" :size="12" class="spin" />

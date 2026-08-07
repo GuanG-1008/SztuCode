@@ -16,6 +16,7 @@ export type TreeNode = WorkspaceNode & { children?: TreeNode[]; loading?: boolea
 const root = ref<TreeNode[]>([]);
 const loading = ref(false);
 const error = ref("");
+const treeWidth = ref(Number(localStorage.getItem("sztu.treeWidth")) || 200);
 const selectedPath = ref("");
 const selectedName = ref("");
 const preview = ref("");
@@ -57,6 +58,25 @@ function toggleDir(node: TreeNode) {
   void loadDir(node);
 }
 
+// 拖拽分隔线调整文件树宽度（向右拖变宽），持久化到 localStorage
+function startTreeDrag(event: MouseEvent) {
+  event.preventDefault();
+  const startX = event.clientX;
+  const startWidth = treeWidth.value;
+  const onMove = (moveEvent: MouseEvent) => {
+    // 树在分隔线右侧：分隔线右移（delta 正）→ 树变窄；左移 → 树变宽
+    const next = Math.min(Math.max(startWidth - (moveEvent.clientX - startX), 140), 360);
+    treeWidth.value = next;
+    localStorage.setItem("sztu.treeWidth", String(next));
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
 // 文件行：读取内容并预览
 async function openFile(node: TreeNode) {
   selectedPath.value = node.path;
@@ -90,7 +110,7 @@ onMounted(() => void loadDir(null));
 </script>
 
 <template>
-  <div class="file-tree-view">
+  <div class="file-tree-view" :style="{ gridTemplateColumns: `minmax(0, 1fr) 6px ${treeWidth}px` }">
     <!-- 左：预览栏（未选文件时空白占位） -->
     <section class="file-preview file-preview--files" :class="{ empty: !selectedPath }">
       <header v-if="selectedPath"><span class="preview-tab"><Folder :size="14" /><b>{{ selectedName }}</b><i /></span><small>{{ selectedPath }}</small></header>
@@ -110,6 +130,9 @@ onMounted(() => void loadDir(null));
         <p>从工作区目录树中选择文件</p>
       </div>
     </section>
+
+    <!-- 中：可拖拽分隔线，调整预览与文件树的宽度比 -->
+    <div class="file-tree-divider" role="separator" aria-orientation="vertical" title="拖拽调整文件树宽度" @mousedown="startTreeDrag" />
 
     <!-- 右：文件树 -->
     <div class="files-body">
