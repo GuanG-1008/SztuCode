@@ -47,7 +47,7 @@ class ExecutionContext:
     # 本 run 派生的后台 subagent run_id 集合，结束回合前等待其全部落定
     pending_background_run_ids: set[str] = field(default_factory=set)
     compacted: bool = False
-    # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，注入 system prompt
+    # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，作为增量状态追加到消息尾部
     canvas: TaskCanvas | None = None
     # ---- agent run 预算 ----
     max_tokens: int = 0           # 累计 input+output tokens 上限；0=不限
@@ -84,18 +84,25 @@ class ExecutionContext:
                 + self.session_notes.strip()
                 + "\n\nRemember important durable facts by calling note_save."
             )
-        # Phase 2: 注入 Mermaid 任务画布 — Agent 每一步都能看到当前任务拓扑
-        if self.canvas is not None:
-            mermaid = self.canvas.render_mermaid()
-            summary = self.canvas.recent_summary()
-            parts.append("\n\n## Task Canvas\n" + mermaid)
-            if summary:
-                parts.append("\n最近完成:\n" + summary)
-            parts.append(
-                "\n画布展示了当前任务的执行进度。节点状态: ✅=完成 🔵=进行中 "
-                "⏳=待执行 ❌=失败。使用 read_ref 可查看卸载的完整工具输出。"
-            )
         return "".join(parts)
+
+    # 将动态任务状态追加到消息尾部，保持 system prompt 字节级稳定以命中前缀缓存
+    def add_canvas_update(self) -> None:
+        if self.canvas is None or not self.canvas.nodes:
+            return
+        node = self.canvas.nodes[-1]
+        stats = self.canvas.stats()
+        detail = node.summary.strip()[:240]
+        text = (
+            f"[Task progress] {node.node_id} {node.status}: {node.label[:100]}"
+            f" | tools={','.join(node.tool_names[:4]) or 'none'}"
+            f" | totals=done:{stats.get('done', 0)},failed:{stats.get('failed', 0)}"
+        )
+        if detail:
+            text += f" | result={detail}"
+        block = {"type": "text", "text": text}
+        # 独立消息确保 OpenAI 转换后 tool_result 仍紧跟对应 assistant tool_call
+        self.messages.append({"role": "user", "content": [block]})
 
     # 将 LLM 响应的 content blocks 追加为 assistant 消息
     def add_assistant_message(self, content: list[Any]) -> None:

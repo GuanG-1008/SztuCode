@@ -1,6 +1,7 @@
 # 工具注册表 —— 管理所有工具的注册、别名解析和 schema 导出
 from __future__ import annotations
 
+from collections.abc import Iterator
 from copy import deepcopy
 
 from sztu_code.core.tools.base import BaseTool, ToolPermission
@@ -27,10 +28,12 @@ class ToolRegistry:
         self._tools: dict[str, BaseTool] = {}
         # 动态别名索引: alias → canonical_name
         self._aliases: dict[str, str] = {}
+        self._schema_cache: list[dict[str, object]] | None = None
 
     # 注册工具；同名覆盖，同时注册别名
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
+        self._schema_cache = None
         # 注册工具类声明的别名
         for alias in tool.aliases:
             self._aliases[alias] = tool.name
@@ -84,16 +87,26 @@ class ToolRegistry:
 
     # 返回所有工具的 Anthropic 格式 schema，并要求模型提供时间线标题
     def tool_schemas(self) -> list[dict[str, object]]:
+        if self._schema_cache is not None:
+            return self._schema_cache
         schemas: list[dict[str, object]] = []
         for tool in self._tools.values():
             input_schema = deepcopy(tool.input_schema)
-            properties = dict(input_schema.get("properties", {}))
+            raw_properties = input_schema.get("properties")
+            properties: dict[str, object] = (
+                dict(raw_properties) if isinstance(raw_properties, dict) else {}
+            )
             properties["description"] = {
                 "type": "string",
                 "description": "用简短中文说明本次调用的具体目的，作为执行时间线标题。",
             }
             input_schema["properties"] = properties
-            required = [str(item) for item in input_schema.get("required", [])]
+            raw_required = input_schema.get("required")
+            required = (
+                [str(item) for item in raw_required]
+                if isinstance(raw_required, list)
+                else []
+            )
             if "description" not in required:
                 required.append("description")
             input_schema["required"] = required
@@ -102,10 +115,11 @@ class ToolRegistry:
                 "description": tool.description,
                 "input_schema": input_schema,
             })
+        self._schema_cache = schemas
         return schemas
 
     # 返回所有已注册工具的迭代器
-    def __iter__(self):
+    def __iter__(self) -> Iterator[BaseTool]:
         return iter(self._tools.values())
 
     def __len__(self) -> int:

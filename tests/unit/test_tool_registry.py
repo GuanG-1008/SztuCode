@@ -61,6 +61,18 @@ def test_multiple_tools_all_appear_in_schemas() -> None:
     assert names == {"fake", "another"}
 
 
+# 功能：验证工具 schema 在注册表未变化时复用同一缓存对象
+# 设计：连续调用检查对象身份，再注册新工具确认缓存失效并包含新 schema
+def test_tool_schemas_are_cached_until_registration() -> None:
+    registry = ToolRegistry()
+    registry.register(_FakeTool())
+    first = registry.tool_schemas()
+    assert registry.tool_schemas() is first
+
+    registry.register(_FakeTool())
+    assert registry.tool_schemas() is not first
+
+
 # 功能：验证重复注册同名工具时新版本覆盖旧版本（覆盖语义而非追加）
 # 设计：检查 description 变更，确认 registry 的覆盖语义，防止工具版本冲突导致旧实现残留
 def test_register_same_name_overwrites() -> None:

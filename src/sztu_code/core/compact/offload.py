@@ -76,11 +76,13 @@ def _make_summary(tool_name: str, content: str, max_chars: int = _DEFAULT_SUMMAR
             1 for line in lines
             if line and not line.startswith("#") and not line.startswith("//")
         )
-        first_few = [l[:120] for l in lines[:3] if l]
+        first_few = [result_line[:120] for result_line in lines[:3] if result_line]
         preview = "; ".join(first_few)
         if len(preview) > max_chars:
             preview = preview[: max_chars - 3] + "..."
-        return f"{tool_name}: {match_count} 条结果. 预览: {preview}" if preview else f"{tool_name}: {match_count} 条结果"
+        if preview:
+            return f"{tool_name}: {match_count} 条结果. 预览: {preview}"
+        return f"{tool_name}: {match_count} 条结果"
 
     else:
         # 通用摘要：首行
@@ -180,6 +182,9 @@ class OffloadManager:
     # 判断工具结果是否需要触发卸载
     def should_offload(self, tool_name: str, content: str) -> bool:
         if not self._enabled:
+            return False
+        # 回读工具已经自行分页，禁止再次卸载形成 read → offload → read 循环
+        if tool_name in {"memory_read", "read_ref"}:
             return False
         if tool_name in self._force_tools:
             return True

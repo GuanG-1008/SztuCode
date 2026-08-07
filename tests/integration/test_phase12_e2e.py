@@ -13,10 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from sztu_code.core.compact.offload import OffloadManager, OffloadRecord
 from sztu_code.core.compact.canvas import TaskCanvas
+from sztu_code.core.compact.offload import OffloadManager
 from sztu_code.core.config import SztuConfig
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus
@@ -24,7 +22,6 @@ from sztu_code.core.llm.types import LlmResponse, ToolCallBlock, UsageStats
 from sztu_code.core.runner import AgentRunner
 from sztu_code.core.session.model import Session
 from sztu_code.core.session.store import SessionStore
-
 
 # ============================================================
 # 场景模拟：Mock LLM 驱动一个 4 步 coding 任务
@@ -217,7 +214,7 @@ async def test_coding_scenario_phase1_offloading(tmp_path: Path) -> None:
 # 功能：验证 Phase 2 任务画布在 system prompt 中正确注入
 # 设计：检查 context.canvas 存在、画布有 4 个节点、system prompt 含 Mermaid
 async def test_coding_scenario_phase2_canvas(tmp_path: Path) -> None:
-    """Phase 2 验证：画布节点 + system prompt 注入"""
+    """Phase 2 验证：画布节点作为稳定 system 后的增量消息"""
     store = SessionStore(tmp_path / "sessions")
     session = Session(
         id="sess-e2e-2",
@@ -263,20 +260,18 @@ async def test_coding_scenario_phase2_canvas(tmp_path: Path) -> None:
         max_steps=5,
         canvas=canvas,
     )
-    prompt = ctx.system_prompt("You are a helpful assistant.")
+    before = ctx.system_prompt("You are a helpful assistant.")
+    ctx.add_canvas_update()
+    after = ctx.system_prompt("You are a helpful assistant.")
 
-    # 验证 system prompt 包含画布
-    assert "## Task Canvas" in prompt
-    assert "```mermaid" in prompt
-    assert "graph TD" in prompt
-    assert "搜索认证代码" in prompt
-    assert "读取 auth" in prompt
-    assert "修复 token" in prompt
-    assert "运行测试" in prompt
-    assert "step_01 --> step_02" in prompt
-    assert "step_02 --> step_03" in prompt
-    assert "step_03 --> step_04" in prompt
-    assert "最近完成" in prompt
+    # 动态画布不污染 system 前缀缓存，仅追加当前步骤的紧凑状态
+    assert before == after
+    assert "## Task Canvas" not in after
+    update = ctx.messages[-1]["content"][0]["text"]
+    assert "step_04" in update
+    assert "运行测试" in update
+    assert "45 passed" in update
+    assert "done:4" in update
 
 
 # 功能：验证画布 running→done 状态转换

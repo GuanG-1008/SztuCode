@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from sztu_code.core.compact.canvas import CanvasNode, TaskCanvas
 
-
 # ============================================================
 # CanvasNode
 # ============================================================
@@ -221,9 +220,9 @@ def test_nodes_returns_copy() -> None:
 # ============================================================
 
 
-# 功能：验证 ExecutionContext.system_prompt 在 canvas 存在时包含画布段
-# 设计：构造带 canvas 的 ExecutionContext，断言 system_prompt 含 Mermaid 内容
-def test_system_prompt_includes_canvas() -> None:
+# 功能：验证动态画布不再改变 system prompt，而是作为消息尾部的紧凑增量
+# 设计：先记录画布节点，再比较注入前后 system prompt 并检查末尾状态消息
+def test_canvas_update_keeps_system_prompt_stable() -> None:
     from sztu_code.core.context import ExecutionContext
 
     canvas = TaskCanvas()
@@ -235,10 +234,12 @@ def test_system_prompt_includes_canvas() -> None:
         max_steps=5,
         canvas=canvas,
     )
-    prompt = ctx.system_prompt("You are a helpful assistant.")
-    assert "## Task Canvas" in prompt
-    assert "```mermaid" in prompt
-    assert "测试步骤" in prompt
+    before = ctx.system_prompt("You are a helpful assistant.")
+    ctx.add_canvas_update()
+    after = ctx.system_prompt("You are a helpful assistant.")
+    assert before == after
+    assert "## Task Canvas" not in after
+    assert "测试步骤" in ctx.messages[-1]["content"][0]["text"]
 
 
 # 功能：验证 system_prompt 在无 canvas 时不包含画布段

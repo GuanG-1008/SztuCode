@@ -6,7 +6,6 @@ from sztu_code.core.compact.budget import truncate_tool_results
 from sztu_code.core.compact.offload import OffloadManager, OffloadRecord, _make_summary
 from sztu_code.core.tools.builtin.read_ref import ReadRefTool
 
-
 # ============================================================
 # _make_summary 摘要生成
 # ============================================================
@@ -81,7 +80,7 @@ def test_should_offload_disabled(tmp_path: Path) -> None:
 
 # 功能：验证禁用卸载时不创建 refs/ 和 offload/ 空目录（Bug5 回归测试）
 def test_disabled_offload_manager_creates_no_dirs(tmp_path: Path) -> None:
-    mgr = OffloadManager(tmp_path, enabled=False)
+    OffloadManager(tmp_path, enabled=False)
     assert not (tmp_path / "refs").exists()
     assert not (tmp_path / "offload").exists()
 
@@ -199,6 +198,19 @@ async def test_read_ref_tool_invoke(tmp_path: Path) -> None:
     result = await tool.invoke({"ref_path": record.ref_path})
     assert result.is_error is False
     assert original.strip() in result.content
+
+
+# 功能：验证 read_ref 工具分页返回超长外部结果，避免完整内容重新灌入上下文
+# 设计：卸载 10K 字符后限制读取 500 字符，断言返回游标且不含完整原文
+async def test_read_ref_tool_pages_large_result(tmp_path: Path) -> None:
+    mgr = OffloadManager(tmp_path)
+    record = mgr.offload("bash", "toolu_page", "x" * 10_000, "run-page")
+    result = await ReadRefTool(mgr).invoke(
+        {"ref_path": record.ref_path, "offset": 500, "limit": 500}
+    )
+    assert result.is_error is False
+    assert "next_offset=1000" in result.content
+    assert len(result.content) < 600
 
 
 # 功能：验证 ReadRefTool 对不存在文件返回错误
@@ -367,6 +379,14 @@ def test_empty_string_offload(tmp_path: Path) -> None:
 def test_force_tool_empty_output(tmp_path: Path) -> None:
     mgr = OffloadManager(tmp_path)
     assert mgr.should_offload("bash", "") is True
+
+
+# 功能：验证回读工具结果不会再次卸载，避免读取与卸载互相循环
+# 设计：即使返回内容超过阈值，也断言 memory_read/read_ref 均不触发卸载
+def test_readback_tools_are_never_reoffloaded(tmp_path: Path) -> None:
+    mgr = OffloadManager(tmp_path, force_tools=frozenset({"read_ref", "memory_read"}))
+    assert mgr.should_offload("read_ref", "x" * 10_000) is False
+    assert mgr.should_offload("memory_read", "x" * 10_000) is False
 
 
 # 功能：验证 offload 对 error 结果正确标记
