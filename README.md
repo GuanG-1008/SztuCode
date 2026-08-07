@@ -305,7 +305,7 @@ uv run python scripts/gen_protocol_doc.py --check
       </a><br />
       <sub>Contributor</sub>
     </td>
-        <td align="center">
+    <td align="center">
       <a href="https://github.com/Shuang-su">
         <img src="https://github.com/Shuang-su.png?size=100" width="80" alt="Shuang-su" /><br />
         <sub><b>Shuang-su</b></sub>

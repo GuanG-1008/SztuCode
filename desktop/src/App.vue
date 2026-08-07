@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, ArrowLeft, BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  AlertTriangle, Archive, ArrowLeft, BookOpen, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
   Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
-  Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Trash2, Wrench, X,
+  Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -34,6 +34,10 @@ const FULL_SIDEBAR_MIN_HEIGHT = 640;
 const SIDEBAR_MIN_WIDTH = 224;
 const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_COLLAPSE_PULL = 48;
+// 会话区保留的最小宽度，用于钳制右侧功能栏宽度，避免窗口变窄时被挤没
+const CONVERSATION_MIN_WIDTH = 320;
+// 窗口窄于该宽度时自动收起右侧功能栏
+const INSPECTOR_AUTO_COLLAPSE_WIDTH = 1000;
 const page = ref<Page>("work");
 const chatView = ref<ChatView>("home");
 // 正式界面暂时隐藏入口；视觉测试可用开发态查询参数覆盖，避免整套 ChatPortal 回归被跳过。
@@ -78,6 +82,12 @@ const taskSearchInput = ref<HTMLInputElement | null>(null);
 const inspectorOpen = ref(true);
 const inspectorRendered = ref(true);
 const inspectorWidth = ref(Math.min(720, Math.max(340, Number(localStorage.getItem("sztu.inspectorWidth")) || 390)));
+// 响应式窗口宽度 + 窄窗自动收起右侧功能栏的追踪标志
+const windowWidth = ref(window.innerWidth);
+let inspectorAutoCollapsed = false;
+// 「查看项目文件」请求：通知右侧功能栏切到文件标签页并浏览指定项目
+const filesRequest = ref<{ workspaceId: string; seq: number } | null>(null);
+let filesRequestSeq = 0;
 let inspectorCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let inspectorOpenFrame: number | undefined;
 const attachedFiles = ref<string[]>([]);
@@ -142,10 +152,15 @@ function formatSessionUsage(item: Session): string {
   const durationText = seconds < 60 ? `${Math.round(seconds)}秒` : `${Math.floor(seconds / 60)}分${Math.round(seconds % 60)}秒`;
   return item.status === "active" && !tokens ? "计时中" : `${durationText} · ${tokenText}`;
 }
-// 工作区布局：保留三列结构，让分隔线和面板宽度在收起时连续归零
+// 工作区布局：仅传 CSS 变量，grid 列由样式表定义，
+// 这样媒体查询能按窗口宽度覆盖列结构（内联 grid-template-columns 会锁死响应式，窗口变窄不重排）。
+// 同时按当前窗口宽度钳制 inspector 宽度，保证会话区始终有 CONVERSATION_MIN_WIDTH 可用。
 const workLayoutStyle = computed(() => {
-  if (!inspectorOpen.value || !activeWorkspace.value) return { gridTemplateColumns: "minmax(0, 1fr) 0px 0px" };
-  return { gridTemplateColumns: `minmax(0, 1fr) 6px ${inspectorWidth.value}px` };
+  if (!inspectorOpen.value || !activeWorkspace.value) return { "--inspector-width": "0px" };
+  const sidebarW = sidebarCollapsed.value ? 0 : sidebarWidth.value;
+  const available = windowWidth.value - sidebarW - 6 - CONVERSATION_MIN_WIDTH;
+  const clamped = Math.min(inspectorWidth.value, Math.max(280, available));
+  return { "--inspector-width": `${clamped}px` };
 });
 
 async function toggleTaskSearch() {
@@ -620,11 +635,23 @@ async function createProjectTask(item: Workspace) {
 }
 async function showProjectFiles(item: Workspace) {
   projectActionsOpen.value = null;
-  setInspectorOpen(true);
+  // 跳转到右侧功能栏的「文件」标签页并浏览该项目（seq 递增保证重复点击也能触发）
+  filesRequest.value = { workspaceId: item.workspace_id, seq: ++filesRequestSeq };
   workspace.value = item;
+  setInspectorOpen(true);
   const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id);
-  if (matching) await chooseTask(matching.session_id);
-  else beginTask(item);
+  if (matching) {
+    await chooseTask(matching.session_id);
+  } else if (!activeId.value) {
+    // 无活动会话：为该工作区建一个会话，保证会话区 UI 不空白、可恢复
+    const sessionId = await createSession(item);
+    activeId.value = sessionId;
+    currentStepByRun.clear();
+    runStepBase.clear();
+    timeline.value = new Map();
+    page.value = "work";
+    await refreshIndex(false);
+  }
 }
 async function deleteProject(item: Workspace) {
   projectActionsOpen.value = null;
@@ -931,6 +958,17 @@ function resizeSidebarWithKeyboard(event: KeyboardEvent) {
   localStorage.setItem("sztu.sidebarWidth", String(sidebarWidth.value));
 }
 function handleWindowResize() {
+  windowWidth.value = window.innerWidth;
+  // 窄窗口自动收起右侧功能栏，避免会话区被挤没
+  if (window.innerWidth < INSPECTOR_AUTO_COLLAPSE_WIDTH) {
+    if (inspectorOpen.value) {
+      setInspectorOpen(false);
+      inspectorAutoCollapsed = true;
+    }
+  } else if (inspectorAutoCollapsed) {
+    inspectorAutoCollapsed = false;
+    setInspectorOpen(true);
+  }
   const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
   if (belowFullSidebarSize) {
     if (!sidebarCollapsed.value) {
@@ -962,6 +1000,7 @@ let stopDisconnect: (() => void) | undefined;
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("resize", handleWindowResize);
+  handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
   void loadNativeSettings();
@@ -1159,9 +1198,9 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
                 </div>
               </div>
-              <div class="task-conversation">
+              <div class="task-conversation" :class="{ 'task-conversation--empty': !orderedTimeline.length }">
                 <div class="task-stream">
-                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="agent-orb"><Bot :size="20" /></span><div><b>从一个明确目标开始</b><p>SztuCode 会在当前项目中完成工作，并把验证结果、文件变更和可回滚记录留在这里。</p></div></div>
+                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>要在「{{ activeWorkspace?.name || '当前项目' }}」里构建什么？</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
                 <form class="kimi-composer" @submit.prevent="submit">
@@ -1176,12 +1215,13 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
               <div class="layout-divider" role="separator" aria-orientation="vertical" title="拖拽调整面板宽度" @mousedown="startDividerDrag" />
               <ProjectInspector
                 :workspace-id="activeWorkspace.workspace_id"
-                :run-id="active.latest_run_id"
+                :run-id="active?.latest_run_id"
                 :steps="orderedTimeline"
                 :attachments="attachedFiles"
                 :workspace-name="activeWorkspace.name"
                 :workspace-path="activeWorkspace.path"
                 :obscured="modelManagerOpen || permissionConfirmOpen"
+                :files-request="filesRequest"
                 @close="setInspectorOpen(false)"
               />
             </template>
