@@ -928,12 +928,15 @@ async function onMacTitlebandDblClick(event: MouseEvent) {
     console.error("toggleMaximizeWindow failed", error);
   }
 }
-function toggleSidebar() {
+function animateSidebarCollapsed(next: boolean) {
   sidebarAnimating.value = true;
-  sidebarCollapsed.value = !sidebarCollapsed.value;
-  sidebarAutoCollapsed = false;
+  sidebarCollapsed.value = next;
   window.clearTimeout(sidebarAnimTimer);
   sidebarAnimTimer = window.setTimeout(() => { sidebarAnimating.value = false; }, 220);
+}
+function toggleSidebar() {
+  animateSidebarCollapsed(!sidebarCollapsed.value);
+  sidebarAutoCollapsed = false;
 }
 // 拖动边界调整导航宽度，越过最小宽度后的折叠阈值才收起导航
 function startSidebarDrag(event: PointerEvent) {
@@ -989,13 +992,13 @@ function applySidebarAutoCollapse() {
   const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
   if (belowFullSidebarSize) {
     if (!sidebarCollapsed.value) {
-      sidebarCollapsed.value = true;
+      animateSidebarCollapsed(true);
       sidebarAutoCollapsed = true;
     }
     return;
   }
   if (sidebarAutoCollapsed) {
-    sidebarCollapsed.value = false;
+    animateSidebarCollapsed(false);
     sidebarAutoCollapsed = false;
   }
 }
