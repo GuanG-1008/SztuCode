@@ -47,6 +47,10 @@ class ExecutionContext:
     # 本 run 派生的后台 subagent run_id 集合，结束回合前等待其全部落定
     pending_background_run_ids: set[str] = field(default_factory=set)
     compacted: bool = False
+    # 滑动窗口压缩计数（增量摘要上下文）
+    compaction_count: int = 0
+    # 连续压缩失败计数（熔断器）
+    compaction_failure_count: int = 0
     # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，作为增量状态追加到消息尾部
     canvas: TaskCanvas | None = None
     # ---- agent run 预算 ----
