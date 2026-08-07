@@ -511,6 +511,9 @@
 .kimi-shell.is-macos .kimi-main {
   border-radius: 8px;
 }
+.kimi-shell.is-macos.window-resizing .kimi-main {
+  box-shadow: none;
+}
 .kimi-shell.is-macos .kimi-main.chat-main {
   border-radius: 8px;
 }

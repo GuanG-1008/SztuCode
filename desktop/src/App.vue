@@ -48,8 +48,10 @@ const sidebarResizing = ref(false);
 const sidebarAnimating = ref(false);
 const sidebarCollapseArmed = ref(false);
 const sidebarPull = ref(0);
+const windowResizing = ref(false);
 let stopSidebarDragListeners: (() => void) | undefined;
 let sidebarAnimTimer: number | undefined;
+let windowResizeEndTimer: number | undefined;
 const connected = ref(false);
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
@@ -927,9 +929,9 @@ async function onMacTitlebandDblClick(event: MouseEvent) {
   }
 }
 function toggleSidebar() {
+  sidebarAnimating.value = true;
   sidebarCollapsed.value = !sidebarCollapsed.value;
   sidebarAutoCollapsed = false;
-  sidebarAnimating.value = true;
   window.clearTimeout(sidebarAnimTimer);
   sidebarAnimTimer = window.setTimeout(() => { sidebarAnimating.value = false; }, 220);
 }
@@ -983,7 +985,7 @@ function resizeSidebarWithKeyboard(event: KeyboardEvent) {
   sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth));
   localStorage.setItem("sztu.sidebarWidth", String(sidebarWidth.value));
 }
-function handleWindowResize() {
+function applySidebarAutoCollapse() {
   const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
   if (belowFullSidebarSize) {
     if (!sidebarCollapsed.value) {
@@ -996,6 +998,14 @@ function handleWindowResize() {
     sidebarCollapsed.value = false;
     sidebarAutoCollapsed = false;
   }
+}
+function handleWindowResize() {
+  windowResizing.value = true;
+  window.clearTimeout(windowResizeEndTimer);
+  windowResizeEndTimer = window.setTimeout(() => {
+    windowResizing.value = false;
+    applySidebarAutoCollapse();
+  }, 120);
 }
 function handleGlobalShortcut(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
@@ -1024,6 +1034,7 @@ onBeforeUnmount(() => {
   stopSidebarDragListeners?.();
   stopMacTitlebandDragArm?.();
   window.clearTimeout(sidebarAnimTimer);
+  window.clearTimeout(windowResizeEndTimer);
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
@@ -1041,7 +1052,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 <template>
   <div
     class="kimi-shell"
-    :class="{ 'is-macos': isMacOS, 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-animating': sidebarAnimating, 'sidebar-collapse-armed': sidebarCollapseArmed }"
+    :class="{ 'is-macos': isMacOS, 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-animating': sidebarAnimating, 'sidebar-collapse-armed': sidebarCollapseArmed, 'window-resizing': windowResizing }"
     :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
   >
     <!-- macOS: fixed toolbar — toggle never moves between titlebar / sidebar. -->

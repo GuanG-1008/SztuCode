@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use objc2_app_kit::{NSScreen, NSWindow};
+use objc2_app_kit::{NSScreen, NSView, NSWindow};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use tauri::WebviewWindow;
 
@@ -95,6 +95,42 @@ pub fn disable_live_resize_preserve(window: &WebviewWindow) -> Result<(), String
             }
         })
         .map_err(|e| e.to_string())
+}
+
+/// 将 contentView 与一层子视图 frame 对齐到 content bounds 并标记重绘。
+fn sync_ns_window_content(ns_window: &NSWindow) {
+    let Some(content) = ns_window.contentView() else {
+        return;
+    };
+    let bounds = content.bounds();
+    content.setNeedsDisplay(true);
+    for sub in content.subviews().iter() {
+        let sub_ref: &NSView = &*sub;
+        let current = sub_ref.frame();
+        if (current.origin.x - bounds.origin.x).abs() > 0.5
+            || (current.origin.y - bounds.origin.y).abs() > 0.5
+            || (current.size.width - bounds.size.width).abs() > 0.5
+            || (current.size.height - bounds.size.height).abs() > 0.5
+        {
+            sub_ref.setFrame(bounds);
+        }
+        sub_ref.setNeedsDisplay(true);
+    }
+}
+
+/// 在窗口 Resized 时强制 webview 跟 contentView 对齐（须在主线程调用）。
+pub fn sync_webview_to_content_view(window: &WebviewWindow) {
+    let Ok(ptr) = window.ns_window() else {
+        return;
+    };
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: ptr 来自 Tauri 主窗口的 ns_window，主线程上有效
+    unsafe {
+        let ns_window = &*(ptr as *const NSWindow);
+        sync_ns_window_content(ns_window);
+    }
 }
 
 /// 在主线程上解析 toggle 的起止 frame；若无需动画返回 None。

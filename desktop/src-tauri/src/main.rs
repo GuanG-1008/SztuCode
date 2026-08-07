@@ -623,6 +623,12 @@ fn main() {
                 let _ = apply_vibrancy(&window, NSVisualEffectMaterial::Sidebar, None, None);
                 // 拖边缘改大小时逐帧重绘，避免 WKWebView 旧帧缩放造成 8px 边距跳变
                 let _ = macos_work_area::disable_live_resize_preserve(&window);
+                let window_for_resize = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Resized(_) = event {
+                        macos_work_area::sync_webview_to_content_view(&window_for_resize);
+                    }
+                });
             }
             window.set_focus().expect("focus main window");
             Ok(())
