@@ -39,6 +39,7 @@ def create_provider(config: SztuConfig) -> LLMProvider:
         return OpenAIProvider(
             config.llm.default_model,
             context_window=config.llm.context_window,
+            cache_control=config.llm.cache_control,
         )
     _apply_endpoint_env("ANTHROPIC_", config.llm)
     return AnthropicProvider(

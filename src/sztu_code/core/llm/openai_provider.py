@@ -72,13 +72,17 @@ def _anth_to_openai_messages(
     system: str | None = None,
     *,
     text_tool_history: bool = False,
+    cache_control: bool = False,
 ) -> list[dict[str, object]]:
     openai_msgs: list[dict[str, object]] = []
     tool_names: dict[str, str] = {}
 
-    # system prompt 作为第一条消息
+    # system prompt 作为第一条消息；启用时打 cache 断点标记稳定前缀
     effective_system = system or _SYSTEM_PROMPT
-    openai_msgs.append({"role": "system", "content": effective_system})
+    system_msg: dict[str, object] = {"role": "system", "content": effective_system}
+    if cache_control:
+        system_msg["cache_control"] = {"type": "ephemeral"}
+    openai_msgs.append(system_msg)
 
     for msg in messages:
         role = msg.get("role", "")
@@ -167,6 +171,8 @@ def _anth_to_openai_messages(
 # 将 Anthropic 格式的 tool_schemas 转换为 OpenAI tools 格式
 def _anth_to_openai_tools(
     tool_schemas: list[dict[str, object]],
+    *,
+    cache_control: bool = False,
 ) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = []
     for ts in tool_schemas:
@@ -180,6 +186,11 @@ def _anth_to_openai_tools(
                 },
             }
         )
+    # 在最后一个 tool 上打 cache 断点，使工具定义作为稳定前缀被缓存
+    if cache_control and tools:
+        last = dict(tools[-1])
+        last["cache_control"] = {"type": "ephemeral"}
+        tools = tools[:-1] + [last]
     return tools
 
 
@@ -214,7 +225,14 @@ def _keyless_http_client() -> httpx.AsyncClient:
 
 class OpenAIProvider:
     # 初始化 OpenAI 客户端；client 可在测试时注入以跳过 API key 检查
-    def __init__(self, model: str, client: Any = None, *, context_window: int = 0) -> None:
+    def __init__(
+        self,
+        model: str,
+        client: Any = None,
+        *,
+        context_window: int = 0,
+        cache_control: bool = True,
+    ) -> None:
         base_url = os.environ.get("OPENAI_BASE_URL")
         is_campus_deepseek = bool(
             model == "deepseek-v4-pro"
@@ -239,6 +257,7 @@ class OpenAIProvider:
         self._model = model
         self._text_tool_history = is_campus_deepseek
         self._context_window_override = context_window
+        self._cache_control = cache_control
 
     # 流式调用 OpenAI 兼容 API，逐 token 发布事件并返回 LlmResponse；网络中断时自动重试
     async def chat(
@@ -259,8 +278,12 @@ class OpenAIProvider:
             messages,
             system=system,
             text_tool_history=self._text_tool_history,
+            cache_control=self._cache_control,
         )
-        tools = _anth_to_openai_tools(tool_schemas) if tool_schemas else None
+        tools = (
+            _anth_to_openai_tools(tool_schemas, cache_control=self._cache_control)
+            if tool_schemas else None
+        )
 
         text_parts: list[str] = []
         thinking_parts: list[str] = []
