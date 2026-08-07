@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import {
-  Activity, CheckCircle2, ChevronDown, CircleAlert, FileDiff, Play,
-} from "@lucide/vue";
+import { CheckCircle2, ChevronDown, CircleAlert, FileDiff, Play } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
 import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
 import ThinkingPanel from "./ThinkingPanel.vue";
 import TokenStream from "./TokenStream.vue";
-import ToolCallGroup from "./ToolCallGroup.vue";
+import ToolCallCard from "./ToolCallCard.vue";
 import PermissionBadge from "./PermissionBadge.vue";
-import type { PermissionDecision, PermissionState, PlanItem, RunStats, TimelineStep, ToolCallEntry } from "./types";
+import type { PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
 
 const props = defineProps<{ steps: TimelineStep[]; workspaceId?: string }>();
 defineEmits<{
@@ -33,9 +31,12 @@ type TurnView = {
   hasActivity: boolean;
   pending?: PermissionState;
   text: string;
+  summaryText: string;
   thinkingText: string;
   allToolCalls: ToolCallEntry[];
   aggregatedStep: TimelineStep;
+  steps: TimelineStep[];
+  events: Array<TimelineEvent & { tool?: ToolCallEntry }>;
   state: TurnState;
   stateLabel: string;
   failureReason?: string;
@@ -46,6 +47,7 @@ type TurnView = {
 };
 
 const now = ref(Date.now());
+const expandedTurns = ref(new Set<string | number>());
 let clockTimer: number | undefined;
 onMounted(() => { clockTimer = window.setInterval(() => { now.value = Date.now(); }, 1000); });
 onBeforeUnmount(() => window.clearInterval(clockTimer));
@@ -146,6 +148,44 @@ function liveStatsLabel(turn: TurnView): string {
   return `${formatDuration(elapsed)} · ${formatTokens(totalTokens)} tokens`;
 }
 
+function elapsedLabel(turn: TurnView): string {
+  const startedAt = turn.runStartedAt ? new Date(turn.runStartedAt).getTime() : Number.NaN;
+  const elapsed = turn.state === "running" || turn.state === "waiting"
+    ? (Number.isNaN(startedAt) ? turn.runStats?.elapsedSeconds ?? 0 : Math.max(0, (now.value - startedAt) / 1000))
+    : turn.runStats?.elapsedSeconds ?? 0;
+  return `耗时 ${formatDuration(elapsed)}`;
+}
+
+function isTurnExpanded(turn: TurnView): boolean {
+  return expandedTurns.value.has(turn.key) || turn.state === "running" || turn.state === "waiting";
+}
+
+function toggleTurn(turn: TurnView) {
+  const next = new Set(expandedTurns.value);
+  if (next.has(turn.key)) next.delete(turn.key);
+  else next.add(turn.key);
+  expandedTurns.value = next;
+}
+
+function stepText(step: TimelineStep): string {
+  return step.finalText || step.tokens.join("");
+}
+
+function stepHasDetails(step: TimelineStep): boolean {
+  return Boolean(
+    stepText(step) || step.thinking || step.toolCalls.length || step.plan?.length ||
+    step.tests?.length || step.changes?.length || step.logs?.length ||
+    step.subagents?.length || step.skills?.length || step.workflowTasks?.length ||
+    step.workflowHandoffs?.length || step.workflowReviews?.length,
+  );
+}
+
+function orderedEvents(steps: TimelineStep[]): Array<TimelineEvent & { tool?: ToolCallEntry }> {
+  const calls = new Map(toolCallsOf(steps).map((call) => [call.id, call]));
+  const events = steps.flatMap((step) => step.events ?? []);
+  return events.map((event) => ({ ...event, tool: event.toolCallId ? calls.get(event.toolCallId) : undefined }));
+}
+
 function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, calls: ToolCallEntry[], text: string) {
   if (pending) return { state: "waiting" as const, label: "等待你的授权" };
   const interruptedOutcome = [...steps].reverse().find((step) => step.outcome?.status === "interrupted")?.outcome;
@@ -184,9 +224,11 @@ const turns = computed<TurnView[]>(() => {
     const runStats = [...steps].reverse().find((step) => step.runStats)?.runStats;
     const runStartedAt = steps.find((step) => step.runStartedAt)?.runStartedAt ?? group.userMessageTime;
     const text = steps.map((step) => step.finalText || step.tokens.join("")).filter(Boolean).join("\n\n");
+    const summaryText = [...steps].reverse().map(stepText).find(Boolean) ?? "";
     const allToolCalls = toolCallsOf(steps);
     const thinkingText = thinkingTextOf(steps);
     const aggregatedStep = aggregateStep(steps);
+    const events = orderedEvents(steps);
     const pending = steps.find((step) => step.permission?.status === "pending")?.permission;
     const status = stateOf(steps, pending, allToolCalls, text);
     const tests = aggregatedStep.tests ?? [];
@@ -210,9 +252,12 @@ const turns = computed<TurnView[]>(() => {
       hasActivity,
       pending,
       text,
+      summaryText,
       thinkingText,
       allToolCalls,
       aggregatedStep,
+      steps,
+      events,
       state: status.state,
       stateLabel: status.label,
       failureReason: status.reason,
@@ -235,19 +280,41 @@ const turns = computed<TurnView[]>(() => {
       </div>
       <div v-if="turn.hasContent" class="timeline-assistant">
         <div class="timeline-step__content">
-          <div class="turn-status" :class="turn.state">
+          <button
+            v-if="turn.hasActivity || turn.runStats"
+            type="button"
+            class="turn-history-toggle"
+            :class="{ expanded: isTurnExpanded(turn) }"
+            :aria-expanded="isTurnExpanded(turn)"
+            @click="toggleTurn(turn)"
+          >
+            <span>{{ elapsedLabel(turn) }}</span>
+            <ChevronDown :size="15" />
+          </button>
+
+          <div v-if="turn.state === 'running' || turn.state === 'waiting'" class="turn-status" :class="turn.state">
             <b>{{ turn.stateLabel }}</b>
-            <span v-if="turn.runStartedAt || turn.runStats" class="turn-status__usage">（{{ liveStatsLabel(turn) }}）</span>
-            <span v-if="turn.state === 'running' && turn.planTotal">{{ turn.completedPlan }}/{{ turn.planTotal }} 项</span>
           </div>
 
           <PermissionBadge v-if="turn.pending" :permission="turn.pending" @decide="$emit('decide', turn.pending?.toolUseId ?? '', $event)" />
 
-          <section v-if="turn.text" class="turn-result" aria-label="任务结果">
-            <TokenStream :tokens="[]" :final-text="turn.text" />
+          <section v-if="isTurnExpanded(turn)" class="turn-history" aria-label="历史输出与调用">
+            <template v-for="event in turn.events" :key="event.id">
+              <div v-if="event.kind === 'text' && event.text && event.text !== turn.summaryText" class="turn-history-text"><TokenStream :tokens="[]" :final-text="event.text" /></div>
+              <ThinkingPanel v-else-if="event.kind === 'thinking' && event.text" :text="event.text" :completed="turn.state !== 'running'" />
+              <div v-else-if="event.kind === 'tool' && event.tool" class="turn-history-actions"><ToolCallCard :call="event.tool" /></div>
+            </template>
           </section>
 
-          <div v-if="turn.runStats" class="turn-usage" aria-label="本轮耗时和 Token 消耗">
+          <section v-if="turn.summaryText" class="turn-result" aria-label="任务结果">
+            <TokenStream :tokens="[]" :final-text="turn.summaryText" />
+          </section>
+
+          <div v-if="turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
+            <b>{{ turn.stateLabel }}</b>
+          </div>
+
+          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮耗时和 Token 消耗">
             <span>{{ formatDuration(turn.runStats.elapsedSeconds) }}</span>
             <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
             <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
@@ -269,20 +336,6 @@ const turns = computed<TurnView[]>(() => {
             @reverted="$emit('reverted', $event)"
             @review="$emit('review', $event)"
           />
-
-          <details v-if="turn.hasActivity" class="work-record">
-            <summary>
-              <Activity :size="15" />
-              <span>工作记录</span>
-              <small>{{ turn.allToolCalls.length }} 项操作</small>
-              <ChevronDown :size="14" />
-            </summary>
-            <div class="work-record__body">
-              <ToolCallGroup v-if="turn.allToolCalls.length" :calls="turn.allToolCalls" />
-              <ActivityDetails :step="turn.aggregatedStep" :hide-evidence="true" />
-              <ThinkingPanel v-if="turn.thinkingText" :text="turn.thinkingText" :completed="turn.state !== 'running'" />
-            </div>
-          </details>
 
           <button v-if="turn.state === 'interrupted'" class="continue-button" type="button" @click="$emit('continue', turn.runId)">
             <Play :size="14" />继续执行

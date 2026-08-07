@@ -17,7 +17,7 @@ import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
-import type { PermissionDecision, PermissionState, PlanItem, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
+import type { PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
 import {
   applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
@@ -156,7 +156,7 @@ const permissionModeLabel = computed(() => ({
   accept_edits: "允许编辑",
   auto: "全部允许",
 }[runtimeSettings.value?.permission_mode ?? "normal"]));
-const taskStatusLabel = (item: Session) => item.status === "active" ? "运行中" : item.status === "waiting_for_input" ? "等待输入" : "已完成";
+const taskStatusLabel = (item: Session) => item.status === "active" ? "等待输入" : item.status === "waiting_for_input" ? "已完成" : "已完成";
 function formatSessionUsage(item: Session): string {
   const tokens = Number(item.total_input_tokens ?? 0) + Number(item.total_output_tokens ?? 0);
   const seconds = Number(item.total_elapsed_s ?? 0);
@@ -258,12 +258,23 @@ function blockText(block: HistoryBlock): string {
   if (typeof block.content === "string") return block.content;
   return "";
 }
+function isInternalProgressMessage(blocks: HistoryBlock[]): boolean {
+  const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
+  return /^\[Task progress\]\s+step_\d+/i.test(text);
+}
 function blockOutput(block: HistoryBlock): string {
   if (typeof block.content === "string") return block.content;
   if (Array.isArray(block.content)) return block.content.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
   return block.content ? JSON.stringify(block.content) : "";
 }
 function emptyStep(step: number): TimelineStep { return { step, status: "thinking", tokens: [], toolCalls: [] }; }
+function appendTimelineEvent(step: TimelineStep, event: TimelineEvent): TimelineStep {
+  const events = [...(step.events ?? [])];
+  const existing = events.findIndex((item) => item.id === event.id);
+  if (existing >= 0) events[existing] = { ...events[existing], ...event };
+  else events.push(event);
+  return { ...step, events };
+}
 function setStep(step: number, updater: (current: TimelineStep) => TimelineStep) {
   const next = new Map(timeline.value);
   next.set(step, updater(next.get(step) ?? emptyStep(step)));
@@ -291,6 +302,9 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     const role = entryRole(message);
     const messageRunId = String((message as { run_id?: unknown })?.run_id ?? "") || undefined;
     const blocks = historyBlocks(message);
+    // Canvas progress summaries are persisted as user messages for the model's
+    // context, but they are internal bookkeeping and must not become chat turns.
+    if (isInternalProgressMessage(blocks)) continue;
     const text = blocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
     const toolResults = blocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {
@@ -300,7 +314,8 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
         const result = toolResults.find((item) => String(item.tool_use_id) === call.id);
         return result ? { ...call, status: result.is_error ? "failed" as const : "done" as const, output: blockOutput(result), error: result.is_error ? blockOutput(result) : undefined } : call;
       });
-      next.set(step, { ...current, status: "done", runId: messageRunId ?? current.runId, toolCalls: completed });
+      const eventUpdates = completed.filter((call) => toolResults.some((item) => String(item.tool_use_id) === call.id)).reduce((events, call) => events.map((event) => event.toolCallId === call.id ? event : event), current.events ?? []);
+      next.set(step, { ...current, status: "done", runId: messageRunId ?? current.runId, toolCalls: completed, events: eventUpdates });
       continue;
     }
     if (role === "user") {
@@ -328,6 +343,12 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       params: isRecord(block.input) ? block.input : isRecord(block.params) ? block.params : {},
       status: "done",
     }));
+    const events: TimelineEvent[] = blocks.flatMap((block, index) => {
+      if (String(block.type) === "text" && blockText(block)) return [{ id: `text-${step}-${index}`, kind: "text", text: blockText(block) }];
+      if (String(block.type) === "thinking" && typeof block.thinking === "string" && block.thinking) return [{ id: `thinking-${step}-${index}`, kind: "thinking", text: block.thinking }];
+      if (String(block.type) === "tool_use") return [{ id: `tool-${String(block.id ?? block.tool_use_id ?? index)}`, kind: "tool", toolCallId: String(block.id ?? block.tool_use_id ?? index) }];
+      return [];
+    });
     next.set(step, {
       ...current,
       status: "done",
@@ -340,6 +361,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       thinking: [current.thinking, thinking].filter(Boolean).join("\n\n") || undefined,
       finalText: [current.finalText, text].filter(Boolean).join("\n\n") || undefined,
       toolCalls: [...current.toolCalls, ...calls],
+      events: [...(current.events ?? []), ...events],
     });
   }
   timeline.value = next;
@@ -393,12 +415,26 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   }
   if (type === "llm.token") {
     const step = stepFor(timelineEvent);
-    setStep(step, (current) => ({ ...current, status: "thinking", tokens: [...current.tokens, String(event.token ?? "")] }));
+    setStep(step, (current) => {
+      const token = String(event.token ?? "");
+      const events = [...(current.events ?? [])];
+      const last = events[events.length - 1];
+      if (last?.kind === "text") last.text = `${last.text ?? ""}${token}`;
+      else events.push({ id: `text-live-${runId}-${Date.now()}`, kind: "text", text: token });
+      return { ...current, status: "thinking", tokens: [...current.tokens, token], events };
+    });
     return;
   }
   if (type === "llm.thinking") {
     const step = stepFor(timelineEvent);
-    setStep(step, (current) => ({ ...current, thinking: `${current.thinking ?? ""}${String(event.thinking ?? "")}` }));
+    setStep(step, (current) => {
+      const thinking = String(event.thinking ?? "");
+      const events = [...(current.events ?? [])];
+      const last = events[events.length - 1];
+      if (last?.kind === "thinking") last.text = `${last.text ?? ""}${thinking}`;
+      else events.push({ id: `thinking-live-${runId}-${Date.now()}`, kind: "thinking", text: thinking });
+      return { ...current, thinking: `${current.thinking ?? ""}${thinking}`, events };
+    });
     return;
   }
   if (type === "llm.usage") {
@@ -419,7 +455,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   if (type === "tool.call_started") {
     const step = stepFor(timelineEvent);
     const call: ToolCallEntry = { id: String(event.tool_use_id), name: String(event.tool_name), params: (event.params as Record<string, unknown>) ?? {}, status: "running" };
-    setStep(step, (current) => ({ ...current, status: "acting", toolCalls: [...current.toolCalls.filter((item) => item.id !== call.id), call] }));
+    setStep(step, (current) => appendTimelineEvent({ ...current, status: "acting", toolCalls: [...current.toolCalls.filter((item) => item.id !== call.id), call] }, { id: `tool-${call.id}`, kind: "tool", toolCallId: call.id }));
     return;
   }
   if (type === "tool.call_finished" || type === "tool.call_failed") {
@@ -1195,7 +1231,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="!normalizedTaskQuery && (attentionTasks.length || runningTasks.length)" class="side-section task-focus">
           <span class="side-label">任务</span>
           <div v-if="attentionTasks.length" class="task-state-group attention">
-            <div class="task-state-heading"><span><ShieldCheck :size="14" />等待输入</span><b>{{ attentionTasks.length }}</b></div>
+            <div class="task-state-heading"><span><ShieldCheck :size="14" />已完成</span><b>{{ attentionTasks.length }}</b></div>
             <div v-for="task in attentionTasks" :key="`attention-${task.session_id}`" class="sidebar-session status-session">
               <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
                 <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
@@ -1204,7 +1240,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             </div>
           </div>
           <div v-if="runningTasks.length" class="task-state-group running">
-            <div class="task-state-heading"><span><RotateCcw :size="14" />运行中</span><b>{{ runningTasks.length }}</b></div>
+            <div class="task-state-heading"><span><RotateCcw :size="14" />等待输入</span><b>{{ runningTasks.length }}</b></div>
             <div v-for="task in runningTasks" :key="`running-${task.session_id}`" class="sidebar-session status-session">
               <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
                 <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>

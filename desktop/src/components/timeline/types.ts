@@ -12,6 +12,13 @@ export type ToolCallEntry = {
   elapsedMs?: number;
 };
 
+export type TimelineEvent = {
+  id: string;
+  kind: "text" | "thinking" | "tool";
+  text?: string;
+  toolCallId?: string;
+};
+
 export type PermissionDecision = "allow_once" | "always_allow" | "deny_once" | "always_deny";
 
 export type PermissionState = {
@@ -85,6 +92,7 @@ export interface TimelineStep {
   thinking?: string;
   tokens: string[];
   toolCalls: ToolCallEntry[];
+  events?: TimelineEvent[];
   permission?: PermissionState;
   usage?: LlmUsage;
   userMessage?: string;
