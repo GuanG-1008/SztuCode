@@ -305,6 +305,29 @@ uv run python scripts/gen_protocol_doc.py --check
       </a><br />
       <sub>Contributor</sub>
     </td>
+        <td align="center">
+      <a href="https://github.com/Shuang-su">
+        <img src="https://github.com/Shuang-su.png?size=100" width="80" alt="Shuang-su" /><br />
+        <sub><b>Shuang-su</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/crazy19-69">
+        <img src="https://github.com/crazy19-69.png?size=100" width="80" alt="crazy19-69" /><br />
+        <sub><b>crazy19-69</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/electrojay27">
+        <img src="https://github.com/electrojay27.png?size=100" width="80" alt="electrojay27" /><br />
+        <sub><b>electrojay27</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
   </tr>
 </table>
 
