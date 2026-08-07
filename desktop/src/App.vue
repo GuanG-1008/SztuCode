@@ -1007,7 +1007,8 @@ function handleWindowResize() {
   window.clearTimeout(windowResizeEndTimer);
   windowResizeEndTimer = window.setTimeout(() => {
     windowResizing.value = false;
-    applySidebarAutoCollapse();
+    // 先卸掉 window-resizing（transition:none），再播侧栏列宽动画
+    void nextTick(() => { applySidebarAutoCollapse(); });
   }, 120);
 }
 function handleGlobalShortcut(event: KeyboardEvent) {
