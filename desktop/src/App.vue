@@ -595,9 +595,29 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     setStep(step, (current) => ({
       ...current,
       runId: relatedRunId,
-      usage: { inputTokens, outputTokens, contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? "") },
+      usage: {
+        inputTokens, outputTokens, contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? ""),
+        contextWindow: Number(event.context_window ?? 0), availableTokens: Number(event.available_tokens ?? 0),
+        reservedOutputTokens: Number(event.reserved_output_tokens ?? 0), systemTokens: Number(event.system_tokens ?? 0),
+        summaryTokens: Number(event.summary_tokens ?? 0), conversationTokens: Number(event.conversation_tokens ?? 0),
+        toolTokens: Number(event.tool_tokens ?? 0),
+      },
       runStats: { ...cumulative, elapsedSeconds: 0 },
     }));
+    return;
+  }
+  if (type === "context.compacting" || type === "context.compacted") {
+    const step = stepFor(timelineEvent);
+    setStep(step, (current) => current.usage ? ({
+      ...current,
+      usage: {
+        ...current.usage,
+        compacting: type === "context.compacting",
+        compactedTokens: type === "context.compacted"
+          ? Math.max(0, Number(event.original_tokens ?? 0) - Number(event.summary_tokens ?? 0))
+          : current.usage.compactedTokens,
+      },
+    }) : current);
     return;
   }
   if (type === "tool.call_started") {
@@ -1635,13 +1655,13 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <header class="launcher-heading">
               <span class="launcher-mark" aria-hidden="true"><BookOpen :size="42" :stroke-width="1.8" /></span>
               <div class="launcher-heading__copy">
-                <h1 aria-label="Work with SztuCode"><span aria-hidden="true">Work with SztuCode</span></h1>
+                <h1 aria-label="心念为引，一言功毕"><span aria-hidden="true">心念为引，一言功毕</span></h1>
               </div>
             </header>
 
             <form class="kimi-composer landing-composer" @submit.prevent="submit()">
               <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
-              <textarea ref="launcherPrompt" v-model="prompt" placeholder="描述你要完成的开发任务，输入 / 调用技能" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
+              <textarea ref="launcherPrompt" v-model="prompt" placeholder="汝之所想，皆以言成" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
               <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
               <div class="composer-toolbar launcher-toolbar">
                 <button type="button" class="round" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>

@@ -27,14 +27,16 @@ const diffError = ref("");
 
 // 拉取该 run 的改动明细与增减行统计（runId 变化时自动刷新并收起）
 async function load() {
-  if (!props.workspaceId || !props.runId || !props.paths.length) {
+  if (!props.workspaceId || !props.runId) {
     changes.value = [];
     return;
   }
   loading.value = true;
   try {
     const all = await listChanges(props.workspaceId, props.runId);
-    changes.value = all.filter((change) => props.paths.includes(change.path));
+    changes.value = props.paths.length
+      ? all.filter((change) => props.paths.includes(change.path))
+      : all;
   } catch {
     changes.value = [];
   } finally {
@@ -56,6 +58,7 @@ watch(
 
 const totalAdd = computed(() => changes.value.reduce((sum, change) => sum + (change.additions ?? 0), 0));
 const totalDel = computed(() => changes.value.reduce((sum, change) => sum + (change.deletions ?? 0), 0));
+const resolvedPaths = computed(() => changes.value.map((change) => change.path));
 
 // 展开/收起抽屉，首次展开时默认选中第一个文件
 async function toggleOpen() {
@@ -95,11 +98,11 @@ const diffLines = computed(() =>
 
 // 一键回滚该 run 的全部文件改动并通知上层刷新
 async function revertAll() {
-  if (reverting.value || !props.workspaceId || !props.runId || !changes.value.length) return;
+  if (reverting.value || !props.workspaceId || !props.runId || !resolvedPaths.value.length) return;
   if (!window.confirm("撤销本次 AI 的全部文件改动？")) return;
   reverting.value = true;
   try {
-    await revertChanges(props.workspaceId, props.runId, props.paths);
+    await revertChanges(props.workspaceId, props.runId, resolvedPaths.value);
     emit("reverted", props.runId);
   } finally {
     reverting.value = false;
@@ -108,8 +111,8 @@ async function revertAll() {
 
 // 进入完整 Diff 审核页
 function openReview() {
-  if (!props.workspaceId || !props.runId || !props.paths.length) return;
-  emit("review", { workspaceId: props.workspaceId, runId: props.runId, paths: props.paths });
+  if (!props.workspaceId || !props.runId || !resolvedPaths.value.length) return;
+  emit("review", { workspaceId: props.workspaceId, runId: props.runId, paths: resolvedPaths.value });
 }
 </script>
 

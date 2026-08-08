@@ -292,6 +292,26 @@
 .task-summary-popup__head { display: flex; align-items: baseline; gap: 7px; padding-bottom: 8px; border-bottom: 1px solid #eef0f2; }
 .task-summary-popup__head b { color: #2e3338; font-size: 13px; }
 .task-summary-popup__head small { flex: 1 1 auto; min-width: 0; overflow: hidden; color: #9aa1a8; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.task-summary-popup__context .task-summary-popup__label > span { display: inline-flex; align-items: center; gap: 5px; }
+.task-summary-popup__context .task-summary-popup__label em { color: #697078; font-style: normal; letter-spacing: 0; }
+.task-summary-popup__context .task-summary-popup__label em.warning { color: #9b6235; }
+.context-meter { display: flex; height: 7px; overflow: hidden; background: #edf0f2; border-radius: 4px; }
+.context-meter i { display: block; min-width: 1px; height: 100%; }
+.context-meter__system, .context-breakdown__system i { background: #686e75; }
+.context-meter__summary, .context-breakdown__summary i { background: #8c9298; }
+.context-meter__conversation, .context-breakdown__conversation i { background: #adb2b7; }
+.context-meter__tools, .context-breakdown__tools i { background: #c6cacf; }
+.context-meter__reserved, .context-breakdown__reserved i { background: #d9dcdf; }
+.context-available { display: flex; align-items: baseline; gap: 5px; margin-top: 8px; }
+.context-available strong { color: #30353a; font: 600 18px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.context-available span { color: #596068; font-size: 11px; }
+.context-available small { margin-left: auto; color: #a0a6ac; font-size: 9px; }
+.context-breakdown { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; margin: 9px 0 0; padding: 0; list-style: none; }
+.context-breakdown li { display: grid; grid-template-columns: 6px 1fr auto; align-items: center; gap: 5px; color: #777e85; font-size: 10px; }
+.context-breakdown li > i { width: 6px; height: 6px; border-radius: 2px; }
+.context-breakdown li b { color: #555c63; font: 500 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.context-compaction { margin: 8px 0 0; color: #8c9298; font-size: 9px; }
+.context-compaction.active { color: #596068; }
 .task-summary-popup__row { padding: 9px 0 0; }
 .task-summary-popup__row + .task-summary-popup__row { border-top: 1px dashed #eef0f2; margin-top: 9px; }
 .task-summary-popup__label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; color: #9aa1a8; font-size: 10px; font-weight: 600; letter-spacing: .04em; }

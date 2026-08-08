@@ -8,12 +8,12 @@ test("agent workbench sidebar prioritizes tasks and project context", async ({ p
   await expect(page.getByRole("searchbox", { name: "搜索任务或项目" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "工作台工具" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "SztuCode", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Work with SztuCode", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "心念为引，一言功毕", exact: true })).toBeVisible();
   await expect(page.locator(".launcher-mark svg")).toBeVisible();
   await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("button", { name: "浏览器连接", exact: true })).toBeHidden();
   await page.getByRole("button", { name: "理解项目", exact: true }).click();
-  const launcherInput = page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能");
+  const launcherInput = page.getByPlaceholder("汝之所想，皆以言成");
   await expect(launcherInput).toHaveValue(/分析当前项目结构/);
   await expect(launcherInput).toBeFocused();
   await expect(page.getByRole("button", { name: "理解项目", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -139,6 +139,180 @@ test("task conversation slash menu opens above the composer without clipping", a
   expect(geometry.menuHeight).toBeGreaterThan(0);
 });
 
+test("bottom diff preview is restored from the latest run after reopening a session", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(async () => {
+    const modulePath = "/src/lib/ipc.ts";
+    const { IpcClient } = await import(modulePath) as {
+      IpcClient: { prototype: { request: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>> } };
+    };
+    IpcClient.prototype.request = async (method, params = {}) => {
+      if (method === "session.get_history") return { messages: [], run_stats: {} };
+      if (method === "workspace.tree") return { nodes: [] };
+      if (method === "change.list") {
+        if (params.run_id !== "run-history") throw new Error("unexpected run id");
+        return {
+          changes: [{
+            path: "src/App.vue",
+            index_status: " ",
+            worktree_status: "M",
+            run_id: "run-history",
+            agent_owned: true,
+            revertible: true,
+            additions: 12,
+            deletions: 3,
+          }],
+        };
+      }
+      return {};
+    };
+
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const state = root.__vue_app__?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const project = { workspace_id: "workspace-history", name: "History", path: "F:/history", archived: false };
+    state.workspace = project;
+    state.workspaces = [project];
+    state.sessions = [{
+      session_id: "session-history",
+      title: "Historical task",
+      status: "active",
+      updated_at: "",
+      archived: false,
+      pinned: false,
+      workspace_id: "workspace-history",
+      latest_run_id: "run-history",
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_elapsed_s: 0,
+    }];
+    const chooseTask = state.chooseTask as ((id: string) => Promise<void>) | undefined;
+    if (!chooseTask) throw new Error("chooseTask is unavailable");
+    await chooseTask("session-history");
+  });
+
+  const preview = page.locator(".bottom-diff-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("本轮修改 1 个文件");
+  await expect(preview).toContainText("+12");
+  await expect(preview).toContainText("−3");
+});
+
+test("compaction context stays hidden while restored user turns remain separate", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(async () => {
+    const modulePath = "/src/lib/ipc.ts";
+    const { IpcClient } = await import(modulePath) as {
+      IpcClient: { prototype: { request: (method: string) => Promise<Record<string, unknown>> } };
+    };
+    IpcClient.prototype.request = async (method) => {
+      if (method === "workspace.tree") return { nodes: [] };
+      if (method === "session.get_history") {
+        return {
+          messages: [
+            { role: "user", content: "第一条真实请求", run_id: "run-1" },
+            { role: "assistant", content: "第一条历史输出", run_id: "run-1" },
+            {
+              role: "user",
+              content: "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n## 1. Original Goal\nInternal only",
+            },
+            { role: "assistant", content: "Understood, I'll continue from this summary." },
+            { role: "user", content: "第二条真实请求", run_id: "run-2" },
+            { role: "assistant", content: "第二条历史输出", run_id: "run-2" },
+          ],
+          run_stats: {},
+        };
+      }
+      return {};
+    };
+
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const state = root.__vue_app__?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const project = { workspace_id: "workspace-history", name: "History", path: "F:/history", archived: false };
+    state.workspace = project;
+    state.workspaces = [project];
+    state.sessions = [{
+      session_id: "session-history",
+      title: "Historical task",
+      status: "active",
+      updated_at: "",
+      archived: false,
+      pinned: false,
+      workspace_id: "workspace-history",
+      latest_run_id: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_elapsed_s: 0,
+    }];
+    const chooseTask = state.chooseTask as ((id: string) => Promise<void>) | undefined;
+    if (!chooseTask) throw new Error("chooseTask is unavailable");
+    await chooseTask("session-history");
+  });
+
+  await expect(page.locator(".timeline-user-message")).toHaveCount(2);
+  await expect(page.locator(".timeline-user-message").nth(0)).toHaveText("第一条真实请求");
+  await expect(page.locator(".timeline-user-message").nth(1)).toHaveText("第二条真实请求");
+  await expect(page.getByText("第一条历史输出", { exact: true })).toBeVisible();
+  await expect(page.getByText("第二条历史输出", { exact: true })).toBeVisible();
+  await expect(page.getByText(/This session is being continued/)).toHaveCount(0);
+  await expect(page.getByText("Understood, I'll continue from this summary.", { exact: true })).toHaveCount(0);
+});
+
+test("focused long task titles auto-scroll without a horizontal scrollbar", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const longTitle = "这是一个非常长的任务名称用于验证聚焦之后自动横向滚动并且不会出现任何横向滚动条";
+
+  await page.locator("#app").evaluate((root, title) => {
+    const app = (root as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    }).__vue_app__;
+    const state = app?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    state.sessions = [{
+      session_id: "session-long-title",
+      title,
+      status: "waiting_for_input",
+      updated_at: "",
+      archived: false,
+      pinned: false,
+      workspace_id: null,
+      latest_run_id: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_elapsed_s: 0,
+    }];
+  }, longTitle);
+
+  const row = page.getByRole("button", { name: longTitle, exact: true });
+  const title = row.locator("[data-auto-scroll-title]");
+  await expect(row).toBeVisible();
+  await row.focus();
+
+  const geometry = await title.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+    rowOverflowX: getComputedStyle(element.closest("button")!).overflowX,
+  }));
+  expect(geometry.scrollWidth).toBeGreaterThan(geometry.clientWidth);
+  expect(geometry.scrollbarWidth).toBe("none");
+  expect(geometry.rowOverflowX).toBe("hidden");
+  await expect.poll(() => title.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: /新建任务/ }).focus();
+  await expect.poll(() => title.evaluate((element) => element.scrollLeft)).toBe(0);
+});
+
 test("workspace panel collapses smoothly before it is removed", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -174,13 +348,13 @@ test("new task, keyboard shortcut, and more tools remain interactive", async ({ 
   await page.getByRole("button", { name: "全部任务", exact: true }).click();
   await expect(page.getByRole("heading", { name: "全部任务", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /新建任务/ }).click();
-  await expect(page.getByRole("heading", { name: "Work with SztuCode", exact: true })).toBeVisible();
-  await expect(page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能")).toBeFocused();
+  await expect(page.getByRole("heading", { name: "心念为引，一言功毕", exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("汝之所想，皆以言成")).toBeFocused();
 
-  await page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能").fill("临时内容");
+  await page.getByPlaceholder("汝之所想，皆以言成").fill("临时内容");
   await page.keyboard.press("Control+K");
-  await expect(page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能")).toHaveValue("");
-  await expect(page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能")).toBeFocused();
+  await expect(page.getByPlaceholder("汝之所想，皆以言成")).toHaveValue("");
+  await expect(page.getByPlaceholder("汝之所想，皆以言成")).toBeFocused();
 
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-expanded", "true");
@@ -195,7 +369,7 @@ test("new task, keyboard shortcut, and more tools remain interactive", async ({ 
 test("slash menu groups commands and supports keyboard selection", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  const launcherInput = page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能");
+  const launcherInput = page.getByPlaceholder("汝之所想，皆以言成");
 
   await launcherInput.fill("/");
   const slashMenu = page.getByRole("listbox", { name: "斜杠命令与技能" });
@@ -277,13 +451,13 @@ test("sidebar keeps the 952px boundary and auto-collapses below it", async ({ pa
   const expandNavigation = page.getByRole("button", { name: "展开导航" });
   await expect(expandNavigation).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeHidden();
-  await expect(page.getByRole("heading", { name: "Work with SztuCode", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "心念为引，一言功毕", exact: true })).toBeVisible();
 
   await expandNavigation.click();
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeVisible();
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await expect(page.getByRole("button", { name: "浏览器连接" })).toBeVisible();
-  await page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能").fill("/");
+  await page.getByPlaceholder("汝之所想，皆以言成").fill("/");
   await expect(page.getByRole("listbox", { name: "斜杠命令与技能" })).toBeVisible();
   await expect(page).toHaveScreenshot("agent-sidebar-v6-951.png", { fullPage: true });
 

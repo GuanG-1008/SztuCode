@@ -107,6 +107,10 @@ class AgentLoop:
         canvas: TaskCanvas = context.canvas
 
         while not context.is_done():
+            # Ensure a prepared summary replaces the oversized snapshot before
+            # the next model request instead of only at runner shutdown.
+            if self._compactor is not None:
+                await self._compactor.wait_pending()
             # 惰性记录 run 开始墙钟（runner/子 agent 都可能未设置）
             if context.started_at <= 0.0:
                 context.started_at = time.monotonic()

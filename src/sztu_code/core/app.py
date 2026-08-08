@@ -201,6 +201,7 @@ class CoreApp:
         self._running_runs: set[asyncio.Task[Any]] = set()
         self._active_run_tasks: dict[str, asyncio.Task[str]] = {}
         self._run_status: dict[str, str] = {}
+        self._client_message_runs: dict[tuple[str, str], str] = {}
         self._active_session_runs: dict[str, asyncio.Task[str]] = {}
         self._sessions: SessionManager | None = None
         self._permission_manager: PermissionManager | None = None
@@ -573,12 +574,20 @@ class CoreApp:
     async def _session_send_handler(self, params: dict[str, Any]) -> SessionSendMessageResult:
         assert self._sessions is not None
         cmd = SessionSendMessageCommand.model_validate(params)
+        if cmd.client_message_id:
+            existing_run_id = self._client_message_runs.get(
+                (cmd.session_id, cmd.client_message_id)
+            )
+            if existing_run_id is not None:
+                return SessionSendMessageResult(run_id=existing_run_id)
         active_run = self._active_session_runs.get(cmd.session_id)
         if active_run is not None and not active_run.done():
             raise HandlerError(SESSION_BUSY, "session busy")
         await self._sessions.get_history(cmd.session_id)
 
         run_id = new_run_id()
+        if cmd.client_message_id:
+            self._client_message_runs[(cmd.session_id, cmd.client_message_id)] = run_id
         run_task = asyncio.create_task(
             self._sessions.send_message(
                 cmd.session_id,

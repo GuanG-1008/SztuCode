@@ -145,8 +145,8 @@ export async function sessionHistory(sessionId: string): Promise<SessionHistory>
   };
 }
 
-export async function sendPrompt(sessionId: string, message: string, images: ImageBlock[] = []): Promise<string> {
-  const result = await client.request("session.send_message", { session_id: sessionId, content: message, images });
+export async function sendPrompt(sessionId: string, message: string, images: ImageBlock[] = [], clientMessageId?: string): Promise<string> {
+  const result = await client.request("session.send_message", { session_id: sessionId, content: message, images, client_message_id: clientMessageId });
   return String(result.run_id ?? "");
 }
 

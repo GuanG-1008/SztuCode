@@ -825,11 +825,12 @@
 .agent-sidebar .project-row-shell.collapsed { margin-bottom: 3px; }
 .agent-sidebar .project-task { display: block; min-height: 31px; padding: 4px 8px 4px 33px; overflow: hidden; color: #3e4248; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-sidebar .project-task span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-sidebar .project-task:focus, .agent-sidebar .project-task:focus-visible { overflow-x: auto; text-overflow: clip; scrollbar-width: thin; }
-.agent-sidebar .project-task:focus span, .agent-sidebar .project-task:focus-visible span { overflow: visible; text-overflow: clip; }
 .agent-sidebar .project-empty, .agent-sidebar .side-empty { margin: 5px 8px; color: #9a9fa5; font-size: 11px; }
 .agent-sidebar .conversation-row { min-height: 31px; padding: 4px 8px 4px 10px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.agent-sidebar .conversation-row:focus, .agent-sidebar .conversation-row:focus-visible { overflow-x: auto; text-overflow: clip; scrollbar-width: thin; }
+.agent-sidebar [data-auto-scroll-title] { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; scrollbar-width: none; }
+.agent-sidebar [data-auto-scroll-title]::-webkit-scrollbar { display: none; }
+.agent-sidebar :is(.status-task-row, .project-task, .conversation-row):focus [data-auto-scroll-title],
+.agent-sidebar :is(.status-task-row, .project-task, .conversation-row):focus-visible [data-auto-scroll-title] { text-overflow: clip; }
 .archived-projects { margin: 15px 7px 0; }
 .archived-projects summary { display: flex; align-items: center; gap: 7px; min-height: 29px; color: #868b92; cursor: pointer; font-size: 11px; list-style: none; }
 .archived-projects summary::-webkit-details-marker { display: none; }
@@ -880,7 +881,7 @@
 .launcher-heading__copy { min-width: 0; }
 .task-launcher .launcher-heading h1 { display: inline-grid; margin: 0; color: #1e2023; font-family: "Aptos Display", "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif; font-size: 42px; font-weight: 560; line-height: 1.16; letter-spacing: 0; }
 .launcher-heading h1::before, .launcher-heading h1 > span { grid-area: 1 / 1; white-space: nowrap; }
-.launcher-heading h1::before { visibility: hidden; content: "Work with SztuCode"; }
+.launcher-heading h1::before { visibility: hidden; content: "心念为引，一言功毕"; }
 .launcher-heading h1 > span { width: 0; overflow: hidden; border-right: 2px solid #25282c; animation: launcher-title-type 1.35s steps(18, end) 180ms forwards, launcher-title-caret 450ms step-end 3 180ms forwards; }
 @keyframes launcher-title-type { to { width: 100%; } }
 @keyframes launcher-title-caret { 50%, 100% { border-color: transparent; } }

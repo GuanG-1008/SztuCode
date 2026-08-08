@@ -452,10 +452,17 @@ class OpenAIProvider:
             if prompt_details is not None:
                 cache_read = getattr(prompt_details, "cached_tokens", 0) or 0
 
+        context_window = _context_window(self._model, self._context_window_override)
         context_pct = (
-            input_tokens / _context_window(self._model, self._context_window_override)
+            input_tokens / context_window
             if input_tokens > 0
             else 0.0
+        )
+        from sztu_code.core.compact.context_usage import estimate_context_usage
+        breakdown = estimate_context_usage(
+            messages=messages, tool_schemas=tools or [], system=system or _SYSTEM_PROMPT,
+            actual_input_tokens=input_tokens, context_window=context_window,
+            reserved_output_tokens=self._max_output_tokens,
         )
 
         await bus.publish(
@@ -467,6 +474,7 @@ class OpenAIProvider:
                 cache_creation_input_tokens=0,
                 context_pct=context_pct,
                 model=self._model,
+                **breakdown.__dict__,
                 ts=_now(),
             )
         )

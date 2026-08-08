@@ -206,8 +206,13 @@ class AnthropicProvider:
         usage = final_message.usage
         cache_read: int = getattr(usage, "cache_read_input_tokens", 0) or 0
         cache_create: int = getattr(usage, "cache_creation_input_tokens", 0) or 0
-        context_pct = usage.input_tokens / _context_window(
-            self._model, self._context_window_override
+        context_window = _context_window(self._model, self._context_window_override)
+        context_pct = usage.input_tokens / context_window
+        from sztu_code.core.compact.context_usage import estimate_context_usage
+        breakdown = estimate_context_usage(
+            messages=messages, tool_schemas=tools, system=system or _SYSTEM_PROMPT,
+            actual_input_tokens=usage.input_tokens, context_window=context_window,
+            reserved_output_tokens=self._max_output_tokens,
         )
 
         await bus.publish(
@@ -219,6 +224,7 @@ class AnthropicProvider:
                 cache_creation_input_tokens=cache_create,
                 context_pct=context_pct,
                 model=self._model,
+                **breakdown.__dict__,
                 ts=_now(),
             )
         )

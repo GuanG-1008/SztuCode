@@ -333,6 +333,7 @@ class SessionSendMessageCommand(BaseModel):
     session_id: str
     content: str
     images: list[MessageImageBlock] = Field(default_factory=list)
+    client_message_id: str | None = Field(default=None, max_length=128)
 
 
 class SessionSendMessageResult(BaseModel):

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 会话区右上角的小浮窗：展示任务待办进度、产物数量与项目上下文，整体缩小
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Check, ChevronRight, Circle, FileDiff, ListChecks, LoaderCircle, PackageOpen } from "@lucide/vue";
+import { Check, ChevronRight, Circle, FileDiff, Gauge, ListChecks, LoaderCircle, PackageOpen } from "@lucide/vue";
 import { listChanges, type ChangeSummary } from "../../services/sztu-runtime";
 import type { TimelineStep } from "../timeline/types";
 
@@ -28,6 +28,20 @@ const completed = computed(() => plan.value.filter((item) => item.status === "co
 const progress = computed(() => (plan.value.length ? Math.round((completed.value / plan.value.length) * 100) : 0));
 // 待办列表最多展示前 12 条，适配放大后的浮窗
 const visiblePlan = computed(() => plan.value.slice(0, 12));
+const contextUsage = computed(() => [...(props.steps ?? [])].reverse().find((step) => step.usage)?.usage);
+const formatTokens = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
+const contextPercent = computed(() => Math.min(100, Math.round((contextUsage.value?.contextPct ?? 0) * 100)));
+const contextSegments = computed(() => {
+  const usage = contextUsage.value;
+  if (!usage?.contextWindow) return [];
+  return [
+    { key: "system", label: "系统指令", value: usage.systemTokens },
+    { key: "summary", label: "历史摘要", value: usage.summaryTokens },
+    { key: "conversation", label: "近期对话", value: usage.conversationTokens },
+    { key: "tools", label: "工具与结果", value: usage.toolTokens },
+    { key: "reserved", label: "输出预留", value: usage.reservedOutputTokens },
+  ].filter((item) => item.value > 0).map((item) => ({ ...item, width: `${Math.max(.8, item.value / usage.contextWindow * 100)}%` }));
+});
 
 // 已用技能聚合去重
 const usedSkills = computed(() => [...new Map((props.steps ?? []).flatMap((step) => step.skills ?? []).map((skill) => [skill.name, skill])).values()]);
@@ -115,6 +129,28 @@ onBeforeUnmount(() => {
         <b>任务摘要</b>
         <small v-if="workspaceName">{{ workspaceName }}</small>
       </header>
+
+      <div v-if="contextUsage?.contextWindow" class="task-summary-popup__row task-summary-popup__context">
+        <div class="task-summary-popup__label">
+          <span><Gauge :size="12" />上下文空间</span>
+          <em :class="{ warning: contextPercent >= 80 }">已用 {{ contextPercent }}%</em>
+        </div>
+        <div class="context-meter" :aria-label="`上下文已用 ${contextPercent}%`">
+          <i v-for="segment in contextSegments" :key="segment.key" :class="`context-meter__${segment.key}`" :style="{ width: segment.width }" />
+        </div>
+        <div class="context-available">
+          <strong>{{ formatTokens(contextUsage.availableTokens) }}</strong>
+          <span>尚可使用</span>
+          <small>共 {{ formatTokens(contextUsage.contextWindow) }} tokens</small>
+        </div>
+        <ul class="context-breakdown">
+          <li v-for="segment in contextSegments" :key="segment.key" :class="`context-breakdown__${segment.key}`">
+            <i /><span>{{ segment.label }}</span><b>{{ formatTokens(segment.value) }}</b>
+          </li>
+        </ul>
+        <p v-if="contextUsage.compacting" class="context-compaction active">正在自动压缩较早上下文…</p>
+        <p v-else-if="contextUsage.compactedTokens" class="context-compaction">最近一次压缩释放 {{ formatTokens(contextUsage.compactedTokens) }} tokens</p>
+      </div>
 
       <div v-if="plan.length" class="task-summary-popup__row">
         <div class="task-summary-popup__label">待办进度</div>
