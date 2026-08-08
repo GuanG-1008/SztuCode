@@ -423,12 +423,96 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "$defs": {
     "SettingsSnapshot": {
       "properties": {
+        "max_output_tokens": {
+          "default": 8192,
+          "maximum": 128000,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top P"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "context_window": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "cache_control": {
+          "default": true,
+          "title": "Cache Control",
+          "type": "boolean"
+        },
         "provider": {
           "enum": [
             "anthropic",
             "openai"
           ],
           "title": "Provider",
+          "type": "string"
+        },
+        "api_format": {
+          "default": "anthropic_messages",
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "title": "Api Format",
           "type": "string"
         },
         "model": {
@@ -495,10 +579,19 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 |---|---|---|
 | `type` | `string` | no |
 | `provider` | `string | null` | no |
+| `api_format` | `string | null` | no |
 | `model` | `string | null` | no |
 | `base_url` | `string | null` | no |
 | `api_key` | `string | null` | no |
 | `permission_mode` | `string | null` | no |
+| `max_output_tokens` | `integer | null` | no |
+| `temperature` | `number | null` | no |
+| `top_p` | `number | null` | no |
+| `reasoning_effort` | `string | null` | no |
+| `timeout_s` | `number | null` | no |
+| `max_retries` | `integer | null` | no |
+| `context_window` | `integer | null` | no |
+| `cache_control` | `boolean | null` | no |
 
 ```json
 {
@@ -524,6 +617,23 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       ],
       "default": null,
       "title": "Provider"
+    },
+    "api_format": {
+      "anyOf": [
+        {
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Api Format"
     },
     "model": {
       "anyOf": [
@@ -583,6 +693,122 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       ],
       "default": null,
       "title": "Permission Mode"
+    },
+    "max_output_tokens": {
+      "anyOf": [
+        {
+          "maximum": 128000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Output Tokens"
+    },
+    "temperature": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temperature"
+    },
+    "top_p": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Top P"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reasoning Effort"
+    },
+    "timeout_s": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timeout S"
+    },
+    "max_retries": {
+      "anyOf": [
+        {
+          "maximum": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Retries"
+    },
+    "context_window": {
+      "anyOf": [
+        {
+          "maximum": 10000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Context Window"
+    },
+    "cache_control": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cache Control"
     }
   },
   "title": "SettingsUpdateCommand",
@@ -602,12 +828,96 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "$defs": {
     "SettingsSnapshot": {
       "properties": {
+        "max_output_tokens": {
+          "default": 8192,
+          "maximum": 128000,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top P"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "context_window": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "cache_control": {
+          "default": true,
+          "title": "Cache Control",
+          "type": "boolean"
+        },
         "provider": {
           "enum": [
             "anthropic",
             "openai"
           ],
           "title": "Provider",
+          "type": "string"
+        },
+        "api_format": {
+          "default": "anthropic_messages",
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "title": "Api Format",
           "type": "string"
         },
         "model": {
@@ -661,13 +971,6 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     },
     "updated": {
       "items": {
-        "enum": [
-          "provider",
-          "model",
-          "base_url",
-          "api_key",
-          "permission_mode"
-        ],
         "type": "string"
       },
       "title": "Updated",
@@ -709,6 +1012,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | Field | Type | Required |
 |---|---|---|
 | `provider` | `string` | yes |
+| `api_format` | `string` | no |
 | `model` | `string` | yes |
 | `api_key_configured` | `boolean` | yes |
 | `custom_endpoint_configured` | `boolean` | yes |
@@ -725,6 +1029,16 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
         "openai"
       ],
       "title": "Provider",
+      "type": "string"
+    },
+    "api_format": {
+      "default": "anthropic_messages",
+      "enum": [
+        "openai_chat_completions",
+        "anthropic_messages",
+        "openai_responses"
+      ],
+      "title": "Api Format",
       "type": "string"
     },
     "model": {
@@ -905,12 +1219,96 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "$defs": {
     "SettingsSnapshot": {
       "properties": {
+        "max_output_tokens": {
+          "default": 8192,
+          "maximum": 128000,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top P"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "context_window": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "cache_control": {
+          "default": true,
+          "title": "Cache Control",
+          "type": "boolean"
+        },
         "provider": {
           "enum": [
             "anthropic",
             "openai"
           ],
           "title": "Provider",
+          "type": "string"
+        },
+        "api_format": {
+          "default": "anthropic_messages",
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "title": "Api Format",
           "type": "string"
         },
         "model": {
@@ -2002,6 +2400,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | `session_id` | `string` | yes |
 | `content` | `string` | yes |
 | `images` | `array` | no |
+| `client_message_id` | `string | null` | no |
 
 ```json
 {
@@ -2052,6 +2451,19 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       },
       "title": "Images",
       "type": "array"
+    },
+    "client_message_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Message Id"
     }
   },
   "required": [
@@ -2995,6 +3407,13 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `cache_creation_input_tokens` | `integer` | yes |
 | `context_pct` | `number` | no |
 | `model` | `string` | no |
+| `context_window` | `integer` | no |
+| `available_tokens` | `integer` | no |
+| `reserved_output_tokens` | `integer` | no |
+| `system_tokens` | `integer` | no |
+| `summary_tokens` | `integer` | no |
+| `conversation_tokens` | `integer` | no |
+| `tool_tokens` | `integer` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -3035,6 +3454,41 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "default": "",
       "title": "Model",
       "type": "string"
+    },
+    "context_window": {
+      "default": 0,
+      "title": "Context Window",
+      "type": "integer"
+    },
+    "available_tokens": {
+      "default": 0,
+      "title": "Available Tokens",
+      "type": "integer"
+    },
+    "reserved_output_tokens": {
+      "default": 0,
+      "title": "Reserved Output Tokens",
+      "type": "integer"
+    },
+    "system_tokens": {
+      "default": 0,
+      "title": "System Tokens",
+      "type": "integer"
+    },
+    "summary_tokens": {
+      "default": 0,
+      "title": "Summary Tokens",
+      "type": "integer"
+    },
+    "conversation_tokens": {
+      "default": 0,
+      "title": "Conversation Tokens",
+      "type": "integer"
+    },
+    "tool_tokens": {
+      "default": 0,
+      "title": "Tool Tokens",
+      "type": "integer"
     },
     "ts": {
       "title": "Ts",

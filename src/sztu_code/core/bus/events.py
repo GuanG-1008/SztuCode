@@ -101,6 +101,13 @@ class LlmUsageEvent(BaseModel):
     cache_creation_input_tokens: int
     context_pct: float = 0.0
     model: str = ""  # 当前使用的模型名
+    context_window: int = 0
+    available_tokens: int = 0
+    reserved_output_tokens: int = 0
+    system_tokens: int = 0
+    summary_tokens: int = 0
+    conversation_tokens: int = 0
+    tool_tokens: int = 0
     ts: str
 
 

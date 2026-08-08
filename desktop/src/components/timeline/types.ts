@@ -33,6 +33,15 @@ export type LlmUsage = {
   outputTokens: number;
   contextPct: number;
   model: string;
+  contextWindow: number;
+  availableTokens: number;
+  reservedOutputTokens: number;
+  systemTokens: number;
+  summaryTokens: number;
+  conversationTokens: number;
+  toolTokens: number;
+  compacting?: boolean;
+  compactedTokens?: number;
 };
 
 export type PlanItem = {

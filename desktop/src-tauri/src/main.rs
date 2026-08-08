@@ -5,7 +5,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex as StdMutex,
+        mpsc, Arc, Mutex as StdMutex, OnceLock,
     },
 };
 

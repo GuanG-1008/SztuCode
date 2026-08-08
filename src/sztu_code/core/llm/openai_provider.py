@@ -256,6 +256,12 @@ class OpenAIProvider:
         client: Any = None,
         *,
         context_window: int = 0,
+        max_output_tokens: int = 8192,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        reasoning_effort: str = "",
+        timeout_s: float = 120.0,
+        max_retries: int = 2,
         cache_control: bool = True,
     ) -> None:
         base_url = os.environ.get("OPENAI_BASE_URL")
@@ -268,7 +274,11 @@ class OpenAIProvider:
             api_key = os.environ.get("OPENAI_API_KEY") or ""
             if not api_key and not base_url:
                 raise SystemExit("OPENAI_API_KEY not set (或设置 OPENAI_BASE_URL 使用免 key 端点)")
-            client_kwargs: dict[str, Any] = {"api_key": api_key or "keyless-placeholder"}
+            client_kwargs: dict[str, Any] = {
+                "api_key": api_key or "keyless-placeholder",
+                "timeout": timeout_s,
+                "max_retries": max_retries,
+            }
             if base_url:
                 client_kwargs["base_url"] = base_url
             client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
@@ -281,6 +291,10 @@ class OpenAIProvider:
         self._model = model
         self._text_tool_history = is_campus_deepseek
         self._context_window_override = context_window
+        self._max_output_tokens = max_output_tokens
+        self._temperature = temperature
+        self._top_p = top_p
+        self._reasoning_effort = reasoning_effort
         self._cache_control = cache_control
 
     # 流式调用 OpenAI 兼容 API，逐 token 发布事件并返回 LlmResponse；网络中断时自动重试
@@ -327,7 +341,15 @@ class OpenAIProvider:
                     "model": self._model,
                     "messages": openai_msgs,
                     "stream": True,
+                    "stream_options": {"include_usage": True},
+                    "max_completion_tokens": self._max_output_tokens,
                 }
+                if self._temperature is not None:
+                    kwargs["temperature"] = self._temperature
+                if self._top_p is not None:
+                    kwargs["top_p"] = self._top_p
+                if self._reasoning_effort:
+                    kwargs["reasoning_effort"] = self._reasoning_effort
                 if tools:
                     kwargs["tools"] = tools
 
@@ -430,10 +452,17 @@ class OpenAIProvider:
             if prompt_details is not None:
                 cache_read = getattr(prompt_details, "cached_tokens", 0) or 0
 
+        context_window = _context_window(self._model, self._context_window_override)
         context_pct = (
-            input_tokens / _context_window(self._model, self._context_window_override)
+            input_tokens / context_window
             if input_tokens > 0
             else 0.0
+        )
+        from sztu_code.core.compact.context_usage import estimate_context_usage
+        breakdown = estimate_context_usage(
+            messages=messages, tool_schemas=tools or [], system=system or _SYSTEM_PROMPT,
+            actual_input_tokens=input_tokens, context_window=context_window,
+            reserved_output_tokens=self._max_output_tokens,
         )
 
         await bus.publish(
@@ -445,6 +474,7 @@ class OpenAIProvider:
                 cache_creation_input_tokens=0,
                 context_pct=context_pct,
                 model=self._model,
+                **breakdown.__dict__,
                 ts=_now(),
             )
         )

@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileDiff, LoaderCircle, Play, TerminalSquare } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
-import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
 import ThinkingPanel from "./ThinkingPanel.vue";
 import TokenStream from "./TokenStream.vue";
 import ToolCallCard from "./ToolCallCard.vue";
@@ -363,15 +362,6 @@ const turns = computed<TurnView[]>(() => {
           <section v-if="turn.summaryText" class="turn-result" aria-label="任务结果">
             <TokenStream :tokens="[]" :final-text="turn.summaryText" />
           </section>
-
-          <ChangeReviewCard
-            v-if="turn.summaryText && workspaceId && turn.runId && turn.changePaths.length"
-            :workspace-id="workspaceId"
-            :run-id="turn.runId"
-            :paths="turn.changePaths"
-            @reverted="$emit('reverted', $event)"
-            @review="$emit('review', $event)"
-          />
 
           <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
             <b>{{ turn.stateLabel }}</b>

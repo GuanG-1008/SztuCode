@@ -9,11 +9,13 @@ import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
+import TaskSummaryPopup from "./components/Inspector/TaskSummaryPopup.vue";
 import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
 import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
 import DiffReview from "./components/Diff/DiffReview.vue";
+import BottomDiffPreview from "./components/Diff/BottomDiffPreview.vue";
 import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
@@ -157,6 +159,35 @@ const filteredLauncherWorkspaces = computed(() => {
   return activeWorkspaces.value.filter((item) => `${item.name} ${item.path}`.toLocaleLowerCase().includes(query)).slice(0, 8);
 });
 const orderedTimeline = computed(() => [...timeline.value.values()].sort((left, right) => left.step - right.step));
+// 聚合出最近一个已完成且有文件改动的 run，供会话区底部常驻 diff 预览使用（分组规则与时间线一致：新用户消息开新组，组内最后一步非末态视为运行中）
+const latestChangedRun = computed(() => {
+  let group: { runId?: string; paths: string[]; lastStatus?: TimelineStep["status"] } | null = null;
+  let latest: { runId: string; paths: string[] } | null = null;
+  for (const item of orderedTimeline.value) {
+    if (item.userMessage) group = { runId: undefined, paths: [], lastStatus: undefined };
+    if (!group) group = { runId: undefined, paths: [], lastStatus: undefined };
+    if (item.runId) group.runId = item.runId;
+    group.lastStatus = item.status;
+    for (const entry of item.changes ?? []) {
+      for (const path of entry.paths) {
+        if (!group.paths.includes(path)) group.paths.push(path);
+      }
+    }
+    const running =
+      group.lastStatus === "thinking" || group.lastStatus === "acting" || group.lastStatus === "observing";
+    if (!running && group.runId && group.paths.length) {
+      latest = { runId: group.runId, paths: [...group.paths] };
+    }
+  }
+  return latest;
+});
+// 历史会话不会重放 workspace.changed 事件；此时使用会话记录的最近 run
+// 重新查询变更清单，让底部 Diff 在刷新或重新打开任务后仍可恢复。
+const bottomDiffRun = computed(() => latestChangedRun.value ?? (
+  active.value?.latest_run_id
+    ? { runId: active.value.latest_run_id, paths: [] as string[] }
+    : null
+));
 const permissionModeLabel = computed(() => ({
   normal: "标准审批",
   plan: "计划模式",
@@ -175,6 +206,61 @@ function formatSessionUsage(item: Session): string {
 // 对话条目悬停预览：展示计时、分支、项目目录与累计 token
 const sessionPreview = ref<{ task: Session; top: number; left: number } | null>(null);
 const branchCache = ref(new Map<string, string | null>());
+type TaskTitleScrollState = { frame: number; direction: 1 | -1; lastAt: number; pauseUntil: number };
+const taskTitleScrollStates = new WeakMap<HTMLElement, TaskTitleScrollState>();
+
+function stopTaskTitleElementScroll(title: HTMLElement, reset = true) {
+  const state = taskTitleScrollStates.get(title);
+  if (state) cancelAnimationFrame(state.frame);
+  taskTitleScrollStates.delete(title);
+  if (reset) title.scrollLeft = 0;
+}
+
+function startTaskTitleScroll(event: FocusEvent) {
+  const button = event.currentTarget as HTMLElement;
+  const title = button.querySelector<HTMLElement>("[data-auto-scroll-title]");
+  if (!title) return;
+  stopTaskTitleElementScroll(title);
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const maxScroll = title.scrollWidth - title.clientWidth;
+  if (maxScroll <= 1) return;
+  const state: TaskTitleScrollState = {
+    frame: 0,
+    direction: 1,
+    lastAt: performance.now(),
+    pauseUntil: performance.now() + 650,
+  };
+  const tick = (now: number) => {
+    if (!title.isConnected || document.activeElement !== button) {
+      stopTaskTitleElementScroll(title);
+      return;
+    }
+    const elapsed = Math.min(50, now - state.lastAt);
+    state.lastAt = now;
+    if (now >= state.pauseUntil) {
+      title.scrollLeft += state.direction * elapsed * 0.035;
+      if (title.scrollLeft >= maxScroll - 0.5) {
+        title.scrollLeft = maxScroll;
+        state.direction = -1;
+        state.pauseUntil = now + 750;
+      } else if (title.scrollLeft <= 0.5) {
+        title.scrollLeft = 0;
+        state.direction = 1;
+        state.pauseUntil = now + 750;
+      }
+    }
+    state.frame = requestAnimationFrame(tick);
+  };
+  taskTitleScrollStates.set(title, state);
+  state.frame = requestAnimationFrame(tick);
+}
+
+function stopTaskTitleScroll(event: FocusEvent) {
+  const title = (event.currentTarget as HTMLElement).querySelector<HTMLElement>("[data-auto-scroll-title]");
+  if (title) stopTaskTitleElementScroll(title);
+}
+
 function showSessionPreview(task: Session, event: MouseEvent) {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   sessionPreview.value = { task, top: Math.max(4, Math.min(rect.top, window.innerHeight - 168)), left: Math.min(rect.right + 8, window.innerWidth - 232) };
@@ -307,9 +393,11 @@ function isHiddenHistoryBlock(block: HistoryBlock): boolean {
   const type = String(block.type ?? block.role ?? "").toLowerCase();
   return type === "system" || type === "developer" || type === "system_prompt" || type === "developer_prompt";
 }
-function isInternalProgressMessage(blocks: HistoryBlock[]): boolean {
+function isInternalHistoryMessage(blocks: HistoryBlock[]): boolean {
   const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
-  return /^\[Task progress\]\s+step_\d+/i.test(text);
+  return /^\[Task progress\]\s+step_\d+/i.test(text)
+    || /^This session is being continued from a previous conversation that ran out of context\.[\s\S]*\n\nSummary:\n/i.test(text)
+    || /^Understood, I'll continue from this summary\.$/i.test(text);
 }
 function blockOutput(block: HistoryBlock): string {
   if (typeof block.content === "string") return block.content;
@@ -358,7 +446,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     if (!visibleBlocks.length) continue;
     // Canvas progress summaries are persisted as user messages for the model's
     // context, but they are internal bookkeeping and must not become chat turns.
-    if (isInternalProgressMessage(blocks)) continue;
+    if (isInternalHistoryMessage(blocks)) continue;
     const text = visibleBlocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
     const toolResults = visibleBlocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {
@@ -507,9 +595,29 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     setStep(step, (current) => ({
       ...current,
       runId: relatedRunId,
-      usage: { inputTokens, outputTokens, contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? "") },
+      usage: {
+        inputTokens, outputTokens, contextPct: Number(event.context_pct ?? 0), model: String(event.model ?? ""),
+        contextWindow: Number(event.context_window ?? 0), availableTokens: Number(event.available_tokens ?? 0),
+        reservedOutputTokens: Number(event.reserved_output_tokens ?? 0), systemTokens: Number(event.system_tokens ?? 0),
+        summaryTokens: Number(event.summary_tokens ?? 0), conversationTokens: Number(event.conversation_tokens ?? 0),
+        toolTokens: Number(event.tool_tokens ?? 0),
+      },
       runStats: { ...cumulative, elapsedSeconds: 0 },
     }));
+    return;
+  }
+  if (type === "context.compacting" || type === "context.compacted") {
+    const step = stepFor(timelineEvent);
+    setStep(step, (current) => current.usage ? ({
+      ...current,
+      usage: {
+        ...current.usage,
+        compacting: type === "context.compacting",
+        compactedTokens: type === "context.compacted"
+          ? Math.max(0, Number(event.original_tokens ?? 0) - Number(event.summary_tokens ?? 0))
+          : current.usage.compactedTokens,
+      },
+    }) : current);
     return;
   }
   if (type === "tool.call_started") {
@@ -698,6 +806,7 @@ function beginTask(project: Workspace | null = workspace.value) {
 async function submitTask(content: string, project: Workspace | null = workspace.value, images: ImageBlock[] = []) {
   const trimmed = content.trim();
   if (!trimmed || !connected.value || sending.value) return;
+  const clientMessageId = crypto.randomUUID();
   sending.value = true;
   try {
     if (!activeId.value) {
@@ -711,7 +820,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       page.value = "work";
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(sessionId, trimmed, images);
+      activeRunId.value = await sendPrompt(sessionId, trimmed, images, clientMessageId);
       runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
       await refreshIndex(false);
@@ -719,7 +828,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       if (active.value?.archived || active.value?.status === "closed") return;
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(activeId.value, trimmed, images);
+      activeRunId.value = await sendPrompt(activeId.value, trimmed, images, clientMessageId);
       runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
     }
@@ -1394,8 +1503,8 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="normalizedTaskQuery" class="side-section search-results">
           <span class="side-label">搜索结果 <small>{{ visibleSessions.length }}</small></span>
           <div v-for="task in visibleSessions" :key="`search-${task.session_id}`" class="sidebar-session status-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
-            <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-              <i :class="task.status" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ taskStatusLabel(task) }} · {{ formatSessionUsage(task) }}</small></span>
+            <button class="status-task-row" :class="{ active: task.session_id === activeId }" @focus="startTaskTitleScroll" @blur="stopTaskTitleScroll" @click="chooseTask(task.session_id)">
+              <i :class="task.status" /><span><b data-auto-scroll-title>{{ task.title || '未命名任务' }}</b><small>{{ taskStatusLabel(task) }} · {{ formatSessionUsage(task) }}</small></span>
             </button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
@@ -1422,8 +1531,8 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <div class="project-task-list" :class="{ collapsed: isProjectCollapsed(item.workspace_id) }">
               <div class="project-task-list__inner">
                 <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
-                  <button class="project-task" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                    <span>{{ task.title || '未命名任务' }}</span>
+                  <button class="project-task" :class="{ active: task.session_id === activeId }" @focus="startTaskTitleScroll" @blur="stopTaskTitleScroll" @click="chooseTask(task.session_id)">
+                    <span data-auto-scroll-title>{{ task.title || '未命名任务' }}</span>
                   </button>
                   <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
                 </div>
@@ -1437,7 +1546,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="temporaryTasks.length && !normalizedTaskQuery" class="side-section temporary-tasks">
           <span class="side-label">临时任务</span>
           <div v-for="task in temporaryTasks" :key="task.session_id" class="sidebar-session conversation-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
-            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><span>{{ task.title || '未命名任务' }}</span></button>
+            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @focus="startTaskTitleScroll" @blur="stopTaskTitleScroll" @click="chooseTask(task.session_id)"><span data-auto-scroll-title>{{ task.title || '未命名任务' }}</span></button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
         </section>
@@ -1493,6 +1602,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
                 <div class="work-header__tools">
                   <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
+                  <TaskSummaryPopup :workspace-id="activeWorkspace?.workspace_id ?? null" :run-id="active?.latest_run_id ?? null" :steps="orderedTimeline" :attachments="attachedFiles.map((item) => item.path)" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" @review="handleReview" />
                   <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
                 </div>
               </header>
@@ -1508,6 +1618,14 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>开启「{{ activeWorkspace?.name || '当前项目' }}」的构筑之路。</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
+                <BottomDiffPreview
+                  v-if="bottomDiffRun"
+                  :workspace-id="activeWorkspace?.workspace_id ?? null"
+                  :run-id="bottomDiffRun.runId"
+                  :paths="bottomDiffRun.paths"
+                  @reverted="handleReverted"
+                  @review="handleReview"
+                />
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '汝之所想，皆以言成'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
@@ -1537,13 +1655,13 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <header class="launcher-heading">
               <span class="launcher-mark" aria-hidden="true"><BookOpen :size="42" :stroke-width="1.8" /></span>
               <div class="launcher-heading__copy">
-                <h1 aria-label="Work with SztuCode"><span aria-hidden="true">Work with SztuCode</span></h1>
+                <h1 aria-label="心念为引，一言功毕"><span aria-hidden="true">心念为引，一言功毕</span></h1>
               </div>
             </header>
 
             <form class="kimi-composer landing-composer" @submit.prevent="submit()">
               <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
-              <textarea ref="launcherPrompt" v-model="prompt" placeholder="描述你要完成的开发任务，输入 / 调用技能" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
+              <textarea ref="launcherPrompt" v-model="prompt" placeholder="汝之所想，皆以言成" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
               <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
               <div class="composer-toolbar launcher-toolbar">
                 <button type="button" class="round" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>

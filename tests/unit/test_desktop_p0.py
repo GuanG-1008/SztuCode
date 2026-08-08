@@ -60,6 +60,27 @@ async def test_session_send_handler_returns_before_run_finishes() -> None:
             task.cancel()
 
 
+async def test_session_send_handler_reuses_run_for_retried_client_message() -> None:
+    app = CoreApp()
+    sessions = _BlockingSessions()
+    app._sessions = sessions  # type: ignore[assignment]
+    params = {
+        "session_id": "sess-1",
+        "content": "hello once",
+        "client_message_id": "client-message-1",
+    }
+
+    first = await app._session_send_handler(params)
+    retried = await app._session_send_handler(params)
+    await asyncio.wait_for(sessions.started.wait(), timeout=1.0)
+
+    assert retried.run_id == first.run_id
+    assert sessions.calls == [("sess-1", "hello once", first.run_id)]
+
+    sessions.release.set()
+    await asyncio.wait_for(app._active_session_runs["sess-1"], timeout=1.0)
+
+
 # 功能：验证 run.cancel 能取消活动 session run，并让 run.get 返回 cancelled 终态。
 # 设计：复用可阻塞 session 替身，先等待后台任务真正启动再调用 CoreApp 的两个 IPC handler，避免只验证字典状态而遗漏 asyncio 取消链路。
 async def test_run_cancel_stops_active_session_run() -> None:

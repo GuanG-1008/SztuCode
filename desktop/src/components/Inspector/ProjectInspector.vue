@@ -47,11 +47,11 @@ type ActiveTab = "summary" | "files" | `sandbox-${number}` | `browser-${number}`
 type WorkspaceTab = { key: ActiveTab; kind: "summary" | "files" | "browser" | "sandbox" };
 type Artifact = { path: string; source: "change" | "attachment"; change?: ChangeSummary; previewPath?: string };
 
-const activeTab = ref<ActiveTab>("summary");
+const activeTab = ref<ActiveTab>("files");
 const browserSequence = ref(0);
 const sandboxSequence = ref(0);
 const browserTabs = ref<BrowserTab[]>([]);
-const workspaceTabs = ref<WorkspaceTab[]>([{ key: "summary", kind: "summary" }]);
+const workspaceTabs = ref<WorkspaceTab[]>([{ key: "files", kind: "files" }]);
 const openSections = ref<Set<SectionKey>>(new Set(["todo", "artifacts", "references"]));
 const changes = ref<ChangeSummary[]>([]);
 const loadingArtifacts = ref(false);
@@ -167,13 +167,6 @@ function closeWorkspaceTab(key: ActiveTab) {
 function browserForKey(key: ActiveTab) {
   if (!key.startsWith("browser-")) return null;
   return browserTabs.value.find((tab) => tab.id === Number(key.slice(8))) ?? null;
-}
-
-function openSummary() {
-  if (!workspaceTabs.value.some((tab) => tab.kind === "summary")) workspaceTabs.value.push({ key: "summary", kind: "summary" });
-  activeTab.value = "summary";
-  selectedPath.value = "";
-  toolMenuOpen.value = false;
 }
 
 function openFiles() {
@@ -330,11 +323,11 @@ function closeToolMenuOnEscape(event: KeyboardEvent) {
 }
 
 watch(() => [props.workspaceId, props.runId], () => {
-  activeTab.value = "summary";
+  activeTab.value = "files";
   browserSequence.value = 0;
   sandboxSequence.value = 0;
   browserTabs.value = [];
-  workspaceTabs.value = [{ key: "summary", kind: "summary" }];
+  workspaceTabs.value = [{ key: "files", kind: "files" }];
   selectedPath.value = "";
   void refreshArtifacts();
 }, { immediate: true });
@@ -363,7 +356,6 @@ onBeforeUnmount(() => {
       <div ref="toolMenuRoot" class="workspace-tool-menu-root">
         <button type="button" class="workspace-tool-menu-trigger" :class="{ active: toolMenuOpen }" aria-label="打开功能" aria-haspopup="menu" :aria-expanded="toolMenuOpen" @click="toolMenuOpen = !toolMenuOpen"><Plus :size="16" /></button>
         <nav v-if="toolMenuOpen" class="workspace-tool-menu" aria-label="选择功能" role="menu">
-          <button type="button" role="menuitem" :class="{ active: activeTab === 'summary' }" @click="openSummary"><ListChecks :size="15" /><span>任务摘要</span></button>
           <button type="button" role="menuitem" :class="{ active: currentBrowser }" @click="openBrowser"><Globe2 :size="15" /><span>浏览器</span></button>
           <button type="button" role="menuitem" :class="{ active: activeTab.startsWith('sandbox-') }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
           <button type="button" role="menuitem" :class="{ active: activeTab === 'files' }" @click="openFiles"><FolderOpen :size="15" /><span>文件</span></button>

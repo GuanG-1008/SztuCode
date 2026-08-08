@@ -23,6 +23,24 @@ _DEFAULT_STUCK_MAX_FAILURES = 3
 _DEFAULT_STUCK_MAX_TOTAL = 0
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
 
+API_FORMATS = {
+    "openai_chat_completions",
+    "anthropic_messages",
+    "openai_responses",
+}
+
+
+# 将 API 格式映射为兼容旧配置的 SDK 供应商族
+def provider_for_api_format(api_format: str) -> str:
+    return "anthropic" if api_format == "anthropic_messages" else "openai"
+
+
+# 将旧 provider 值归一化为明确的 API 格式
+def normalize_api_format(api_format: object, provider: object = None) -> str:
+    if isinstance(api_format, str) and api_format in API_FORMATS:
+        return api_format
+    return "openai_chat_completions" if provider == "openai" else "anthropic_messages"
+
 
 @dataclass
 class LoggingConfig:
@@ -70,9 +88,16 @@ class WorkflowConfig:
 class LlmConfig:
     # A model must be supplied by configuration; never silently select a vendor model.
     default_model: str = ""
-    provider: str = "anthropic"  # "anthropic" | "openai"
+    provider: str = "anthropic"  # legacy SDK family derived from api_format
+    api_format: str = "anthropic_messages"
     router: str = "static"  # "static" | "rule_based" (S4) | "cost_budget" (S6)
     context_window: int = 0  # 0 = use provider's model-aware default
+    max_output_tokens: int = 8_192
+    temperature: float | None = None
+    top_p: float | None = None
+    reasoning_effort: str = ""
+    timeout_s: float = 120.0
+    max_retries: int = 2
     base_url: str = ""  # 自定义端点，空表示使用官方默认地址
     api_key: str = ""  # 导入的凭证，优先于 .env 注入 provider 环境
     api_key_env: str = ""  # 内置模型使用的凭证变量名，避免把密钥写入模型配置
@@ -210,10 +235,11 @@ def _read_client_settings() -> dict[str, Any]:
 def _apply_client_settings(config: SztuConfig) -> None:
     value = _read_client_settings()
     provider = value.get("provider")
+    api_format = normalize_api_format(value.get("api_format"), provider)
     model = value.get("model")
     permission_mode = value.get("permission_mode")
-    if provider in {"anthropic", "openai"}:
-        config.llm.provider = str(provider)
+    config.llm.api_format = api_format
+    config.llm.provider = provider_for_api_format(api_format)
     if isinstance(model, str) and model:
         config.llm.default_model = model
         # 让客户端显式保存的模型优先于 .env 里的 KAMA_LLM_DEFAULT_MODEL 默认值
@@ -229,17 +255,35 @@ def _apply_client_settings(config: SztuConfig) -> None:
     # 免 key 标志持久化：重启后仍能正确识别 Zen 等免 key 端点，避免泄漏环境里的通用 key
     if isinstance(value.get("keyless"), bool):
         config.llm.keyless = value["keyless"]
+    for name in ("context_window", "max_output_tokens", "max_retries"):
+        field_value = value.get(name)
+        if isinstance(field_value, int):
+            setattr(config.llm, name, field_value)
+    for name in ("temperature", "top_p", "timeout_s"):
+        field_value = value.get(name)
+        if isinstance(field_value, (int, float)) and not isinstance(field_value, bool):
+            setattr(config.llm, name, float(field_value))
+    if isinstance(value.get("reasoning_effort"), str):
+        config.llm.reasoning_effort = value["reasoning_effort"]
+    if isinstance(value.get("cache_control"), bool):
+        config.llm.cache_control = value["cache_control"]
 
 
 def load_model_profiles() -> tuple[list[dict[str, Any]], str]:
     value = _read_client_settings()
     profiles = value.get("models")
-    return (
-        [item for item in profiles if isinstance(item, dict)]
-        if isinstance(profiles, list)
-        else [],
-        str(value.get("active_model_id", "") or ""),
-    )
+    normalized: list[dict[str, Any]] = []
+    if isinstance(profiles, list):
+        for item in profiles:
+            if not isinstance(item, dict):
+                continue
+            profile = dict(item)
+            profile["api_format"] = normalize_api_format(
+                profile.get("api_format"), profile.get("provider")
+            )
+            profile["provider"] = provider_for_api_format(profile["api_format"])
+            normalized.append(profile)
+    return normalized, str(value.get("active_model_id", "") or "")
 
 
 def save_client_settings(
@@ -256,12 +300,21 @@ def save_client_settings(
     value.update(
         {
             "provider": config.llm.provider,
+            "api_format": config.llm.api_format,
             "model": config.llm.default_model,
             "permission_mode": config.permission.mode,
             "base_url": config.llm.base_url,
             "api_key": config.llm.api_key,
             "api_key_env": config.llm.api_key_env,
             "keyless": config.llm.keyless,
+            "context_window": config.llm.context_window,
+            "max_output_tokens": config.llm.max_output_tokens,
+            "temperature": config.llm.temperature,
+            "top_p": config.llm.top_p,
+            "reasoning_effort": config.llm.reasoning_effort,
+            "timeout_s": config.llm.timeout_s,
+            "max_retries": config.llm.max_retries,
+            "cache_control": config.llm.cache_control,
         }
     )
     if models is not None:
@@ -407,8 +460,15 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         unknown_llm: set[str] = set(llm.keys()) - {
             "default_model",
             "provider",
+            "api_format",
             "router",
             "context_window",
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "reasoning_effort",
+            "timeout_s",
+            "max_retries",
             "cache_control",
         }
         if unknown_llm:
@@ -425,6 +485,17 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     "Config error: llm.provider must be 'anthropic' or 'openai'"
                 )
             config.llm.provider = val
+            if "api_format" not in llm:
+                config.llm.api_format = normalize_api_format(None, val)
+        if "api_format" in llm:
+            val = llm["api_format"]
+            if not isinstance(val, str) or val not in API_FORMATS:
+                raise SystemExit(
+                    "Config error: llm.api_format must be 'openai_chat_completions', "
+                    "'anthropic_messages', or 'openai_responses'"
+                )
+            config.llm.api_format = val
+            config.llm.provider = provider_for_api_format(val)
         if "router" in llm:
             val = llm["router"]
             if not isinstance(val, str):
@@ -435,6 +506,31 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, int) or val <= 0:
                 raise SystemExit("Config error: llm.context_window must be a positive integer")
             config.llm.context_window = val
+        for name in ("max_output_tokens", "max_retries"):
+            if name not in llm:
+                continue
+            val = llm[name]
+            minimum = 1 if name == "max_output_tokens" else 0
+            if not isinstance(val, int) or val < minimum:
+                raise SystemExit(f"Config error: llm.{name} must be an integer >= {minimum}")
+            setattr(config.llm, name, val)
+        for name in ("temperature", "top_p"):
+            if name not in llm:
+                continue
+            val = llm[name]
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or not 0 <= val <= 1:
+                raise SystemExit(f"Config error: llm.{name} must be between 0 and 1")
+            setattr(config.llm, name, float(val))
+        if "reasoning_effort" in llm:
+            val = llm["reasoning_effort"]
+            if val not in {"", "low", "medium", "high", "xhigh", "max"}:
+                raise SystemExit("Config error: llm.reasoning_effort is invalid")
+            config.llm.reasoning_effort = str(val)
+        if "timeout_s" in llm:
+            val = llm["timeout_s"]
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or val <= 0:
+                raise SystemExit("Config error: llm.timeout_s must be a positive number")
+            config.llm.timeout_s = float(val)
         if "cache_control" in llm:
             val = llm["cache_control"]
             if not isinstance(val, bool):
@@ -716,6 +812,18 @@ def _apply_env(config: SztuConfig) -> None:
                     f" got: {llm_provider!r}"
                 )
         config.llm.provider = llm_provider
+        if os.environ.get("SZTU_LLM_API_FORMAT") is None:
+            config.llm.api_format = normalize_api_format(None, llm_provider)
+
+    llm_api_format = os.environ.get("SZTU_LLM_API_FORMAT")
+    if llm_api_format is not None:
+        if llm_api_format not in API_FORMATS:
+            raise SystemExit(
+                "Config error: SZTU_LLM_API_FORMAT must be a supported API format, "
+                f"got: {llm_api_format!r}"
+            )
+        config.llm.api_format = llm_api_format
+        config.llm.provider = provider_for_api_format(llm_api_format)
 
     # SZTU_* is the supported name. Keep the original KAMA name so existing
     # project .env files remain valid while migrating to the SztuCode prefix.
@@ -776,6 +884,54 @@ def _apply_env(config: SztuConfig) -> None:
     llm_cache_control = os.environ.get("SZTU_LLM_CACHE_CONTROL")
     if llm_cache_control is not None:
         config.llm.cache_control = llm_cache_control.lower() not in ("0", "false", "no")
+
+    for env_name, attr, minimum in (
+        ("SZTU_LLM_MAX_OUTPUT_TOKENS", "max_output_tokens", 1),
+        ("SZTU_LLM_MAX_RETRIES", "max_retries", 0),
+    ):
+        raw = os.environ.get(env_name)
+        if raw is None:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            raise SystemExit(f"Config error: {env_name} must be an integer, got: {raw!r}")
+        if value < minimum:
+            raise SystemExit(f"Config error: {env_name} must be >= {minimum}, got: {raw!r}")
+        setattr(config.llm, attr, value)
+
+    for env_name, attr in (
+        ("SZTU_LLM_TEMPERATURE", "temperature"),
+        ("SZTU_LLM_TOP_P", "top_p"),
+    ):
+        raw = os.environ.get(env_name)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            raise SystemExit(f"Config error: {env_name} must be a number, got: {raw!r}")
+        if not 0 <= value <= 1:
+            raise SystemExit(f"Config error: {env_name} must be between 0 and 1")
+        setattr(config.llm, attr, value)
+
+    reasoning_effort = os.environ.get("SZTU_LLM_REASONING_EFFORT")
+    if reasoning_effort is not None:
+        if reasoning_effort not in {"", "low", "medium", "high", "xhigh", "max"}:
+            raise SystemExit("Config error: SZTU_LLM_REASONING_EFFORT is invalid")
+        config.llm.reasoning_effort = reasoning_effort
+
+    timeout_raw = os.environ.get("SZTU_LLM_TIMEOUT_S")
+    if timeout_raw is not None:
+        try:
+            timeout = float(timeout_raw)
+        except ValueError:
+            raise SystemExit(
+                f"Config error: SZTU_LLM_TIMEOUT_S must be a number, got: {timeout_raw!r}"
+            )
+        if timeout <= 0:
+            raise SystemExit("Config error: SZTU_LLM_TIMEOUT_S must be positive")
+        config.llm.timeout_s = timeout
 
     compact_threshold = os.environ.get("SZTU_COMPACT_THRESHOLD")
     if compact_threshold is not None:

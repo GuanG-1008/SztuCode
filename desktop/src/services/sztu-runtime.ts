@@ -29,11 +29,17 @@ export type Session = {
 };
 export type RunStats = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number };
 export type SessionHistory = { messages: unknown[]; run_stats: Record<string, RunStats> };
-export type RuntimeSettings = { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
+export type ApiFormat = "openai_chat_completions" | "anthropic_messages" | "openai_responses";
+export type ModelRequestSettings = {
+  api_format: ApiFormat; context_window: number; max_output_tokens: number;
+  temperature: number | null; top_p: number | null; reasoning_effort: "" | "low" | "medium" | "high" | "xhigh" | "max";
+  timeout_s: number; max_retries: number; cache_control: boolean;
+};
+export type RuntimeSettings = ModelRequestSettings & { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
 export type RuntimeSettingsUpdate = Partial<RuntimeSettings> & { api_key?: string };
-export type ProviderStatus = { api_key_configured: boolean; ready_for_next_run: boolean; skills: Array<{ name: string; description: string }>; mcp_servers: Array<{ name: string; status: string; tool_count?: number }> };
-export type ModelProfile = { id: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; has_api_key: boolean; is_current: boolean; builtin: boolean };
-export type ModelProfileInput = { id?: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; api_key?: string };
+export type ProviderStatus = { provider: "anthropic" | "openai"; api_format: ApiFormat; model: string; api_key_configured: boolean; ready_for_next_run: boolean; skills: Array<{ name: string; description: string }>; mcp_servers: Array<{ name: string; status: string; tool_count?: number }> };
+export type ModelProfile = ModelRequestSettings & { id: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; has_api_key: boolean; is_current: boolean; builtin: boolean };
+export type ModelProfileInput = ModelRequestSettings & { id?: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; api_key?: string; keyless?: boolean };
 
 const client = new IpcClient();
 let subscribed = false;
@@ -139,8 +145,8 @@ export async function sessionHistory(sessionId: string): Promise<SessionHistory>
   };
 }
 
-export async function sendPrompt(sessionId: string, message: string, images: ImageBlock[] = []): Promise<string> {
-  const result = await client.request("session.send_message", { session_id: sessionId, content: message, images });
+export async function sendPrompt(sessionId: string, message: string, images: ImageBlock[] = [], clientMessageId?: string): Promise<string> {
+  const result = await client.request("session.send_message", { session_id: sessionId, content: message, images, client_message_id: clientMessageId });
   return String(result.run_id ?? "");
 }
 
@@ -295,6 +301,11 @@ export async function selectModelProfile(modelId: string): Promise<{ settings: R
 export async function deleteModelProfile(modelId: string): Promise<ModelProfile[]> {
   const result = await client.request("provider.model_delete", { model_id: modelId });
   return (result.models as ModelProfile[] | undefined) ?? [];
+}
+
+export type ModelTestResult = { success: boolean; elapsed_ms: number; input_tokens: number; output_tokens: number; error?: string | null };
+export async function testModelProfile(input: Omit<ModelProfileInput, "id" | "name">): Promise<ModelTestResult> {
+  return await client.request("provider.model_test", input) as ModelTestResult;
 }
 
 export async function respondPermission(toolUseId: string, decision: "allow_once" | "always_allow" | "deny_once" | "always_deny"): Promise<void> {
