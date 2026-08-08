@@ -1,0 +1,130 @@
+<script setup lang="ts">
+// 会话区右上角的小浮窗：展示任务待办进度、产物数量与项目上下文，整体缩小
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Check, Circle, ListChecks, LoaderCircle, PackageOpen } from "@lucide/vue";
+import { listChanges, type ChangeSummary } from "../../services/sztu-runtime";
+import type { TimelineStep } from "../timeline/types";
+
+const props = defineProps<{
+  workspaceId?: string | null;
+  runId?: string | null;
+  steps?: TimelineStep[];
+  attachments?: string[];
+  workspaceName?: string;
+  workspacePath?: string;
+}>();
+
+const open = ref(false);
+const changes = ref<ChangeSummary[]>([]);
+const loading = ref(false);
+const rootEl = ref<HTMLElement | null>(null);
+
+// 最后一个含计划步骤的 plan 作为当前待办计划
+const plan = computed(() => [...(props.steps ?? [])].reverse().find((step) => step.plan?.length)?.plan ?? []);
+const completed = computed(() => plan.value.filter((item) => item.status === "completed").length);
+const progress = computed(() => (plan.value.length ? Math.round((completed.value / plan.value.length) * 100) : 0));
+// 待办列表最多展示前 6 条，保持浮窗小巧
+const visiblePlan = computed(() => plan.value.slice(0, 6));
+
+// 已用技能聚合去重
+const usedSkills = computed(() => [...new Map((props.steps ?? []).flatMap((step) => step.skills ?? []).map((skill) => [skill.name, skill])).values()]);
+
+// 拉取当前 run 的变更文件列表，用于产物计数
+async function loadChanges() {
+  if (!props.workspaceId) { changes.value = []; return; }
+  loading.value = true;
+  try { changes.value = await listChanges(props.workspaceId, props.runId); }
+  catch { changes.value = []; }
+  finally { loading.value = false; }
+}
+
+// 打开浮窗时刷新产物计数
+async function toggle() {
+  open.value = !open.value;
+  if (open.value && props.workspaceId) await loadChanges();
+}
+
+// 点击浮窗外部关闭
+function onPointerDown(event: PointerEvent) {
+  if (!open.value || !rootEl.value) return;
+  if (!rootEl.value.contains(event.target as Node)) open.value = false;
+}
+// Esc 关闭浮窗
+function onKeyDown(event: KeyboardEvent) {
+  if (event.key === "Escape" && open.value) open.value = false;
+}
+
+// 会话或工作区切换时重置浮窗状态并预加载产物
+watch(
+  () => [props.workspaceId, props.runId],
+  () => { open.value = false; void loadChanges(); },
+);
+
+onMounted(() => {
+  document.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("keydown", onKeyDown);
+  void loadChanges();
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", onPointerDown);
+  document.removeEventListener("keydown", onKeyDown);
+});
+</script>
+
+<template>
+  <div ref="rootEl" class="task-summary-popup" :class="{ open }">
+    <button
+      type="button"
+      class="task-summary-popup__trigger"
+      title="任务摘要"
+      aria-label="任务摘要"
+      :aria-expanded="open"
+      @click="toggle"
+    >
+      <ListChecks :size="16" />
+      <span v-if="plan.length" class="task-summary-popup__badge">{{ progress }}%</span>
+    </button>
+
+    <section v-if="open" class="task-summary-popup__panel" role="dialog" aria-label="任务摘要">
+      <header class="task-summary-popup__head">
+        <b>任务摘要</b>
+        <small v-if="workspaceName">{{ workspaceName }}</small>
+      </header>
+
+      <div v-if="plan.length" class="task-summary-popup__row">
+        <div class="task-summary-popup__label">待办进度</div>
+        <div class="task-summary-popup__progress">
+          <span class="task-summary-popup__progress-bar"><i :style="{ width: progress + '%' }" /></span>
+          <em>{{ completed }}/{{ plan.length }} · {{ progress }}%</em>
+        </div>
+        <ul class="task-summary-popup__plan">
+          <li v-for="item in visiblePlan" :key="item.id" :class="'task-summary-popup__plan-' + item.status">
+            <Check v-if="item.status === 'completed'" :size="11" />
+            <LoaderCircle v-else-if="item.status === 'in_progress'" class="spin" :size="11" />
+            <Circle v-else :size="11" />
+            <span>{{ item.subject }}</span>
+          </li>
+          <li v-if="plan.length > visiblePlan.length" class="task-summary-popup__plan-more">另有 {{ plan.length - visiblePlan.length }} 项待办…</li>
+        </ul>
+      </div>
+      <p v-else class="task-summary-popup__empty">暂无计划，等待任务开始。</p>
+
+      <div class="task-summary-popup__row">
+        <div class="task-summary-popup__label">任务产物</div>
+        <div class="task-summary-popup__meta">
+          <PackageOpen :size="12" />
+          <span v-if="loading">加载中…</span>
+          <span v-else>文件变更 {{ changes.length }} · 附件 {{ attachments?.length ?? 0 }}</span>
+        </div>
+      </div>
+
+      <div v-if="usedSkills.length || workspacePath" class="task-summary-popup__row">
+        <div class="task-summary-popup__label">参考信息</div>
+        <div class="task-summary-popup__meta">
+          <span v-if="workspacePath" class="task-summary-popup__path" :title="workspacePath">{{ workspacePath }}</span>
+          <span v-if="usedSkills.length">已用技能 {{ usedSkills.length }} 项</span>
+        </div>
+      </div>
+    </section>
+  </div>
+</template>

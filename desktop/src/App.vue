@@ -9,6 +9,7 @@ import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
+import TaskSummaryPopup from "./components/Inspector/TaskSummaryPopup.vue";
 import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
 import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
@@ -1493,6 +1494,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
                 <div class="work-header__tools">
                   <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
+                  <TaskSummaryPopup :workspace-id="activeWorkspace?.workspace_id ?? null" :run-id="active?.latest_run_id ?? null" :steps="orderedTimeline" :attachments="attachedFiles.map((item) => item.path)" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" />
                   <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
                 </div>
               </header>

@@ -6,6 +6,24 @@ from pydantic import BaseModel, Discriminator, Field
 
 from sztu_code.core.session.model import SessionMode, SessionStatus
 
+ApiFormat = Literal[
+    "openai_chat_completions",
+    "anthropic_messages",
+    "openai_responses",
+]
+ReasoningEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+
+
+class ModelRequestSettings(BaseModel):
+    max_output_tokens: int = Field(default=8192, ge=1, le=128000)
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    reasoning_effort: ReasoningEffort = ""
+    timeout_s: float = Field(default=120.0, gt=0, le=600)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    context_window: int = Field(default=0, ge=0, le=10_000_000)
+    cache_control: bool = True
+
 
 class PingCommand(BaseModel):
     type: Literal["core.ping"] = "core.ping"
@@ -371,8 +389,9 @@ class PermissionSetModeResult(BaseModel):
     error: str | None = None
 
 
-class SettingsSnapshot(BaseModel):
+class SettingsSnapshot(ModelRequestSettings):
     provider: Literal["anthropic", "openai"]
+    api_format: ApiFormat = "anthropic_messages"
     model: str
     router: str
     permission_mode: Literal["normal", "accept_edits", "plan", "auto"]
@@ -392,15 +411,24 @@ class SettingsGetResult(BaseModel):
 class SettingsUpdateCommand(BaseModel):
     type: Literal["settings.update"] = "settings.update"
     provider: Literal["anthropic", "openai"] | None = None
+    api_format: ApiFormat | None = None
     model: str | None = Field(default=None, min_length=1, max_length=200)
     base_url: str | None = Field(default=None, max_length=2000)
     api_key: str | None = Field(default=None, min_length=1, max_length=4000)
     permission_mode: Literal["normal", "accept_edits", "plan", "auto"] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=128000)
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    reasoning_effort: ReasoningEffort | None = None
+    timeout_s: float | None = Field(default=None, gt=0, le=600)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    context_window: int | None = Field(default=None, ge=0, le=10_000_000)
+    cache_control: bool | None = None
 
 
 class SettingsUpdateResult(BaseModel):
     settings: SettingsSnapshot
-    updated: list[Literal["provider", "model", "base_url", "api_key", "permission_mode"]]
+    updated: list[str]
 
 
 class ProviderStatusCommand(BaseModel):
@@ -409,6 +437,7 @@ class ProviderStatusCommand(BaseModel):
 
 class ProviderStatusResult(BaseModel):
     provider: Literal["anthropic", "openai"]
+    api_format: ApiFormat = "anthropic_messages"
     model: str
     api_key_configured: bool
     custom_endpoint_configured: bool
@@ -444,11 +473,12 @@ class ProviderCcswitchApplyResult(BaseModel):
     updated: list[Literal["provider", "model", "base_url"]]
 
 
-class ModelProfileSummary(BaseModel):
+class ModelProfileSummary(ModelRequestSettings):
     id: str
     name: str
     vendor: str
     provider: Literal["anthropic", "openai"]
+    api_format: ApiFormat = "anthropic_messages"
     model: str
     base_url: str = ""
     has_api_key: bool
@@ -464,15 +494,20 @@ class ModelProfileListResult(BaseModel):
     models: list[ModelProfileSummary]
 
 
-class ModelProfileSaveCommand(BaseModel):
+class ModelProfileProbe(ModelRequestSettings):
+    vendor: str = Field(default="Custom", min_length=1, max_length=100)
+    provider: Literal["anthropic", "openai"] | None = None
+    api_format: ApiFormat = "anthropic_messages"
+    model: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(default="", max_length=2000)
+    api_key: str | None = Field(default=None, max_length=4000)
+    keyless: bool = False
+
+
+class ModelProfileSaveCommand(ModelProfileProbe):
     type: Literal["provider.model_save"] = "provider.model_save"
     id: str | None = Field(default=None, max_length=100)
     name: str = Field(min_length=1, max_length=100)
-    vendor: str = Field(min_length=1, max_length=100)
-    provider: Literal["anthropic", "openai"]
-    model: str = Field(min_length=1, max_length=200)
-    base_url: str = Field(default="", max_length=2000)
-    api_key: str | None = Field(default=None, min_length=1, max_length=4000)
 
 
 class ModelProfileSaveResult(BaseModel):
@@ -497,6 +532,40 @@ class ModelProfileDeleteCommand(BaseModel):
 
 class ModelProfileDeleteResult(BaseModel):
     models: list[ModelProfileSummary]
+
+
+class ModelTestCommand(ModelProfileProbe):
+    type: Literal["provider.model_test"] = "provider.model_test"
+
+
+class ModelTestResult(BaseModel):
+    success: bool
+    api_format: ApiFormat
+    model: str
+    elapsed_ms: float
+    time_to_first_token_ms: float | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    error: str | None = None
+
+
+class ModelBenchmarkCommand(ModelProfileProbe):
+    type: Literal["provider.model_benchmark"] = "provider.model_benchmark"
+    samples: int = Field(default=3, ge=1, le=10)
+
+
+class ModelBenchmarkResult(BaseModel):
+    api_format: ApiFormat
+    model: str
+    samples: int
+    successful: int
+    failed: int
+    min_ms: float | None = None
+    median_ms: float | None = None
+    p95_ms: float | None = None
+    max_ms: float | None = None
+    average_ttft_ms: float | None = None
+    errors: list[str] = Field(default_factory=list)
 
 
 class SessionCompactCommand(BaseModel):
@@ -552,6 +621,8 @@ Command = Annotated[
     | ModelProfileSaveCommand
     | ModelProfileSelectCommand
     | ModelProfileDeleteCommand
+    | ModelTestCommand
+    | ModelBenchmarkCommand
     | SessionCompactCommand,
     Discriminator("type"),
 ]

@@ -934,12 +934,22 @@
 .model-api-key-label > button:hover { color: #234b82; text-decoration: underline; text-underline-offset: 2px; }
 .model-editor-fields input, .model-editor-fields select { width: 100%; height: 35px; padding: 0 8px; color: #2e3338; background: #fff; border: 1px solid #d8dbde; border-radius: 5px; outline: 0; font-size: 12px; }
 .model-editor-fields input:focus, .model-editor-fields select:focus { border-color: #92989e; box-shadow: 0 0 0 3px #2429300c; }
+.model-advanced-toggle { display: flex; height: 34px; align-items: center; gap: 7px; padding: 0 8px; color: #555b63; background: #f1f2f3; border: 1px solid #d8dbde; border-radius: 5px; font-size: 11px; text-align: left; }
+.model-advanced-toggle svg:last-child { margin-left: auto; transition: transform 140ms ease; }
+.model-advanced-toggle[aria-expanded="true"] svg:last-child { transform: rotate(180deg); }
+.model-request-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 11px; background: #f5f6f6; border: 1px solid #e1e3e5; border-radius: 5px; }
+.model-request-fields label { display: grid; gap: 5px; color: #636970; font-size: 10px; }
+.model-request-fields input, .model-request-fields select { width: 100%; height: 32px; min-width: 0; padding: 0 8px; color: #2e3338; background: #fff; border: 1px solid #d8dbde; border-radius: 5px; font-size: 11px; }
+.model-request-fields .model-cache-toggle { display: flex; grid-column: 1 / -1; align-items: center; gap: 7px; color: #444a51; font-size: 11px; }
+.model-cache-toggle input { width: 14px; height: 14px; accent-color: #34383d; }
 .model-editor-fields label > div { position: relative; }
 .model-editor-fields label > div input { padding-right: 34px; }
 .model-editor-fields label > div button { position: absolute; top: 3px; right: 3px; display: grid; width: 27px; height: 27px; padding: 0; place-items: center; color: #747a81; background: transparent; border-radius: 4px; }
 .model-editor-error { margin: 0; padding: 0 16px 10px; color: #a74343; background: #fafafa; font-size: 11px; }
+.model-editor-success { margin: 0; padding: 0 16px 10px; color: #287044; background: #fafafa; font-size: 11px; }
 .model-editor > footer { display: flex; justify-content: flex-end; gap: 7px; padding: 10px 14px; border-top: 1px solid #e2e4e6; }
 .model-editor > footer button { min-width: 62px; height: 32px; padding: 0 11px; color: #555b62; background: #eceeef; border-radius: 6px; font-size: 12px; }
+.model-editor > footer button:not(.primary) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 .model-editor > footer button.primary { color: #fff; background: #34383d; }
 .model-editor > footer button:disabled { opacity: .42; }
 .permission-confirm { width: min(420px, 100%); overflow: hidden; color: #272b31; background: #fff; border-radius: 12px; box-shadow: 0 24px 70px #10131845; animation: confirm-dialog-in 160ms ease-out; }

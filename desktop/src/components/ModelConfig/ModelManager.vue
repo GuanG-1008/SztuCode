@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { Check, ChevronDown, ExternalLink, Eye, EyeOff, Plus, Trash2, X } from "@lucide/vue";
+import { Check, ChevronDown, ExternalLink, Eye, EyeOff, LoaderCircle, Play, Plus, Settings2, Trash2, X } from "@lucide/vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, onMounted, ref } from "vue";
 import {
-  deleteModelProfile, getProviderStatus, listModelProfiles, saveModelProfile, selectModelProfile,
+  deleteModelProfile, getProviderStatus, listModelProfiles, saveModelProfile, selectModelProfile, testModelProfile,
   type ModelProfile, type ProviderStatus, type RuntimeSettings,
 } from "../../services/sztu-runtime";
 import { logoForVendor, modelVendors, type ModelVendor } from "./model-vendors";
+import type { ApiFormat } from "../../services/sztu-runtime";
 
 const emit = defineEmits<{
   close: [];
@@ -21,7 +22,13 @@ const editorOpen = ref(false);
 const selectedVendor = ref<ModelVendor | null>(null);
 const name = ref(""); const model = ref(""); const baseUrl = ref(""); const apiKey = ref("");
 const provider = ref<"anthropic" | "openai">("anthropic");
+const apiFormat = ref<ApiFormat>("anthropic_messages");
+const advancedOpen = ref(false);
+const maxOutputTokens = ref(8192); const temperature = ref<number | null>(null); const topP = ref<number | null>(null);
+const reasoningEffort = ref<"" | "low" | "medium" | "high" | "xhigh" | "max">("");
+const timeoutS = ref(120); const maxRetries = ref(2); const contextWindow = ref(0); const cacheControl = ref(true);
 const showKey = ref(false); const saving = ref(false); const error = ref("");
+const testing = ref(false); const testResult = ref("");
 const canSave = computed(() => Boolean(selectedVendor.value && name.value.trim() && model.value.trim() && apiKey.value.trim()));
 
 async function refresh() {
@@ -29,8 +36,8 @@ async function refresh() {
   try { models.value = await listModelProfiles(); }
   catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
 }
-function beginAdd() { editorOpen.value = true; selectedVendor.value = null; name.value = ""; model.value = ""; baseUrl.value = ""; apiKey.value = ""; error.value = ""; }
-function chooseVendor(item: ModelVendor) { selectedVendor.value = item; name.value = item.name; provider.value = item.provider; baseUrl.value = item.baseUrl; }
+function beginAdd() { editorOpen.value = true; selectedVendor.value = null; name.value = ""; model.value = ""; baseUrl.value = ""; apiKey.value = ""; apiFormat.value = "anthropic_messages"; maxOutputTokens.value = 8192; temperature.value = null; topP.value = null; reasoningEffort.value = ""; timeoutS.value = 120; maxRetries.value = 2; contextWindow.value = 0; cacheControl.value = true; advancedOpen.value = false; error.value = ""; }
+function chooseVendor(item: ModelVendor) { selectedVendor.value = item; name.value = item.name; provider.value = item.provider; apiFormat.value = item.provider === "openai" ? "openai_chat_completions" : "anthropic_messages"; baseUrl.value = item.baseUrl; }
 async function getApiKey() {
   const url = selectedVendor.value?.apiKeyUrl;
   if (!url) return;
@@ -47,10 +54,20 @@ async function save() {
   if (baseUrl.value && !/^https?:\/\//i.test(baseUrl.value)) { error.value = "API 地址需要以 http:// 或 https:// 开头"; return; }
   saving.value = true; error.value = "";
   try {
-    const result = await saveModelProfile({ name: name.value.trim(), vendor: selectedVendor.value.name, provider: provider.value, model: model.value.trim(), base_url: baseUrl.value.trim(), api_key: apiKey.value.trim() });
+    const result = await saveModelProfile({ name: name.value.trim(), vendor: selectedVendor.value.name, provider: provider.value, api_format: apiFormat.value, model: model.value.trim(), base_url: baseUrl.value.trim(), api_key: apiKey.value.trim(), max_output_tokens: maxOutputTokens.value, temperature: temperature.value, top_p: topP.value, reasoning_effort: reasoningEffort.value, timeout_s: timeoutS.value, max_retries: maxRetries.value, context_window: contextWindow.value, cache_control: cacheControl.value });
     models.value = result.models; emit("updated", result.settings, await getProviderStatus()); editorOpen.value = false;
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
   finally { saving.value = false; }
+}
+async function testConnection() {
+  if (!canSave.value || !selectedVendor.value) return;
+  testing.value = true; error.value = ""; testResult.value = "";
+  try {
+    const result = await testModelProfile({ vendor: selectedVendor.value.name, provider: provider.value, api_format: apiFormat.value, model: model.value.trim(), base_url: baseUrl.value.trim(), api_key: apiKey.value.trim(), max_output_tokens: maxOutputTokens.value, temperature: temperature.value, top_p: topP.value, reasoning_effort: reasoningEffort.value, timeout_s: timeoutS.value, max_retries: maxRetries.value, context_window: contextWindow.value, cache_control: cacheControl.value });
+    if (!result.success) throw new Error(result.error || "连接失败");
+    testResult.value = `连接成功 · ${Math.round(result.elapsed_ms)} ms`;
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  finally { testing.value = false; }
 }
 async function remove(item: ModelProfile) { if (item.is_current) return; models.value = await deleteModelProfile(item.id); }
 // 点击开关把该模型设为当前使用；已是当前模型则忽略
@@ -90,13 +107,24 @@ onMounted(() => { void refresh(); });
         </div>
         <div v-if="selectedVendor" class="model-editor-fields">
           <label><span>配置名称</span><input v-model="name" placeholder="例如 DeepSeek V3" /></label>
-          <label><span>接口类型</span><select v-model="provider"><option value="anthropic">Anthropic</option><option value="openai">OpenAI 兼容</option></select></label>
+          <label><span>接口类型</span><select v-model="apiFormat" @change="provider = apiFormat === 'anthropic_messages' ? 'anthropic' : 'openai'"><option value="anthropic_messages">Anthropic Messages</option><option value="openai_chat_completions">OpenAI Chat Completions</option></select></label>
           <label><span>模型 ID</span><input v-model="model" placeholder="例如 deepseek-chat" /></label>
           <label><span>API 地址</span><input v-model="baseUrl" placeholder="留空使用服务商默认地址" /></label>
           <label class="wide"><span class="model-api-key-label"><span>API Key</span><button v-if="selectedVendor.apiKeyUrl" type="button" aria-label="获取 API 密钥" @click="getApiKey">获取 API 密钥<ExternalLink :size="12" /></button></span><div><input v-model="apiKey" :type="showKey ? 'text' : 'password'" placeholder="输入 API Key" /><button type="button" :aria-label="showKey ? '隐藏 API Key' : '显示 API Key'" @click="showKey = !showKey"><EyeOff v-if="showKey" :size="15" /><Eye v-else :size="15" /></button></div></label>
+          <button type="button" class="model-advanced-toggle wide" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen"><Settings2 :size="14" />请求参数<ChevronDown :size="14" /></button>
+          <div v-if="advancedOpen" class="model-request-fields wide">
+            <label><span>最大输出 Token</span><input v-model.number="maxOutputTokens" type="number" min="1" max="128000" /></label>
+            <label><span>超时（秒）</span><input v-model.number="timeoutS" type="number" min="1" max="600" /></label>
+            <label><span>重试次数</span><input v-model.number="maxRetries" type="number" min="0" max="10" /></label>
+            <label><span>上下文窗口（0 自动）</span><input v-model.number="contextWindow" type="number" min="0" /></label>
+            <label><span>Temperature（留空默认）</span><input v-model.number="temperature" type="number" min="0" max="1" step="0.1" /></label>
+            <label><span>Top P（留空默认）</span><input v-model.number="topP" type="number" min="0" max="1" step="0.1" /></label>
+            <label><span>推理强度</span><select v-model="reasoningEffort"><option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">很高</option><option value="max">最高</option></select></label>
+            <label class="model-cache-toggle"><input v-model="cacheControl" type="checkbox" />启用提示词缓存</label>
+          </div>
         </div>
-        <p v-if="error" class="model-editor-error">{{ error }}</p>
-        <footer><button type="button" @click="editorOpen = false">取消</button><button type="button" class="primary" :disabled="!canSave || saving" @click="save">{{ saving ? '保存中' : '提交' }}</button></footer>
+        <p v-if="error" class="model-editor-error">{{ error }}</p><p v-else-if="testResult" class="model-editor-success">{{ testResult }}</p>
+        <footer><button type="button" @click="editorOpen = false">取消</button><button type="button" :disabled="!canSave || testing" @click="testConnection"><LoaderCircle v-if="testing" class="spin" :size="13" /><Play v-else :size="13" />{{ testing ? '测试中…' : '测试连接' }}</button><button type="button" class="primary" :disabled="!canSave || saving" @click="save">{{ saving ? '保存中' : '提交' }}</button></footer>
       </section>
     </div>
   </section>

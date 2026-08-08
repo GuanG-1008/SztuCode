@@ -256,6 +256,12 @@ class OpenAIProvider:
         client: Any = None,
         *,
         context_window: int = 0,
+        max_output_tokens: int = 8192,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        reasoning_effort: str = "",
+        timeout_s: float = 120.0,
+        max_retries: int = 2,
         cache_control: bool = True,
     ) -> None:
         base_url = os.environ.get("OPENAI_BASE_URL")
@@ -268,7 +274,11 @@ class OpenAIProvider:
             api_key = os.environ.get("OPENAI_API_KEY") or ""
             if not api_key and not base_url:
                 raise SystemExit("OPENAI_API_KEY not set (或设置 OPENAI_BASE_URL 使用免 key 端点)")
-            client_kwargs: dict[str, Any] = {"api_key": api_key or "keyless-placeholder"}
+            client_kwargs: dict[str, Any] = {
+                "api_key": api_key or "keyless-placeholder",
+                "timeout": timeout_s,
+                "max_retries": max_retries,
+            }
             if base_url:
                 client_kwargs["base_url"] = base_url
             client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
@@ -281,6 +291,10 @@ class OpenAIProvider:
         self._model = model
         self._text_tool_history = is_campus_deepseek
         self._context_window_override = context_window
+        self._max_output_tokens = max_output_tokens
+        self._temperature = temperature
+        self._top_p = top_p
+        self._reasoning_effort = reasoning_effort
         self._cache_control = cache_control
 
     # 流式调用 OpenAI 兼容 API，逐 token 发布事件并返回 LlmResponse；网络中断时自动重试
@@ -327,7 +341,15 @@ class OpenAIProvider:
                     "model": self._model,
                     "messages": openai_msgs,
                     "stream": True,
+                    "stream_options": {"include_usage": True},
+                    "max_completion_tokens": self._max_output_tokens,
                 }
+                if self._temperature is not None:
+                    kwargs["temperature"] = self._temperature
+                if self._top_p is not None:
+                    kwargs["top_p"] = self._top_p
+                if self._reasoning_effort:
+                    kwargs["reasoning_effort"] = self._reasoning_effort
                 if tools:
                     kwargs["tools"] = tools
 

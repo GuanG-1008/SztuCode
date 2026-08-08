@@ -86,13 +86,30 @@ def _now() -> str:
 
 class AnthropicProvider:
     # 初始化 Anthropic 客户端；client 可在测试时注入以跳过 API key 检查
-    def __init__(self, model: str, client: Any = None, *, context_window: int = 0) -> None:
+    def __init__(
+        self,
+        model: str,
+        client: Any = None,
+        *,
+        context_window: int = 0,
+        max_output_tokens: int = 8192,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        reasoning_effort: str = "",
+        timeout_s: float = 120.0,
+        max_retries: int = 2,
+        cache_control: bool = True,
+    ) -> None:
         if client is None:
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             if not api_key:
                 raise SystemExit("ANTHROPIC_API_KEY not set")
             base_url = os.environ.get("ANTHROPIC_BASE_URL")
-            kwargs: dict[str, Any] = {"api_key": api_key}
+            kwargs: dict[str, Any] = {
+                "api_key": api_key,
+                "timeout": timeout_s,
+                "max_retries": max_retries,
+            }
             if base_url:
                 kwargs["base_url"] = base_url
             self._client: Any = anthropic.AsyncAnthropic(**kwargs)
@@ -100,6 +117,11 @@ class AnthropicProvider:
             self._client = client
         self._model = model
         self._context_window_override = context_window
+        self._max_output_tokens = max_output_tokens
+        self._temperature = temperature
+        self._top_p = top_p
+        self._reasoning_effort = reasoning_effort
+        self._cache_control = cache_control
 
     # 流式调用 Anthropic API，逐 token 发布事件并返回 LlmResponse；网络中断时自动重试
     async def chat(
@@ -116,32 +138,40 @@ class AnthropicProvider:
             LlmModelSelectedEvent(run_id=run_id, model=self._model, strategy="static", ts=_now())
         )
 
-        system_blocks: list[dict[str, object]] = [
-            {
-                "type": "text",
-                "text": system or _SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
+        system_block: dict[str, object] = {
+            "type": "text",
+            "text": system or _SYSTEM_PROMPT,
+        }
+        if self._cache_control:
+            system_block["cache_control"] = {"type": "ephemeral"}
+        system_blocks: list[dict[str, object]] = [system_block]
 
         tools: list[dict[str, object]] = list(tool_schemas)
-        if tools:
+        if self._cache_control and tools:
             last = dict(tools[-1])
             last["cache_control"] = {"type": "ephemeral"}
             tools = tools[:-1] + [last]
 
         # 扫描消息列表，在摘要确认消息上放置 cache_control 断点
         # 使 [system + summary_user + summary_ack] 前缀可被 API 缓存
-        _annotate_cache_control(messages)
+        if self._cache_control:
+            _annotate_cache_control(messages)
 
         kwargs: dict[str, object] = {
             "model": self._model,
-            "max_tokens": 8192,
+            "max_tokens": self._max_output_tokens,
             "system": system_blocks,
             "messages": messages,
         }
         if tools:
             kwargs["tools"] = tools
+        if self._temperature is not None:
+            kwargs["temperature"] = self._temperature
+        if self._top_p is not None:
+            kwargs["top_p"] = self._top_p
+        if self._reasoning_effort:
+            kwargs["thinking"] = {"type": "adaptive"}
+            kwargs["output_config"] = {"effort": self._reasoning_effort}
 
         text_parts: list[str] = []
         final_message: Any = None
