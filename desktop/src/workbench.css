@@ -37,7 +37,7 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   flex: 1 1 auto;
 }
 
@@ -79,6 +79,151 @@
   width: min(735px, calc(100% - 48px));
   overflow: visible;
 }
+
+/* 会话区底部常驻的迷你 diff 预览条：位于消息流与输入框之间，展示最近完成 run 的改动汇总 */
+.bottom-diff-preview {
+  z-index: 5;
+  width: min(735px, calc(100% - 48px));
+  margin: 0 auto 8px;
+  overflow: hidden;
+  border: 1px solid #dfe3e6;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgb(28 36 44 / 6%);
+}
+
+.bottom-diff-preview__bar {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  background: #fbfcfc;
+  color: #3d444c;
+  font: 12px/1.4 inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bottom-diff-preview__bar:hover { background: #f5f7f8; }
+.bottom-diff-preview__bar b { font-weight: 620; white-space: nowrap; }
+
+.bottom-diff-preview__icon {
+  display: grid;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 6px;
+  background: #e8f1fb;
+  color: #176fd1;
+}
+
+.bottom-diff-preview__loading { color: #92979d; font-size: 11px; }
+
+.bottom-diff-preview__totals {
+  display: inline-flex;
+  gap: 6px;
+  font: 11px/1 Consolas, monospace;
+}
+.bottom-diff-preview__totals em { font-style: normal; }
+.bottom-diff-preview__totals .add { color: #1a7f37; }
+.bottom-diff-preview__totals .del { color: #cf222e; }
+
+.bottom-diff-preview__actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.bottom-diff-preview__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: 1px solid #d9dcdf;
+  border-radius: 7px;
+  background: #fff;
+  color: #4b525c;
+  font-size: 11px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.bottom-diff-preview__action:hover:not(:disabled) { border-color: #b8bec5; color: #2b3037; }
+.bottom-diff-preview__action:disabled { opacity: .5; cursor: default; }
+
+.bottom-diff-preview__chevron { flex: none; color: #767b81; }
+
+.bottom-diff-preview__drawer {
+  display: grid;
+  grid-template-columns: minmax(150px, 250px) minmax(0, 1fr);
+  border-top: 1px solid #eceeef;
+}
+
+.bottom-diff-preview__files {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border-right: 1px solid #eceeef;
+  background: #fafbfb;
+}
+
+.bottom-diff-preview__file {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #3d444c;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.bottom-diff-preview__file:hover { background: #eef2f5; }
+.bottom-diff-preview__file.selected { background: #e8f1fb; color: #176fd1; }
+
+.bottom-diff-preview__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bottom-diff-preview__nums {
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  font: 10px/1 Consolas, monospace;
+}
+.bottom-diff-preview__nums em { font-style: normal; }
+.bottom-diff-preview__nums .add { color: #1a7f37; }
+.bottom-diff-preview__nums .del { color: #cf222e; }
+
+.bottom-diff-preview__diff {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.bottom-diff-preview__hint { color: #92979d; font-size: 11px; }
+.bottom-diff-preview__hint.error { color: #cf222e; }
+
+.bottom-diff-preview__code {
+  font: 11px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  white-space: pre;
+}
+.bottom-diff-preview__code > span { display: block; }
+.bottom-diff-preview__add { color: #1a7f37; background: #f0fff4; }
+.bottom-diff-preview__del { color: #cf222e; background: #fff5f5; }
+.bottom-diff-preview__hunk { color: #176fd1; }
+.bottom-diff-preview__meta { color: #92979d; }
 
 .layout-divider {
   position: relative;
@@ -213,22 +358,6 @@
 .work-record__body .tool-call-group__trigger, .work-record__body .thinking-panel button { font-size: 12px; }
 .work-record__body .timeline-activity { margin: 7px 0; box-shadow: none; }
 
-.change-review-card { margin: 12px 0 0; border-color: #e2e3e5; border-radius: 12px; box-shadow: 0 1px 2px rgb(20 30 45 / 3%); }
-.change-review-card__head { min-height: 60px; padding: 10px 14px; }
-.change-review-card__icon { width: 34px; height: 34px; color: #68717a; background: #f1f2f3; border-radius: 9px; }
-.change-review-card__title { gap: 9px; }
-.change-review-card__title b { font-size: 16px; font-weight: 600; }
-.change-review-card__totals { gap: 5px; margin-top: 3px; }
-.change-review-card__totals em { font-size: 13px; }
-.change-review-card__revert { color: #25282d; background: transparent; border: 0; font-size: 13px; }
-.change-review-card__review { color: #25282d; background: #fff; border-color: #e1e3e5; font-size: 13px; }
-.change-review-card__files { padding: 5px 0 7px; }
-.change-review-card__files li { padding: 7px 16px; font-size: 14px; }
-.change-review-card__path { font-family: inherit; }
-.change-review-card__nums { gap: 5px; }
-.change-review-card__nums em { font-size: 13px; }
-.change-review-card__expand { padding: 8px 16px; font-size: 13px; }
-
 .task-intro { align-items: flex-start; max-width: 600px; padding-top: 34px; }
 .task-intro b { display: block; margin: 1px 0 6px; color: #292d31; font-size: 16px; }
 .task-intro p { max-width: 520px; margin: 0; color: #737980; font-size: 13px; line-height: 1.75; }
@@ -252,12 +381,14 @@
   .task-stream { width: calc(100% - 24px); }
   .task-stream > .execution-timeline { padding: 0 4px; }
   .task-conversation > .kimi-composer { width: calc(100% - 32px); }
+  .bottom-diff-preview { width: calc(100% - 32px); }
+  .bottom-diff-preview__drawer { grid-template-columns: 1fr; }
+  .bottom-diff-preview__files { max-height: 120px; border-right: 0; border-bottom: 1px solid #eceeef; }
+  .bottom-diff-preview__diff { max-height: 180px; }
   .timeline-user-message { max-width: 90%; }
   .timeline-assistant { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .evidence-strip { display: grid; grid-template-columns: 1fr; }
   .evidence-item { width: 100%; }
-  .change-review-card__head { align-items: flex-start; }
-  .change-review-card__actions button { width: 30px; height: 30px; padding: 0; justify-content: center; font-size: 0; }
 }
 
 /* Visual-test host for the real conversation components. */

@@ -89,7 +89,6 @@ p {
   .featured-skill,
   .skill-card,
   .capability-grid,
-  .change-review-card,
   .task-intro
 ) :is(h2, h3, b, strong) {
   font-size: var(--text-item-title);
@@ -221,7 +220,6 @@ pre,
 kbd,
 samp,
 .preview-path,
-.change-review-card__path,
 .usage-line {
   font-family: var(--font-code);
 }

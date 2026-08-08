@@ -15,6 +15,7 @@ import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
 import DiffReview from "./components/Diff/DiffReview.vue";
+import BottomDiffPreview from "./components/Diff/BottomDiffPreview.vue";
 import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
@@ -158,6 +159,28 @@ const filteredLauncherWorkspaces = computed(() => {
   return activeWorkspaces.value.filter((item) => `${item.name} ${item.path}`.toLocaleLowerCase().includes(query)).slice(0, 8);
 });
 const orderedTimeline = computed(() => [...timeline.value.values()].sort((left, right) => left.step - right.step));
+// 聚合出最近一个已完成且有文件改动的 run，供会话区底部常驻 diff 预览使用（分组规则与时间线一致：新用户消息开新组，组内最后一步非末态视为运行中）
+const latestChangedRun = computed(() => {
+  let group: { runId?: string; paths: string[]; lastStatus?: TimelineStep["status"] } | null = null;
+  let latest: { runId: string; paths: string[] } | null = null;
+  for (const item of orderedTimeline.value) {
+    if (item.userMessage) group = { runId: undefined, paths: [], lastStatus: undefined };
+    if (!group) group = { runId: undefined, paths: [], lastStatus: undefined };
+    if (item.runId) group.runId = item.runId;
+    group.lastStatus = item.status;
+    for (const entry of item.changes ?? []) {
+      for (const path of entry.paths) {
+        if (!group.paths.includes(path)) group.paths.push(path);
+      }
+    }
+    const running =
+      group.lastStatus === "thinking" || group.lastStatus === "acting" || group.lastStatus === "observing";
+    if (!running && group.runId && group.paths.length) {
+      latest = { runId: group.runId, paths: [...group.paths] };
+    }
+  }
+  return latest;
+});
 const permissionModeLabel = computed(() => ({
   normal: "标准审批",
   plan: "计划模式",
@@ -1510,6 +1533,14 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>开启「{{ activeWorkspace?.name || '当前项目' }}」的构筑之路。</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
+                <BottomDiffPreview
+                  v-if="latestChangedRun"
+                  :workspace-id="activeWorkspace?.workspace_id ?? null"
+                  :run-id="latestChangedRun.runId"
+                  :paths="latestChangedRun.paths"
+                  @reverted="handleReverted"
+                  @review="handleReview"
+                />
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '汝之所想，皆以言成'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
