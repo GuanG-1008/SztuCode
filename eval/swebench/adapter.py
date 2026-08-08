@@ -96,6 +96,43 @@ class RunResult:
 
 
 @dataclass
+class _RunEventCollector:
+    """Scope daemon events to the run currently evaluated by the adapter."""
+
+    run_id: str | None = None
+    events: list[dict[str, Any]] = field(default_factory=list)
+    finished_event: dict[str, Any] | None = None
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
+    _pending_events: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self, event: dict[str, Any]) -> None:
+        event_run_id = str(event.get("run_id", ""))
+        if not event_run_id:
+            return
+        if self.run_id is None:
+            self._pending_events.append(event)
+            return
+        self._accept(event, event_run_id)
+
+    def set_run_id(self, run_id: str) -> None:
+        normalized_run_id = str(run_id)
+        if not run_id or not normalized_run_id:
+            raise ValueError("run_id must be non-empty")
+        self.run_id = normalized_run_id
+        pending_events, self._pending_events = self._pending_events, []
+        for event in pending_events:
+            self._accept(event, str(event.get("run_id", "")))
+
+    def _accept(self, event: dict[str, Any], event_run_id: str) -> None:
+        if event_run_id != self.run_id:
+            return
+        self.events.append(event)
+        if event.get("type") == "run.finished":
+            self.finished_event = event
+            self.finished.set()
+
+
+@dataclass
 class TokenUsage:
     """一次运行的 LLM token 用量汇总"""
     input_tokens: int = 0
@@ -203,19 +240,13 @@ async def run_instance_via_rpc(
     client = SocketClient(host, port)
 
     # 收集的事件
-    collected_events: list[dict] = []
-    run_finished = asyncio.Event()
-    run_status = {"status": "", "steps": 0, "run_id": ""}
+    collector = _RunEventCollector()
 
     async def on_event(event: dict[str, Any]) -> None:
+        collector.record(event)
         event_type = event.get("type", "")
-        collected_events.append(event)
-
-        if event_type == "run.finished":
-            run_status["status"] = event.get("status", "unknown")
-            run_status["steps"] = event.get("steps", 0)
-            run_status["run_id"] = event.get("run_id", "")
-            run_finished.set()
+        if collector.run_id != str(event.get("run_id", "")):
+            return
 
         # 日志关键事件
         if event_type == "step.started":
@@ -235,6 +266,7 @@ async def run_instance_via_rpc(
         return result
 
     # 启动事件循环
+    client.on_event(on_event)
     loop_task = asyncio.create_task(client.run_event_loop())
 
     try:
@@ -270,12 +302,16 @@ async def run_instance_via_rpc(
             "session_id": session_id,
             "content": prompt,
         })
-        run_id = send_result.get("run_id", "")
+        raw_run_id = send_result.get("run_id")
+        if not raw_run_id:
+            raise ValueError("daemon returned an empty run_id")
+        run_id = str(raw_run_id)
+        collector.set_run_id(run_id)
         logger.info(f"  Run started: {run_id}")
 
         # 6. 等待 run.finished
         try:
-            await asyncio.wait_for(run_finished.wait(), timeout=timeout)
+            await asyncio.wait_for(collector.finished.wait(), timeout=timeout)
         except TimeoutError:
             result.error = f"Timeout after {timeout}s"
             # 尝试取消
@@ -284,19 +320,20 @@ async def run_instance_via_rpc(
             except Exception:
                 pass
 
-        result.status = run_status["status"]
-        result.steps = run_status["steps"]
-        result.events_log = collected_events
+        finished_event = collector.finished_event or {}
+        result.status = finished_event.get("status", "")
+        result.steps = finished_event.get("steps", 0)
+        result.events_log = collector.events
 
         # 提取 token usage（顶层字段，缺失按 0）
-        usage = summarize_token_usage(collected_events)
+        usage = summarize_token_usage(collector.events)
         result.input_tokens = usage.input_tokens
         result.output_tokens = usage.output_tokens
         result.cache_read_input_tokens = usage.cache_read_input_tokens
         result.cache_creation_input_tokens = usage.cache_creation_input_tokens
 
         # 7. 获取 diff
-        if run_status["status"] in ("success", "max_steps", "cancelled"):
+        if result.status in ("success", "max_steps", "cancelled"):
             try:
                 diff_result = await client.send_command("change.diff", {
                     "workspace_id": workspace_id,
