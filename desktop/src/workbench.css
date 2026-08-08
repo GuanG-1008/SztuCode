@@ -154,13 +154,10 @@
 .timeline-assistant { grid-template-columns: minmax(0, 1fr); gap: 0; }
 
 .turn-status { display: flex; min-height: 23px; align-items: center; gap: 6px; margin-bottom: 5px; }
-.turn-status b { color: #34383d; font-size: 12px; font-weight: 620; }
+.turn-status b { color: #767779; font-size: 12px; font-weight: 620; }
 .turn-status span { color: #92979d; font: 10px/1 Consolas, monospace; }
 .turn-status .turn-status__usage { min-width: 0; color: #747b83; font-size: 11px; white-space: nowrap; }
-.turn-status.running b { color: #2867a7; }
-.turn-status.waiting b { color: #80601d; }
-.turn-status.failed b { color: #a23b41; }
-.turn-status.verified b { color: #2f7549; }
+.turn-status.running b, .turn-status.waiting b, .turn-status.failed b, .turn-status.verified b { color: #767779; }
 .turn-status.running::after { width: 46px; height: 2px; margin-left: 2px; background: linear-gradient(90deg, #2b78bf 0 35%, #d9e8f5 35% 100%); background-size: 130% 100%; animation: task-progress 1.3s ease-in-out infinite alternate; content: ""; }
 
 .turn-result { margin: 0 0 8px; }
@@ -188,33 +185,45 @@
 .work-record__body .tool-call-group__trigger, .work-record__body .thinking-panel button { font-size: 12px; }
 .work-record__body .timeline-activity { margin: 7px 0; box-shadow: none; }
 
-.change-review-card { margin: 10px 0 0; border-color: #dfe4e7; box-shadow: none; }
-.change-review-card__head { min-height: 43px; padding: 8px 10px; }
-.change-review-card__icon { color: #32658f; background: #edf4f8; }
-.change-review-card__revert { color: #a24147; background: #fff; border: 1px solid #ead7d9; }
-.change-review-card__review { color: #fff; background: #2c668f; border-color: #2c668f; }
+.change-review-card { margin: 12px 0 0; border-color: #e2e3e5; border-radius: 12px; box-shadow: 0 1px 2px rgb(20 30 45 / 3%); }
+.change-review-card__head { min-height: 60px; padding: 10px 14px; }
+.change-review-card__icon { width: 34px; height: 34px; color: #68717a; background: #f1f2f3; border-radius: 9px; }
+.change-review-card__title { gap: 9px; }
+.change-review-card__title b { font-size: 16px; font-weight: 600; }
+.change-review-card__totals { gap: 5px; margin-top: 3px; }
+.change-review-card__totals em { font-size: 13px; }
+.change-review-card__revert { color: #25282d; background: transparent; border: 0; font-size: 13px; }
+.change-review-card__review { color: #25282d; background: #fff; border-color: #e1e3e5; font-size: 13px; }
+.change-review-card__files { padding: 5px 0 7px; }
+.change-review-card__files li { padding: 7px 16px; font-size: 14px; }
+.change-review-card__path { font-family: inherit; }
+.change-review-card__nums { gap: 5px; }
+.change-review-card__nums em { font-size: 13px; }
+.change-review-card__expand { padding: 8px 16px; font-size: 13px; }
 
 .task-intro { align-items: flex-start; max-width: 600px; padding-top: 34px; }
 .task-intro b { display: block; margin: 1px 0 6px; color: #292d31; font-size: 16px; }
 .task-intro p { max-width: 520px; margin: 0; color: #737980; font-size: 13px; line-height: 1.75; }
 .task-conversation > .kimi-composer { border-radius: 16px; border-color: #d9dcdf; box-shadow: 0 7px 24px rgb(28 36 44 / 8%); }
-.task-conversation > .kimi-composer textarea { min-height: 72px; }
-.task-conversation > .kimi-composer textarea { font-size: 15px; }
+.task-conversation > .kimi-composer textarea { min-height: 52px; padding: 10px 12px 5px; }
+.task-conversation > .kimi-composer textarea { font-size: 13px; line-height: 1.45; }
 .task-conversation > .kimi-composer .round,
 .task-conversation > .kimi-composer .permission { border: 0; background: transparent; border-radius: 8px; }
-.task-conversation > .kimi-composer .round { width: 32px; height: 32px; }
+.task-conversation > .kimi-composer .round { width: 25px; height: 25px; }
 .task-conversation > .kimi-composer .round:hover,
 .task-conversation > .kimi-composer .round:focus-visible,
 .task-conversation > .kimi-composer .permission:hover,
 .task-conversation > .kimi-composer .permission:focus-visible { background: #f3f5f5; }
-.task-conversation > .kimi-composer .send { width: 32px; height: 32px; border-radius: 9px; }
+.task-conversation > .kimi-composer .send { width: 25px; height: 25px; border-radius: 7px; font-size: 15px; }
+.task-conversation > .kimi-composer .composer-toolbar { gap: 4px; padding: 0 7px 5px; }
+.task-conversation > .kimi-composer .permission { padding: 5px 7px; font-size: 11px; }
 
 @keyframes task-progress { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
 @media (max-width: 620px) {
   .task-stream { width: calc(100% - 24px); }
   .task-stream > .execution-timeline { padding: 0 4px; }
-  .task-conversation > .kimi-composer { width: calc(100% - 24px); }
+  .task-conversation > .kimi-composer { width: calc(100% - 32px); }
   .timeline-user-message { max-width: 90%; }
   .timeline-assistant { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .evidence-strip { display: grid; grid-template-columns: 1fr; }
@@ -698,13 +707,13 @@
 .launcher-heading h1 > span { width: 0; overflow: hidden; border-right: 2px solid #25282c; animation: launcher-title-type 1.35s steps(18, end) 180ms forwards, launcher-title-caret 450ms step-end 3 180ms forwards; }
 @keyframes launcher-title-type { to { width: 100%; } }
 @keyframes launcher-title-caret { 50%, 100% { border-color: transparent; } }
-.task-launcher .landing-composer { width: 100%; min-width: 0; margin: 0; overflow: visible; background: #f5f5f5; border: 0; border-radius: 13px; box-shadow: none; }
+.task-launcher .landing-composer { width: min(640px, 100%); min-width: 0; margin: 0 auto; overflow: visible; background: #f5f5f5; border: 0; border-radius: 12px; box-shadow: none; }
 .task-launcher .landing-composer:focus-within { border-color: transparent; box-shadow: none; }
-.task-launcher .landing-composer textarea { min-height: 126px; padding: 17px 18px 10px; background: #fff; border: 1px solid #d7d9dc; border-radius: 13px; box-shadow: 0 4px 14px #18202b0c; font-size: 14px; }
+.task-launcher .landing-composer textarea { min-height: 88px; padding: 12px 14px 8px; background: #fff; border: 1px solid #d7d9dc; border-radius: 12px; box-shadow: 0 4px 14px #18202b0c; font-size: 13px; line-height: 1.45; }
 .task-launcher .landing-composer:focus-within textarea { border-color: #aeb3ba; box-shadow: 0 5px 18px #18202b12; }
-.task-launcher .launcher-toolbar { min-height: 47px; margin-top: -47px; padding: 3px 9px 6px 11px; }
-.task-launcher .round { width: 32px; height: 32px; background: transparent; border: 0; border-radius: 7px; }
-.task-launcher .permission { padding: 7px 8px; background: transparent; border: 0; border-radius: 7px; font-size: 12px; }
+.task-launcher .launcher-toolbar { min-height: 36px; margin-top: -36px; padding: 2px 7px 4px 9px; }
+.task-launcher .round { width: 25px; height: 25px; background: transparent; border: 0; border-radius: 6px; }
+.task-launcher .permission { padding: 5px 6px; background: transparent; border: 0; border-radius: 6px; font-size: 11px; }
 .task-launcher .round:hover, .task-launcher .permission:hover { background: #f2f3f4; }
 .launcher-permission-control { position: relative; flex: 0 0 auto; }
 .launcher-popover { position: absolute; z-index: 40; color: #292d33; background: #fff; border: 1px solid #dedfe1; border-radius: 10px; box-shadow: 0 14px 38px #20252d1c, 0 2px 8px #20252d0d; animation: launcher-popover-in 120ms ease-out; }
@@ -767,10 +776,10 @@
 .model-config-popover > footer button:disabled { opacity: .48; }
 .model-config-popover > footer .spin { animation: spin 1s linear infinite; }
 .task-launcher .model-config-fields { grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); }
-.task-launcher .send { width: 32px; height: 32px; font-size: 17px; }
+.task-launcher .send { width: 25px; height: 25px; font-size: 15px; }
 .model-management-actions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
 .ccswitch-import-btn.primary { display: flex; align-items: center; gap: 5px; color: #fff; background: #303338; border-color: #303338; }
-.task-launcher button.composer-project { display: flex; align-items: center; gap: 6px; min-height: 43px; padding: 5px 16px 7px; color: #555c65; border-radius: 0 0 13px 13px; font-size: 12px; }
+.task-launcher button.composer-project { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 14px 6px; color: #555c65; border-radius: 0 0 12px 12px; font-size: 11px; }
 .task-launcher button.composer-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-launcher button.composer-project:hover { color: #252a31; background: #efefef; }
 .launcher-project-control { position: relative; }
