@@ -13,13 +13,18 @@ const summary = computed(() => failed.value ? `${props.calls.length} 项操作�
 
 <template>
   <section v-if="calls.length" class="tool-call-group" :class="{ open }">
-    <button class="tool-call-group__trigger" @click="open = !open">
+    <button
+      type="button"
+      class="tool-call-group__trigger"
+      :aria-expanded="open"
+      @click="open = !open"
+    >
       <span class="tool-call-group__icon"><TerminalSquare :size="14" /></span>
       <span>{{ summary }}</span>
       <LoaderCircle v-if="running" class="spin" :size="14" />
       <ChevronDown :size="14" />
     </button>
-    <div v-if="open" class="tool-call-group__body">
+    <div v-if="open" class="tool-call-group__body" aria-label="操作记录">
       <ToolCallCard v-for="call in calls" :key="call.id" :call="call" />
     </div>
   </section>

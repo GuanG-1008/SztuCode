@@ -192,6 +192,17 @@ export async function openWorkspace(path: string): Promise<Workspace> {
   return result.workspace as Workspace;
 }
 
+export type WorkspaceStatus = { branch: string | null; is_git_repository: boolean; changed_file_count: number };
+
+export async function workspaceStatus(workspaceId: string): Promise<WorkspaceStatus> {
+  const result = await client.request("workspace.status", { workspace_id: workspaceId });
+  return {
+    branch: typeof result.branch === "string" ? result.branch : null,
+    is_git_repository: Boolean(result.is_git_repository),
+    changed_file_count: Number(result.changed_file_count ?? 0),
+  };
+}
+
 export async function workspaceTree(workspaceId: string, path = "", maxDepth = 1): Promise<WorkspaceNode[]> {
   const result = await client.request("workspace.tree", { workspace_id: workspaceId, path, max_depth: maxDepth, max_entries: 1_000 });
   return (result.nodes as WorkspaceNode[] | undefined) ?? [];

@@ -25,6 +25,13 @@ test("task conversation prioritizes outcome, evidence, and optional work records
   await historyToggles.first().click();
   await historyToggles.nth(1).click();
   await expect(page.locator(".turn-history")).toHaveCount(2);
+  const groupedOperations = page.locator(".tool-call-group");
+  await expect(groupedOperations).toHaveCount(1);
+  const groupedOperationsTrigger = groupedOperations.getByRole("button").first();
+  await expect(groupedOperationsTrigger).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("button", { name: /session expired/ })).toHaveCount(0);
+  await groupedOperationsTrigger.click();
+  await expect(groupedOperationsTrigger).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByText("我先检查了登录拦截器和路由守卫的职责边界。", { exact: true })).toBeVisible();
   await expect(verifiedLabels).toHaveCount(2);
   await expect(page.locator(".evidence-strip")).toHaveCount(2);
