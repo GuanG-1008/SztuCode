@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -13,6 +16,7 @@ _SRC_ROOT = Path(__file__).resolve().parents[2]
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
+from eval.swebench import adapter as swebench_adapter  # noqa: E402
 from eval.swebench.adapter import (  # noqa: E402
     RunResult,
     SWEbenchInstance,
@@ -308,3 +312,198 @@ def test_consumes_lm_usage_event_serialization() -> None:
     assert usage.output_tokens == 7
     assert usage.cache_read_input_tokens == 3
     assert usage.cache_creation_input_tokens == 1
+
+
+# 功能：交错事件只保留当前 run，且其他 run 的完成事件不能唤醒等待
+# 设计：先记录未绑定 run_id 的混合事件，再绑定当前 run 并继续交错记录，验证日志和 token 统计均已隔离
+def test_run_event_collector_filters_interleaved_events() -> None:
+    collector = swebench_adapter._RunEventCollector()
+    collector.record({
+        "type": "run.finished", "run_id": "other", "status": "success", "steps": 99,
+    })
+    collector.record({"type": "step.started", "run_id": "current", "step": 1})
+    collector.record({"type": "llm.usage", "run_id": "other", "input_tokens": 900})
+    collector.record({
+        "type": "tool.call_started", "run_id": "current", "tool_name": "bash",
+    })
+    collector.record({
+        "type": "llm.usage", "run_id": "current", "input_tokens": 12, "output_tokens": 3,
+    })
+
+    collector.set_run_id("current")
+    assert not collector.finished.is_set()
+
+    collector.record({
+        "type": "run.finished", "run_id": "other", "status": "failure", "steps": 100,
+    })
+    assert not collector.finished.is_set()
+
+    collector.record({
+        "type": "run.finished", "run_id": "current", "status": "success", "steps": 2,
+    })
+
+    assert collector.finished.is_set()
+    assert collector.finished_event == {
+        "type": "run.finished", "run_id": "current", "status": "success", "steps": 2,
+    }
+    assert [event["run_id"] for event in collector.events] == ["current"] * 4
+    usage = summarize_token_usage(collector.events)
+    assert usage.input_tokens == 12
+    assert usage.output_tokens == 3
+
+
+# 功能：run_id 返回前到达的当前完成事件不会丢失
+# 设计：缓存当前和其他 run 的完成事件，绑定后只重放当前 run 的事件并立即设置完成信号
+def test_run_event_collector_replays_current_finished_event_after_binding() -> None:
+    collector = swebench_adapter._RunEventCollector()
+    current_finished = {
+        "type": "run.finished", "run_id": "current", "status": "failure", "steps": 4,
+    }
+    collector.record(current_finished)
+    collector.record({
+        "type": "run.finished", "run_id": "other", "status": "success", "steps": 8,
+    })
+
+    assert not collector.finished.is_set()
+    collector.set_run_id("current")
+
+    assert collector.finished.is_set()
+    assert collector.finished_event == current_finished
+    assert collector.events == [current_finished]
+
+
+# 功能：当前 run 的所有终止状态都能结束等待，其他 run 的同名状态不能结束等待
+# 设计：参数化覆盖 SWE-bench 适配器接受的四种 run.finished 状态
+@pytest.mark.parametrize("status", ["success", "failure", "cancelled", "max_steps"])
+def test_run_event_collector_accepts_all_terminal_statuses(status: str) -> None:
+    collector = swebench_adapter._RunEventCollector()
+    collector.set_run_id("current")
+
+    collector.record({
+        "type": "run.finished", "run_id": "other", "status": status, "steps": 8,
+    })
+    assert not collector.finished.is_set()
+
+    collector.record({
+        "type": "run.finished", "run_id": "current", "status": status, "steps": 3,
+    })
+
+    assert collector.finished.is_set()
+    assert collector.finished_event is not None
+    assert collector.finished_event["status"] == status
+    assert collector.finished_event["steps"] == 3
+
+
+# 功能：无法归属 run 的事件不会污染日志，也不会结束当前等待
+# 设计：当前 run 已绑定时记录缺少 run_id 的完成和 token 事件，断言均被忽略
+def test_run_event_collector_ignores_events_without_run_id() -> None:
+    collector = swebench_adapter._RunEventCollector()
+    collector.set_run_id("current")
+
+    collector.record({"type": "run.finished", "status": "success", "steps": 1})
+    collector.record({"type": "llm.usage", "input_tokens": 50})
+
+    assert collector.events == []
+    assert not collector.finished.is_set()
+
+
+# 功能：空的 RPC run_id 不会被转换成可用的字符串 ID
+# 设计：空字符串和 JSON null 都必须拒绝，防止无效 ID 接收其他事件
+@pytest.mark.parametrize("run_id", ["", None])
+def test_run_event_collector_rejects_empty_run_id(run_id: str | None) -> None:
+    collector = swebench_adapter._RunEventCollector()
+
+    with pytest.raises(ValueError, match="run_id must be non-empty"):
+        collector.set_run_id(run_id)  # type: ignore[arg-type]
+
+
+# 功能：RPC 适配器只用当前 run 的完成事件、日志和 token 生成结果
+# 设计：假的 SocketClient 先发送其他 run 的完成事件，返回当前 run_id 后再发送当前事件，全程不连接 daemon 或网络
+@pytest.mark.asyncio
+async def test_run_instance_via_rpc_ignores_other_run_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other_finished = {
+        "type": "run.finished", "run_id": "other", "status": "failure", "steps": 99,
+    }
+    current_events = [
+        {"type": "step.started", "run_id": "current", "step": 1},
+        {
+            "type": "llm.usage",
+            "run_id": "current",
+            "input_tokens": 12,
+            "output_tokens": 3,
+        },
+        {
+            "type": "run.finished",
+            "run_id": "current",
+            "status": "success",
+            "steps": 2,
+        },
+    ]
+
+    class FakeSocketClient:
+        def __init__(self, host: str, port: int) -> None:
+            del host, port
+            self._handler: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+            self._message_sent = asyncio.Event()
+
+        async def connect(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        def on_event(
+            self,
+            handler: Callable[[dict[str, Any]], Awaitable[None]],
+        ) -> None:
+            self._handler = handler
+
+        async def run_event_loop(self) -> None:
+            await self._message_sent.wait()
+            await asyncio.sleep(0.01)
+            assert self._handler is not None
+            for event in current_events:
+                await self._handler(event)
+            await asyncio.Event().wait()
+
+        async def send_command(
+            self,
+            method: str,
+            params: dict[str, Any],
+        ) -> dict[str, Any]:
+            del params
+            if method == "workspace.open":
+                return {"workspace": {"workspace_id": "workspace-1"}}
+            if method == "session.create":
+                return {"session_id": "session-1"}
+            if method == "session.send_message":
+                assert self._handler is not None
+                await self._handler(other_finished)
+                self._message_sent.set()
+                return {"run_id": "current"}
+            if method == "change.diff":
+                return {"diff": "diff --git a/file.py b/file.py\n"}
+            return {"ok": True}
+
+    monkeypatch.setattr(swebench_adapter, "SocketClient", FakeSocketClient)
+    instance = swebench_adapter.SWEbenchInstance(
+        instance_id="owner__repo-1",
+        repo="owner/repo",
+        base_commit="abc123",
+        problem_statement="Fix the failing behavior.",
+    )
+
+    result = await swebench_adapter.run_instance_via_rpc(
+        instance,
+        tmp_path,
+        timeout=1,
+    )
+
+    assert result.status == "success"
+    assert result.steps == 2
+    assert result.events_log == current_events
+    assert result.input_tokens == 12
+    assert result.output_tokens == 3

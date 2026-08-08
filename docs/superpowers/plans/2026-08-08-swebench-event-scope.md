@@ -242,7 +242,7 @@ python -m uv run --offline mypy eval/swebench/adapter.py
 git diff --check
 ```
 
-Expected: adapter changes introduce no new failures; any pre-existing unrelated failure is recorded explicitly. Mypy and diff checks exit with code 0.
+Expected: full unit tests report only the known unrelated Windows path-separator assertion; compare Mypy output with the unchanged `upstream/main` adapter and ensure no new errors are introduced. `git diff --check` exits with code 0.
 
 - [ ] **Step 2: 检查变更范围和工作树**
 
