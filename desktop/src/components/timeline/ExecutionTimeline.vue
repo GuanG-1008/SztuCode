@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { CheckCircle2, ChevronDown, CircleAlert, FileDiff, LoaderCircle, Play, TerminalSquare } from "@lucide/vue";
+import { Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileDiff, LoaderCircle, Play, TerminalSquare } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
 import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
 import ThinkingPanel from "./ThinkingPanel.vue";
@@ -49,9 +49,11 @@ type TurnView = {
 
 const now = ref(Date.now());
 const expandedTurns = ref(new Set<string | number>());
+const copiedTurn = ref<string | number | null>(null);
+let copyTimer: number | undefined;
 let clockTimer: number | undefined;
 onMounted(() => { clockTimer = window.setInterval(() => { now.value = Date.now(); }, 1000); });
-onBeforeUnmount(() => window.clearInterval(clockTimer));
+onBeforeUnmount(() => { window.clearInterval(clockTimer); window.clearTimeout(copyTimer); });
 
 function thinkingTextOf(steps: TimelineStep[]): string {
   return [...new Set(steps.map((step) => step.thinking?.trim()).filter(Boolean))].join("\n\n");
@@ -174,6 +176,13 @@ function toggleTurn(turn: TurnView) {
   if (next.has(turn.key)) next.delete(turn.key);
   else next.add(turn.key);
   expandedTurns.value = next;
+}
+
+async function copyTurnSummary(turn: TurnView) {
+  await navigator.clipboard.writeText(turn.text || turn.summaryText);
+  copiedTurn.value = turn.key;
+  window.clearTimeout(copyTimer);
+  copyTimer = window.setTimeout(() => { copiedTurn.value = null; }, 1600);
 }
 
 function stepText(step: TimelineStep): string {
@@ -368,11 +377,15 @@ const turns = computed<TurnView[]>(() => {
             <b>{{ turn.stateLabel }}</b>
           </div>
 
-          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮耗时和 Token 消耗">
-            <span>{{ formatDuration(turn.runStats.elapsedSeconds) }}</span>
+          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮 Token 消耗与缓存命中">
+            <span>命中缓存 {{ formatTokens(turn.runStats.cacheReadInputTokens) }}</span>
             <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
             <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
             <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
+            <button v-if="turn.text || turn.summaryText" type="button" class="turn-copy" :title="copiedTurn === turn.key ? '已复制' : '复制整段总结'" :aria-label="copiedTurn === turn.key ? '已复制总结' : '复制整段总结'" @click="copyTurnSummary(turn)">
+              <Check v-if="copiedTurn === turn.key" :size="15" :stroke-width="1.8" />
+              <Copy v-else :size="15" :stroke-width="1.8" />
+            </button>
           </div>
 
           <section v-if="isTurnExpanded(turn) && (turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason))" class="evidence-strip" aria-label="验证与变更">

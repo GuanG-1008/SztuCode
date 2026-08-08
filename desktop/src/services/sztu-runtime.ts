@@ -27,7 +27,7 @@ export type Session = {
   archived: boolean; pinned: boolean; workspace_id: string | null; latest_run_id?: string | null;
   total_input_tokens: number; total_output_tokens: number; total_elapsed_s: number;
 };
-export type RunStats = { input_tokens: number; output_tokens: number; elapsed_s: number };
+export type RunStats = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number };
 export type SessionHistory = { messages: unknown[]; run_stats: Record<string, RunStats> };
 export type RuntimeSettings = { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
 export type RuntimeSettingsUpdate = Partial<RuntimeSettings> & { api_key?: string };

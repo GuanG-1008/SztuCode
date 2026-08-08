@@ -181,6 +181,7 @@ class AgentLoop:
             if response.usage is not None:
                 context.total_input_tokens += response.usage.input_tokens
                 context.total_output_tokens += response.usage.output_tokens
+                context.total_cache_read_input_tokens += response.usage.cache_read_input_tokens
 
             # 在写入历史前补齐工具调用标题，确保回放与实时事件使用同一份参数
             for tool_call in response.tool_calls:

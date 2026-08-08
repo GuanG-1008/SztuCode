@@ -209,7 +209,7 @@
 .work-record > summary > svg:last-child { transition: transform 160ms ease; }
 .work-record[open] > summary > svg:last-child { transform: rotate(180deg); }
 .work-record__body { margin: 0 0 3px 7px; padding: 2px 0 3px 17px; border-left: 1px solid #dfe3e5; }
-.work-record__body .tool-call-group__icon { width: 24px; height: 24px; color: #68717a; background: #eef0f2; box-shadow: none; }
+.work-record__body .tool-call-group__icon { width: 24px; height: 24px; color: #767779; background: transparent; box-shadow: none; }
 .work-record__body .tool-call-group__trigger, .work-record__body .thinking-panel button { font-size: 12px; }
 .work-record__body .timeline-activity { margin: 7px 0; box-shadow: none; }
 

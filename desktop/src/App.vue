@@ -111,7 +111,7 @@ const nativeSettingsError = ref("");
 const webBridgeAllowed = ref(false);
 const currentStepByRun = new Map<string, number>();
 const runStepBase = new Map<string, number>(); // 每个 run 的 step 起点偏移，避免跨 run 步号冲突
-const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number }>();
+const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number }>();
 let historyLoadSeq = 0;
 const reviewCtx = ref<ReviewContext | null>(null);
 // 切换会话加载动画：超过 260ms 未返回时显示终端图标动效，避免快加载闪屏
@@ -376,6 +376,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
         runStats: messageRunId && runStats[messageRunId] ? {
           inputTokens: Number(runStats[messageRunId].input_tokens ?? 0),
           outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
+          cacheReadInputTokens: Number(runStats[messageRunId].cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
         } : undefined,
         userMessage: text,
@@ -451,7 +452,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   if (type === "run.started") {
     const messageStep = Math.max(0, ...timeline.value.keys());
     setStep(messageStep || 1, (current) => ({ ...current, status: "thinking", runId, runStartedAt: String(event.ts ?? new Date().toISOString()) }));
-    liveRunUsage.set(runId, { inputTokens: 0, outputTokens: 0 });
+    liveRunUsage.set(runId, { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 });
     return;
   }
   if (type === "step.started") {
@@ -490,8 +491,13 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     const step = stepFor(timelineEvent);
     const inputTokens = Number(event.input_tokens ?? 0);
     const outputTokens = Number(event.output_tokens ?? 0);
-    const previous = liveRunUsage.get(relatedRunId) ?? { inputTokens: 0, outputTokens: 0 };
-    const cumulative = { inputTokens: previous.inputTokens + inputTokens, outputTokens: previous.outputTokens + outputTokens };
+    const cacheReadInputTokens = Number(event.cache_read_input_tokens ?? 0);
+    const previous = liveRunUsage.get(relatedRunId) ?? { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 };
+    const cumulative = {
+      inputTokens: previous.inputTokens + inputTokens,
+      outputTokens: previous.outputTokens + outputTokens,
+      cacheReadInputTokens: previous.cacheReadInputTokens + cacheReadInputTokens,
+    };
     liveRunUsage.set(relatedRunId, cumulative);
     setStep(step, (current) => ({
       ...current,
@@ -640,6 +646,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
         runStats: {
           inputTokens: Number(event.total_input_tokens ?? 0),
           outputTokens: Number(event.total_output_tokens ?? 0),
+          cacheReadInputTokens: Number(event.cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(event.elapsed_s ?? 0),
         },
       } : current);

@@ -11,12 +11,14 @@ SessionMode = Literal["one_shot", "chat"]
 class RunStats:
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0
     elapsed_s: float = 0.0
 
     def to_dict(self) -> dict[str, int | float]:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "cache_read_input_tokens": self.cache_read_input_tokens,
             "elapsed_s": self.elapsed_s,
         }
 
@@ -25,6 +27,7 @@ class RunStats:
         return cls(
             input_tokens=max(0, int(data.get("input_tokens", 0))),
             output_tokens=max(0, int(data.get("output_tokens", 0))),
+            cache_read_input_tokens=max(0, int(data.get("cache_read_input_tokens", 0))),
             elapsed_s=max(0.0, float(data.get("elapsed_s", 0.0))),
         )
 

@@ -54,6 +54,7 @@ class ExecutionContext:
     max_wall_clock_s: int = 0     # 累计墙钟秒数上限；0=不限
     total_input_tokens: int = 0   # 已累计 input tokens（每步 LLM 调用后累加）
     total_output_tokens: int = 0  # 已累计 output tokens
+    total_cache_read_input_tokens: int = 0  # 已累计命中提示词缓存的 input tokens
     started_at: float = 0.0       # run 开始墙钟（time.monotonic()），loop 惰性初始化
     max_budget_usd: float = 0.0   # USD 成本上限（0 = 不限制）
     # --- Claude Code 风格终止/继续系统 ---

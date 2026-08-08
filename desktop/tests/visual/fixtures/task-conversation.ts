@@ -27,7 +27,7 @@ const steps: TimelineStep[] = [
     ],
     thinking: "重复跳转来自请求拦截器和路由守卫同时处理过期状态。保留路由守卫作为唯一跳转入口。",
     finalText: "我修复了登录超时后的重复跳转：请求拦截器现在只负责清理会话，页面跳转统一由路由守卫处理。\n\n同时补充了重复响应与返回登录页两种回归场景。",
-    runStats: { inputTokens: 12840, outputTokens: 1630, elapsedSeconds: 78.4 },
+    runStats: { inputTokens: 12840, outputTokens: 1630, cacheReadInputTokens: 9340, elapsedSeconds: 78.4 },
     plan: [
       { id: 1, subject: "定位重复跳转入口", status: "completed", blocked_by: [] },
       { id: 2, subject: "统一过期会话处理", status: "completed", blocked_by: [1] },
@@ -47,7 +47,7 @@ const steps: TimelineStep[] = [
       { id: "ok", name: "bash", params: { command: "npm test -- auth" }, status: "done", output: "12 tests passed" },
     ],
     finalText: "第一次命令不可用，我已切换到项目中存在的测试入口并完成验证。",
-    runStats: { inputTokens: 4280, outputTokens: 612, elapsedSeconds: 18.7 },
+    runStats: { inputTokens: 4280, outputTokens: 612, cacheReadInputTokens: 3200, elapsedSeconds: 18.7 },
     tests: [{ status: "passed", summary: "认证相关测试 12/12 通过" }],
     outcome: { status: "success" },
   },
@@ -66,7 +66,7 @@ const steps: TimelineStep[] = [
     status: "acting",
     userMessage: "检查剩余的类型错误",
     runStartedAt: new Date(Date.now() - 12_000).toISOString(),
-    runStats: { inputTokens: 2840, outputTokens: 476, elapsedSeconds: 0 },
+    runStats: { inputTokens: 2840, outputTokens: 476, cacheReadInputTokens: 2100, elapsedSeconds: 0 },
     tokens: [],
     toolCalls: [{ id: "search", name: "grep_search", params: { query: "TypeError" }, status: "running" }],
     plan: [

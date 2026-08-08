@@ -11,7 +11,7 @@ test("task conversation prioritizes outcome, evidence, and optional work records
   await expect(resultRegions.nth(0)).toBeVisible();
   const evidenceRegions = page.getByRole("region", { name: "验证与变更" });
   await expect(evidenceRegions).toHaveCount(0);
-  await expect(page.getByText("等待你的授权", { exact: true })).toBeVisible();
+  await expect(page.getByText("等待授权", { exact: true })).toBeVisible();
   await expect(page.getByText("正在项目中定位代码", { exact: true })).toBeVisible();
   await expect(page.getByText("第一次命令不可用，我已切换到项目中存在的测试入口并完成验证。", { exact: true })).toBeVisible();
   await expect(page.getByText("我先检查了登录拦截器和路由守卫的职责边界。", { exact: true })).toHaveCount(0);
@@ -38,6 +38,11 @@ test("task conversation prioritizes outcome, evidence, and optional work records
   const turnTokenTotals = await page.locator(".turn-usage b").allTextContents();
   expect(turnTokenTotals).toHaveLength(2);
   expect(new Set(turnTokenTotals).size).toBe(turnTokenTotals.length);
+  await expect(page.getByText("命中缓存 9.3k", { exact: true })).toBeVisible();
+  const copySummary = page.getByRole("button", { name: "复制整段总结" }).first();
+  await expect(copySummary).toBeVisible();
+  await copySummary.click();
+  await expect(copySummary).toHaveAttribute("aria-label", "已复制总结");
   await expect(page.getByRole("button", { name: /已搜索 session expired/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /已编辑 src\/auth\/session.ts/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /已运行 npm test -- auth/ }).first()).toBeVisible();

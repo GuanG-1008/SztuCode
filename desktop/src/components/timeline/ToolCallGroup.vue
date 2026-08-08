@@ -19,7 +19,7 @@ const summary = computed(() => failed.value ? `${props.calls.length} 项操作�
       :aria-expanded="open"
       @click="open = !open"
     >
-      <span class="tool-call-group__icon"><TerminalSquare :size="14" /></span>
+      <span class="tool-call-group__icon"><TerminalSquare :size="15" /></span>
       <span>{{ summary }}</span>
       <LoaderCircle v-if="running" class="spin" :size="14" />
       <ChevronDown :size="14" />
