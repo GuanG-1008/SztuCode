@@ -181,6 +181,13 @@ const latestChangedRun = computed(() => {
   }
   return latest;
 });
+// 历史会话不会重放 workspace.changed 事件；此时使用会话记录的最近 run
+// 重新查询变更清单，让底部 Diff 在刷新或重新打开任务后仍可恢复。
+const bottomDiffRun = computed(() => latestChangedRun.value ?? (
+  active.value?.latest_run_id
+    ? { runId: active.value.latest_run_id, paths: [] as string[] }
+    : null
+));
 const permissionModeLabel = computed(() => ({
   normal: "标准审批",
   plan: "计划模式",
@@ -199,6 +206,61 @@ function formatSessionUsage(item: Session): string {
 // 对话条目悬停预览：展示计时、分支、项目目录与累计 token
 const sessionPreview = ref<{ task: Session; top: number; left: number } | null>(null);
 const branchCache = ref(new Map<string, string | null>());
+type TaskTitleScrollState = { frame: number; direction: 1 | -1; lastAt: number; pauseUntil: number };
+const taskTitleScrollStates = new WeakMap<HTMLElement, TaskTitleScrollState>();
+
+function stopTaskTitleElementScroll(title: HTMLElement, reset = true) {
+  const state = taskTitleScrollStates.get(title);
+  if (state) cancelAnimationFrame(state.frame);
+  taskTitleScrollStates.delete(title);
+  if (reset) title.scrollLeft = 0;
+}
+
+function startTaskTitleScroll(event: FocusEvent) {
+  const button = event.currentTarget as HTMLElement;
+  const title = button.querySelector<HTMLElement>("[data-auto-scroll-title]");
+  if (!title) return;
+  stopTaskTitleElementScroll(title);
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const maxScroll = title.scrollWidth - title.clientWidth;
+  if (maxScroll <= 1) return;
+  const state: TaskTitleScrollState = {
+    frame: 0,
+    direction: 1,
+    lastAt: performance.now(),
+    pauseUntil: performance.now() + 650,
+  };
+  const tick = (now: number) => {
+    if (!title.isConnected || document.activeElement !== button) {
+      stopTaskTitleElementScroll(title);
+      return;
+    }
+    const elapsed = Math.min(50, now - state.lastAt);
+    state.lastAt = now;
+    if (now >= state.pauseUntil) {
+      title.scrollLeft += state.direction * elapsed * 0.035;
+      if (title.scrollLeft >= maxScroll - 0.5) {
+        title.scrollLeft = maxScroll;
+        state.direction = -1;
+        state.pauseUntil = now + 750;
+      } else if (title.scrollLeft <= 0.5) {
+        title.scrollLeft = 0;
+        state.direction = 1;
+        state.pauseUntil = now + 750;
+      }
+    }
+    state.frame = requestAnimationFrame(tick);
+  };
+  taskTitleScrollStates.set(title, state);
+  state.frame = requestAnimationFrame(tick);
+}
+
+function stopTaskTitleScroll(event: FocusEvent) {
+  const title = (event.currentTarget as HTMLElement).querySelector<HTMLElement>("[data-auto-scroll-title]");
+  if (title) stopTaskTitleElementScroll(title);
+}
+
 function showSessionPreview(task: Session, event: MouseEvent) {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
   sessionPreview.value = { task, top: Math.max(4, Math.min(rect.top, window.innerHeight - 168)), left: Math.min(rect.right + 8, window.innerWidth - 232) };
@@ -331,9 +393,11 @@ function isHiddenHistoryBlock(block: HistoryBlock): boolean {
   const type = String(block.type ?? block.role ?? "").toLowerCase();
   return type === "system" || type === "developer" || type === "system_prompt" || type === "developer_prompt";
 }
-function isInternalProgressMessage(blocks: HistoryBlock[]): boolean {
+function isInternalHistoryMessage(blocks: HistoryBlock[]): boolean {
   const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
-  return /^\[Task progress\]\s+step_\d+/i.test(text);
+  return /^\[Task progress\]\s+step_\d+/i.test(text)
+    || /^This session is being continued from a previous conversation that ran out of context\.[\s\S]*\n\nSummary:\n/i.test(text)
+    || /^Understood, I'll continue from this summary\.$/i.test(text);
 }
 function blockOutput(block: HistoryBlock): string {
   if (typeof block.content === "string") return block.content;
@@ -382,7 +446,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     if (!visibleBlocks.length) continue;
     // Canvas progress summaries are persisted as user messages for the model's
     // context, but they are internal bookkeeping and must not become chat turns.
-    if (isInternalProgressMessage(blocks)) continue;
+    if (isInternalHistoryMessage(blocks)) continue;
     const text = visibleBlocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
     const toolResults = visibleBlocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {
@@ -722,6 +786,7 @@ function beginTask(project: Workspace | null = workspace.value) {
 async function submitTask(content: string, project: Workspace | null = workspace.value, images: ImageBlock[] = []) {
   const trimmed = content.trim();
   if (!trimmed || !connected.value || sending.value) return;
+  const clientMessageId = crypto.randomUUID();
   sending.value = true;
   try {
     if (!activeId.value) {
@@ -735,7 +800,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       page.value = "work";
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(sessionId, trimmed, images);
+      activeRunId.value = await sendPrompt(sessionId, trimmed, images, clientMessageId);
       runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
       await refreshIndex(false);
@@ -743,7 +808,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
       if (active.value?.archived || active.value?.status === "closed") return;
       prompt.value = "";
       const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(activeId.value, trimmed, images);
+      activeRunId.value = await sendPrompt(activeId.value, trimmed, images, clientMessageId);
       runActive.value = true;
       setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
     }
@@ -1418,8 +1483,8 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="normalizedTaskQuery" class="side-section search-results">
           <span class="side-label">搜索结果 <small>{{ visibleSessions.length }}</small></span>
           <div v-for="task in visibleSessions" :key="`search-${task.session_id}`" class="sidebar-session status-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
-            <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-              <i :class="task.status" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ taskStatusLabel(task) }} · {{ formatSessionUsage(task) }}</small></span>
+            <button class="status-task-row" :class="{ active: task.session_id === activeId }" @focus="startTaskTitleScroll" @blur="stopTaskTitleScroll" @click="chooseTask(task.session_id)">
+              <i :class="task.status" /><span><b data-auto-scroll-title>{{ task.title || '未命名任务' }}</b><small>{{ taskStatusLabel(task) }} · {{ formatSessionUsage(task) }}</small></span>
             </button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
@@ -1446,8 +1511,8 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
             <div class="project-task-list" :class="{ collapsed: isProjectCollapsed(item.workspace_id) }">
               <div class="project-task-list__inner">
                 <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
-                  <button class="project-task" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                    <span>{{ task.title || '未命名任务' }}</span>
+                  <button class="project-task" :class="{ active: task.session_id === activeId }" @focus="startTaskTitleScroll" @blur="stopTaskTitleScroll" @click="chooseTask(task.session_id)">
+                    <span data-auto-scroll-title>{{ task.title || '未命名任务' }}</span>
                   </button>
                   <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
                 </div>
@@ -1461,7 +1526,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         <section v-if="temporaryTasks.length && !normalizedTaskQuery" class="side-section temporary-tasks">
           <span class="side-label">临时任务</span>
           <div v-for="task in temporaryTasks" :key="task.session_id" class="sidebar-session conversation-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
-            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><span>{{ task.title || '未命名任务' }}</span></button>
+            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @focus="startTaskTitleScroll" @blur="stopTaskTitleScroll" @click="chooseTask(task.session_id)"><span data-auto-scroll-title>{{ task.title || '未命名任务' }}</span></button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
         </section>
@@ -1517,7 +1582,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
                 <div class="work-header__tools">
                   <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
-                  <TaskSummaryPopup :workspace-id="activeWorkspace?.workspace_id ?? null" :run-id="active?.latest_run_id ?? null" :steps="orderedTimeline" :attachments="attachedFiles.map((item) => item.path)" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" />
+                  <TaskSummaryPopup :workspace-id="activeWorkspace?.workspace_id ?? null" :run-id="active?.latest_run_id ?? null" :steps="orderedTimeline" :attachments="attachedFiles.map((item) => item.path)" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" @review="handleReview" />
                   <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
                 </div>
               </header>
@@ -1534,10 +1599,10 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
                 <BottomDiffPreview
-                  v-if="latestChangedRun"
+                  v-if="bottomDiffRun"
                   :workspace-id="activeWorkspace?.workspace_id ?? null"
-                  :run-id="latestChangedRun.runId"
-                  :paths="latestChangedRun.paths"
+                  :run-id="bottomDiffRun.runId"
+                  :paths="bottomDiffRun.paths"
                   @reverted="handleReverted"
                   @review="handleReview"
                 />
