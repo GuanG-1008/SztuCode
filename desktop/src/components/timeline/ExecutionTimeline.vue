@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { CheckCircle2, ChevronDown, CircleAlert, FileDiff, Play } from "@lucide/vue";
+import { Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileDiff, LoaderCircle, Play, TerminalSquare } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
 import ChangeReviewCard from "../Diff/ChangeReviewCard.vue";
 import ThinkingPanel from "./ThinkingPanel.vue";
 import TokenStream from "./TokenStream.vue";
 import ToolCallCard from "./ToolCallCard.vue";
+import ToolCallGroup from "./ToolCallGroup.vue";
 import PermissionBadge from "./PermissionBadge.vue";
 import type { PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
 
@@ -48,9 +49,11 @@ type TurnView = {
 
 const now = ref(Date.now());
 const expandedTurns = ref(new Set<string | number>());
+const copiedTurn = ref<string | number | null>(null);
+let copyTimer: number | undefined;
 let clockTimer: number | undefined;
 onMounted(() => { clockTimer = window.setInterval(() => { now.value = Date.now(); }, 1000); });
-onBeforeUnmount(() => window.clearInterval(clockTimer));
+onBeforeUnmount(() => { window.clearInterval(clockTimer); window.clearTimeout(copyTimer); });
 
 function thinkingTextOf(steps: TimelineStep[]): string {
   return [...new Set(steps.map((step) => step.thinking?.trim()).filter(Boolean))].join("\n\n");
@@ -157,7 +160,15 @@ function elapsedLabel(turn: TurnView): string {
 }
 
 function isTurnExpanded(turn: TurnView): boolean {
-  return expandedTurns.value.has(turn.key) || turn.state === "running" || turn.state === "waiting";
+  // Full work history is intentionally available only after the run is over.
+  // During execution the conversation stays compact and shows one call summary.
+  return turn.state !== "running" && turn.state !== "waiting" && expandedTurns.value.has(turn.key);
+}
+
+function liveCallSummary(turn: TurnView): string {
+  const failed = turn.allToolCalls.filter((call) => call.status === "failed").length;
+  if (failed) return `运行失败 ${failed} 项操作`;
+  return `已运行 ${turn.allToolCalls.length} 项操作`;
 }
 
 function toggleTurn(turn: TurnView) {
@@ -165,6 +176,13 @@ function toggleTurn(turn: TurnView) {
   if (next.has(turn.key)) next.delete(turn.key);
   else next.add(turn.key);
   expandedTurns.value = next;
+}
+
+async function copyTurnSummary(turn: TurnView) {
+  await navigator.clipboard.writeText(turn.text || turn.summaryText);
+  copiedTurn.value = turn.key;
+  window.clearTimeout(copyTimer);
+  copyTimer = window.setTimeout(() => { copiedTurn.value = null; }, 1600);
 }
 
 function stepText(step: TimelineStep): string {
@@ -182,12 +200,30 @@ function stepHasDetails(step: TimelineStep): boolean {
 
 function orderedEvents(steps: TimelineStep[]): Array<TimelineEvent & { tool?: ToolCallEntry }> {
   const calls = new Map(toolCallsOf(steps).map((call) => [call.id, call]));
-  const events = steps.flatMap((step) => step.events ?? []);
+  const events = steps.flatMap((step) => {
+    if (step.events?.length) return step.events;
+    const fallback: TimelineEvent[] = [];
+    if (step.thinking) fallback.push({ id: `thinking-fallback-${step.step}`, kind: "thinking", text: step.thinking });
+    const text = stepText(step);
+    if (text) fallback.push({ id: `text-fallback-${step.step}`, kind: "text", text });
+    for (const call of step.toolCalls) fallback.push({ id: `tool-fallback-${call.id}`, kind: "tool", toolCallId: call.id });
+    return fallback;
+  });
   return events.map((event) => ({ ...event, tool: event.toolCallId ? calls.get(event.toolCallId) : undefined }));
 }
 
+function isFirstToolEvent(turn: TurnView, event: TimelineEvent): boolean {
+  return turn.events.find((item) => item.kind === "tool" && item.tool)?.id === event.id;
+}
+
+function latestTextOf(events: Array<TimelineEvent & { tool?: ToolCallEntry }>, steps: TimelineStep[]): string {
+  return [...events].reverse().find((event) => event.kind === "text" && event.text?.trim())?.text?.trim()
+    ?? [...steps].reverse().map(stepText).find(Boolean)
+    ?? "";
+}
+
 function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, calls: ToolCallEntry[], text: string) {
-  if (pending) return { state: "waiting" as const, label: "等待你的授权" };
+  if (pending) return { state: "waiting" as const, label: "等待授权" };
   const interruptedOutcome = [...steps].reverse().find((step) => step.outcome?.status === "interrupted")?.outcome;
   if (interruptedOutcome) return { state: "interrupted" as const, label: interruptedLabel(interruptedOutcome.reason), reason: interruptedOutcome.reason };
   const failedOutcome = [...steps].reverse().find((step) => step.outcome?.status === "failed")?.outcome;
@@ -196,12 +232,12 @@ function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, ca
   if (runningCall) return { state: "running" as const, label: actionLabel(runningCall) };
   const last = steps[steps.length - 1];
   if (last && last.status !== "done") {
-    if (last.status === "observing") return { state: "running" as const, label: "正在检查执行结果" };
-    if (last.tokens.length && !last.finalText) return { state: "running" as const, label: "正在整理交付结果" };
-    return { state: "running" as const, label: calls.length ? "正在规划下一步" : "正在理解任务与项目" };
+    if (last.status === "observing") return { state: "running" as const, label: "正在检查" };
+    if (last.tokens.length && !last.finalText) return { state: "running" as const, label: "整理中" };
+    return { state: "running" as const, label: calls.length ? "规划中" : "正在思考" };
   }
   const tests = steps.flatMap((step) => step.tests ?? []);
-  if (tests.some((test) => test.status === "failed")) return { state: "failed" as const, label: "已完成，但验证未通过" };
+  if (tests.some((test) => test.status === "failed")) return { state: "failed" as const, label: "已完成，待验证" };
   if (text && tests.some((test) => test.status === "passed")) return { state: "verified" as const, label: "已完成并验证" };
   return { state: "unverified" as const, label: text ? "已完成，尚未验证" : "工作记录" };
 }
@@ -224,11 +260,11 @@ const turns = computed<TurnView[]>(() => {
     const runStats = [...steps].reverse().find((step) => step.runStats)?.runStats;
     const runStartedAt = steps.find((step) => step.runStartedAt)?.runStartedAt ?? group.userMessageTime;
     const text = steps.map((step) => step.finalText || step.tokens.join("")).filter(Boolean).join("\n\n");
-    const summaryText = [...steps].reverse().map(stepText).find(Boolean) ?? "";
     const allToolCalls = toolCallsOf(steps);
     const thinkingText = thinkingTextOf(steps);
     const aggregatedStep = aggregateStep(steps);
     const events = orderedEvents(steps);
+    const summaryText = latestTextOf(events, steps);
     const pending = steps.find((step) => step.permission?.status === "pending")?.permission;
     const status = stateOf(steps, pending, allToolCalls, text);
     const tests = aggregatedStep.tests ?? [];
@@ -286,6 +322,7 @@ const turns = computed<TurnView[]>(() => {
             class="turn-history-toggle"
             :class="{ expanded: isTurnExpanded(turn) }"
             :aria-expanded="isTurnExpanded(turn)"
+            :disabled="turn.state === 'running' || turn.state === 'waiting'"
             @click="toggleTurn(turn)"
           >
             <span>{{ elapsedLabel(turn) }}</span>
@@ -296,13 +333,30 @@ const turns = computed<TurnView[]>(() => {
             <b>{{ turn.stateLabel }}</b>
           </div>
 
+          <div
+            v-if="(turn.state === 'running' || turn.state === 'waiting') && turn.allToolCalls.length"
+            class="turn-call-summary"
+            :class="{ failed: turn.allToolCalls.some((call) => call.status === 'failed') }"
+            role="status"
+          >
+            <TerminalSquare :size="12" />
+            <span>{{ liveCallSummary(turn) }}</span>
+            <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="12" />
+          </div>
+
           <PermissionBadge v-if="turn.pending" :permission="turn.pending" @decide="$emit('decide', turn.pending?.toolUseId ?? '', $event)" />
 
           <section v-if="isTurnExpanded(turn)" class="turn-history" aria-label="历史输出与调用">
             <template v-for="event in turn.events" :key="event.id">
               <div v-if="event.kind === 'text' && event.text && event.text !== turn.summaryText" class="turn-history-text"><TokenStream :tokens="[]" :final-text="event.text" /></div>
               <ThinkingPanel v-else-if="event.kind === 'thinking' && event.text" :text="event.text" :completed="turn.state !== 'running'" />
-              <div v-else-if="event.kind === 'tool' && event.tool" class="turn-history-actions"><ToolCallCard :call="event.tool" /></div>
+              <div
+                v-else-if="event.kind === 'tool' && event.tool && (turn.allToolCalls.length <= 2 || isFirstToolEvent(turn, event))"
+                class="turn-history-actions"
+              >
+                <ToolCallGroup v-if="turn.allToolCalls.length > 2" :calls="turn.allToolCalls" />
+                <ToolCallCard v-else :call="event.tool" />
+              </div>
             </template>
           </section>
 
@@ -310,26 +364,8 @@ const turns = computed<TurnView[]>(() => {
             <TokenStream :tokens="[]" :final-text="turn.summaryText" />
           </section>
 
-          <div v-if="turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
-            <b>{{ turn.stateLabel }}</b>
-          </div>
-
-          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮耗时和 Token 消耗">
-            <span>{{ formatDuration(turn.runStats.elapsedSeconds) }}</span>
-            <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
-            <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
-            <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
-          </div>
-
-          <section v-if="turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason)" class="evidence-strip" aria-label="验证与变更">
-            <div v-if="turn.passedTests" class="evidence-item passed"><CheckCircle2 :size="15" /><span><b>{{ turn.passedTests }}</b> 项验证通过</span></div>
-            <div v-if="turn.failedTests" class="evidence-item failed"><CircleAlert :size="15" /><span><b>{{ turn.failedTests }}</b> 项验证失败</span></div>
-            <div v-if="turn.changePaths.length" class="evidence-item changed"><FileDiff :size="15" /><span><b>{{ turn.changePaths.length }}</b> 个文件有变更</span></div>
-            <div v-if="turn.state === 'failed' && turn.failureReason" class="evidence-item failed"><CircleAlert :size="15" /><span>{{ turn.failureReason }}</span></div>
-          </section>
-
           <ChangeReviewCard
-            v-if="workspaceId && turn.runId && turn.changePaths.length"
+            v-if="turn.summaryText && workspaceId && turn.runId && turn.changePaths.length"
             :workspace-id="workspaceId"
             :run-id="turn.runId"
             :paths="turn.changePaths"
@@ -337,7 +373,29 @@ const turns = computed<TurnView[]>(() => {
             @review="$emit('review', $event)"
           />
 
-          <button v-if="turn.state === 'interrupted'" class="continue-button" type="button" @click="$emit('continue', turn.runId)">
+          <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
+            <b>{{ turn.stateLabel }}</b>
+          </div>
+
+          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮 Token 消耗与缓存命中">
+            <span>命中缓存 {{ formatTokens(turn.runStats.cacheReadInputTokens) }}</span>
+            <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
+            <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
+            <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
+            <button v-if="turn.text || turn.summaryText" type="button" class="turn-copy" :title="copiedTurn === turn.key ? '已复制' : '复制整段总结'" :aria-label="copiedTurn === turn.key ? '已复制总结' : '复制整段总结'" @click="copyTurnSummary(turn)">
+              <Check v-if="copiedTurn === turn.key" :size="15" :stroke-width="1.8" />
+              <Copy v-else :size="15" :stroke-width="1.8" />
+            </button>
+          </div>
+
+          <section v-if="isTurnExpanded(turn) && (turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason))" class="evidence-strip" aria-label="验证与变更">
+            <div v-if="turn.passedTests" class="evidence-item passed"><CheckCircle2 :size="15" /><span><b>{{ turn.passedTests }}</b> 项验证通过</span></div>
+            <div v-if="turn.failedTests" class="evidence-item failed"><CircleAlert :size="15" /><span><b>{{ turn.failedTests }}</b> 项验证失败</span></div>
+            <div v-if="turn.changePaths.length" class="evidence-item changed"><FileDiff :size="15" /><span><b>{{ turn.changePaths.length }}</b> 个文件有变更</span></div>
+            <div v-if="turn.state === 'failed' && turn.failureReason" class="evidence-item failed"><CircleAlert :size="15" /><span>{{ turn.failureReason }}</span></div>
+          </section>
+
+          <button v-if="isTurnExpanded(turn) && turn.state === 'interrupted'" class="continue-button" type="button" @click="$emit('continue', turn.runId)">
             <Play :size="14" />继续执行
           </button>
         </div>

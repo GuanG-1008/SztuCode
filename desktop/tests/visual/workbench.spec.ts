@@ -108,7 +108,7 @@ test("task conversation slash menu opens above the composer without clipping", a
                   <div class="slash-menu__scroll"><section class="slash-menu__group"><h3>命令</h3><button><span class="slash-menu__icon command"></span><b>/plan</b><span>制定执行计划</span></button></section></div>
                   <footer><span>Enter 调用</span></footer>
                 </section>
-                <textarea aria-label="描述要完成的工作，或键入 / 调用技能">/</textarea>
+                <textarea aria-label="汝之所想，皆以言成">/</textarea>
                 <div class="composer-toolbar"><button class="round">+</button><span></span><button class="send">&uarr;</button></div>
               </form>
             </div>

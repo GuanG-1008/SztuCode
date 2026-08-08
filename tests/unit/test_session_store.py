@@ -26,7 +26,7 @@ def test_meta_roundtrip(tmp_path: Path) -> None:
         created_at="t1",
         updated_at="t2",
         run_ids=["run-1"],
-        run_stats={"run-1": RunStats(input_tokens=120, output_tokens=30, elapsed_s=2.5)},
+        run_stats={"run-1": RunStats(input_tokens=120, output_tokens=30, cache_read_input_tokens=90, elapsed_s=2.5)},
     )
     store.write_meta(session)
     loaded = store.read_meta("sess-1")
@@ -51,12 +51,15 @@ def test_backfill_run_stats_from_finished_event(tmp_path: Path) -> None:
     events = store.runs_dir(session.id) / "run-1" / "events.jsonl"
     events.parent.mkdir(parents=True)
     events.write_text(
-        '{"type":"run.finished","total_input_tokens":120,"total_output_tokens":30,"elapsed_s":2.5}\n',
+        '{"type":"run.finished","total_input_tokens":120,"total_output_tokens":30,'
+        '"cache_read_input_tokens":90,"elapsed_s":2.5}\n',
         encoding="utf-8",
     )
 
     assert store.backfill_run_stats(session)
-    assert session.run_stats["run-1"] == RunStats(input_tokens=120, output_tokens=30, elapsed_s=2.5)
+    assert session.run_stats["run-1"] == RunStats(
+        input_tokens=120, output_tokens=30, cache_read_input_tokens=90, elapsed_s=2.5
+    )
     assert store.read_meta(session.id).run_stats == session.run_stats
 
 

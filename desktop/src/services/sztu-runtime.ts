@@ -27,7 +27,7 @@ export type Session = {
   archived: boolean; pinned: boolean; workspace_id: string | null; latest_run_id?: string | null;
   total_input_tokens: number; total_output_tokens: number; total_elapsed_s: number;
 };
-export type RunStats = { input_tokens: number; output_tokens: number; elapsed_s: number };
+export type RunStats = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number };
 export type SessionHistory = { messages: unknown[]; run_stats: Record<string, RunStats> };
 export type RuntimeSettings = { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
 export type RuntimeSettingsUpdate = Partial<RuntimeSettings> & { api_key?: string };
@@ -190,6 +190,17 @@ export async function cancelRun(runId: string): Promise<string> {
 export async function openWorkspace(path: string): Promise<Workspace> {
   const result = await client.request("workspace.open", { path });
   return result.workspace as Workspace;
+}
+
+export type WorkspaceStatus = { branch: string | null; is_git_repository: boolean; changed_file_count: number };
+
+export async function workspaceStatus(workspaceId: string): Promise<WorkspaceStatus> {
+  const result = await client.request("workspace.status", { workspace_id: workspaceId });
+  return {
+    branch: typeof result.branch === "string" ? result.branch : null,
+    is_git_repository: Boolean(result.is_git_repository),
+    changed_file_count: Number(result.changed_file_count ?? 0),
+  };
 }
 
 export async function workspaceTree(workspaceId: string, path = "", maxDepth = 1): Promise<WorkspaceNode[]> {

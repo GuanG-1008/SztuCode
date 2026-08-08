@@ -2394,6 +2394,7 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `steps` | `integer` | yes |
 | `total_input_tokens` | `integer` | no |
 | `total_output_tokens` | `integer` | no |
+| `cache_read_input_tokens` | `integer` | no |
 | `elapsed_s` | `number` | no |
 | `ts` | `string` | yes |
 
@@ -2438,6 +2439,11 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "total_output_tokens": {
       "default": 0,
       "title": "Total Output Tokens",
+      "type": "integer"
+    },
+    "cache_read_input_tokens": {
+      "default": 0,
+      "title": "Cache Read Input Tokens",
       "type": "integer"
     },
     "elapsed_s": {

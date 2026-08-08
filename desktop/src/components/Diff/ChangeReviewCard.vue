@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { FileDiff, RotateCcw, Search } from "@lucide/vue";
+import { ChevronDown, FileDiff, RotateCcw, Search } from "@lucide/vue";
 import { listChanges, revertChanges, type ChangeSummary } from "../../services/sztu-runtime";
 
 const props = defineProps<{ workspaceId: string; runId: string; paths: string[] }>();
@@ -12,6 +12,7 @@ const emit = defineEmits<{
 const changes = ref<ChangeSummary[]>([]);
 const loading = ref(false);
 const reverting = ref(false);
+const expanded = ref(false);
 
 // 挂载时拉取该 run 的 agent 改动及其增减行统计
 async function load() {
@@ -27,6 +28,12 @@ onMounted(load);
 
 const totalAdd = computed(() => changes.value.reduce((sum, change) => sum + (change.additions ?? 0), 0));
 const totalDel = computed(() => changes.value.reduce((sum, change) => sum + (change.deletions ?? 0), 0));
+const visibleChanges = computed(() => expanded.value ? changes.value : changes.value.slice(0, 3));
+const hiddenCount = computed(() => Math.max(0, changes.value.length - 3));
+
+function toggleExpanded() {
+  expanded.value = !expanded.value;
+}
 
 // 一键回滚该 run 的全部文件改动并通知上层销毁卡片
 async function revertAll() {
@@ -51,7 +58,7 @@ function openReview() {
     <header class="change-review-card__head">
       <div class="change-review-card__title">
         <span class="change-review-card__icon"><FileDiff :size="16" /></span>
-        <b>变更证据 · {{ changes.length }} 个文件</b>
+        <b>已编辑 {{ changes.length }} 个文件</b>
         <span v-if="loading" class="change-review-card__loading">加载中…</span>
         <span v-else class="change-review-card__totals">
           <em class="add">+{{ totalAdd }}</em>
@@ -68,12 +75,18 @@ function openReview() {
       </div>
     </header>
     <ul v-if="changes.length" class="change-review-card__files">
-      <li v-for="change in changes" :key="change.path" :title="change.path">
+      <li v-for="change in visibleChanges" :key="change.path" :title="change.path">
         <span class="change-review-card__path">{{ change.path }}</span>
         <span class="change-review-card__nums">
           <em v-if="(change.additions ?? 0) > 0" class="add">+{{ change.additions }}</em>
           <em v-if="(change.deletions ?? 0) > 0" class="del">−{{ change.deletions }}</em>
         </span>
+      </li>
+      <li v-if="hiddenCount" class="change-review-card__expand-row">
+        <button type="button" class="change-review-card__expand" :aria-expanded="expanded" @click="toggleExpanded">
+          <span>{{ expanded ? '收起文件' : `再显示 ${hiddenCount} 个文件` }}</span>
+          <ChevronDown :size="16" />
+        </button>
       </li>
     </ul>
   </section>

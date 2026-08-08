@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, ArrowLeft, BookOpen, CalendarClock, Check, ChevronDown, ChevronRight, CirclePlus, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
-  Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
+  AlertTriangle, Archive, ArrowLeft, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  GitBranch, Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -23,7 +23,7 @@ import { isMacOSPlatform } from "./lib/platform";
 import {
   applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
-  resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings,
+  resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings, workspaceStatus,
   type Attachment, type CcswitchProvider, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
 } from "./services/sztu-runtime";
 
@@ -116,8 +116,12 @@ const nativeSettingsError = ref("");
 const webBridgeAllowed = ref(false);
 const currentStepByRun = new Map<string, number>();
 const runStepBase = new Map<string, number>(); // 每个 run 的 step 起点偏移，避免跨 run 步号冲突
-const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number }>();
+const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number }>();
+let historyLoadSeq = 0;
 const reviewCtx = ref<ReviewContext | null>(null);
+// 切换会话加载动画：超过 260ms 未返回时显示终端图标动效，避免快加载闪屏
+const sessionLoading = ref(false);
+let sessionLoadingTimer: ReturnType<typeof setTimeout> | undefined;
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
 const pendingPermissions = ref<Array<{ toolUseId: string; toolName: string; preview: string; runId: string }>>([]);
 const ccswitchOpen = ref(false);
@@ -139,8 +143,6 @@ const recentSessions = computed(() => liveSessions.value.filter((item) => !item.
 const normalizedTaskQuery = computed(() => taskQuery.value.trim().toLocaleLowerCase());
 const matchesTaskQuery = (item: Session) => !normalizedTaskQuery.value || item.title.toLocaleLowerCase().includes(normalizedTaskQuery.value);
 const visibleSessions = computed(() => liveSessions.value.filter(matchesTaskQuery));
-const attentionTasks = computed(() => visibleSessions.value.filter((item) => item.status === "waiting_for_input").slice(0, 4));
-const runningTasks = computed(() => visibleSessions.value.filter((item) => item.status === "active").slice(0, 4));
 const temporaryTasks = computed(() => visibleSessions.value.filter((item) => !item.workspace_id).slice(0, 5));
 const projects = computed(() => activeWorkspaces.value
   .map((item) => {
@@ -168,6 +170,44 @@ function formatSessionUsage(item: Session): string {
   const tokenText = tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k tokens` : `${tokens} tokens`;
   const durationText = seconds < 60 ? `${Math.round(seconds)}秒` : `${Math.floor(seconds / 60)}分${Math.round(seconds % 60)}秒`;
   return item.status === "active" && !tokens ? "计时中" : `${durationText} · ${tokenText}`;
+}
+
+// 对话条目悬停预览：展示计时、分支、项目目录与累计 token
+const sessionPreview = ref<{ task: Session; top: number; left: number } | null>(null);
+const branchCache = ref(new Map<string, string | null>());
+function showSessionPreview(task: Session, event: MouseEvent) {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  sessionPreview.value = { task, top: Math.max(4, Math.min(rect.top, window.innerHeight - 168)), left: Math.min(rect.right + 8, window.innerWidth - 232) };
+  if (task.workspace_id && !branchCache.value.has(task.workspace_id)) void loadBranch(task.workspace_id);
+}
+function hideSessionPreview() { sessionPreview.value = null; }
+// 分支信息按工作区缓存，避免每次悬停都触发 git 查询
+async function loadBranch(workspaceId: string) {
+  let branch: string | null = null;
+  try { branch = (await workspaceStatus(workspaceId)).branch; } catch { branch = null; }
+  const next = new Map(branchCache.value);
+  next.set(workspaceId, branch);
+  branchCache.value = next;
+}
+function previewBranch(task: Session): string {
+  if (!task.workspace_id) return "—";
+  const cached = branchCache.value.get(task.workspace_id);
+  if (cached === undefined) return "…";
+  return cached ?? "—";
+}
+function previewDirectory(task: Session): string {
+  if (!task.workspace_id) return "临时任务";
+  const found = workspaces.value.find((item) => item.workspace_id === task.workspace_id);
+  return found ? found.path : "—";
+}
+function previewElapsed(task: Session): string {
+  const seconds = Number(task.total_elapsed_s ?? 0);
+  if (seconds < 60) return `${Math.round(seconds)} 秒`;
+  return `${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`;
+}
+function previewTokens(task: Session): string {
+  const tokens = Number(task.total_input_tokens ?? 0) + Number(task.total_output_tokens ?? 0);
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k` : String(tokens);
 }
 // 工作区布局：仅传 CSS 变量，grid 列由样式表定义，
 // 这样媒体查询能按窗口宽度覆盖列结构（内联 grid-template-columns 会锁死响应式，窗口变窄不重排）。
@@ -242,7 +282,7 @@ const slashItems = computed(() => slashQuery.value === null ? [] : slashMenuItem
 
 type HistoryBlock = Record<string, unknown>;
 
-function entryRole(entry: unknown) { return String((entry as { role?: unknown })?.role ?? "assistant").toLowerCase(); }
+function entryRole(entry: unknown) { return String((entry as { role?: unknown })?.role ?? "").toLowerCase(); }
 function isRecord(value: unknown): value is HistoryBlock { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function historyBlocks(entry: unknown): HistoryBlock[] {
   const content = (entry as { content?: unknown })?.content;
@@ -262,6 +302,10 @@ function blockText(block: HistoryBlock): string {
   if (typeof block.text === "string") return block.text;
   if (typeof block.content === "string") return block.content;
   return "";
+}
+function isHiddenHistoryBlock(block: HistoryBlock): boolean {
+  const type = String(block.type ?? block.role ?? "").toLowerCase();
+  return type === "system" || type === "developer" || type === "system_prompt" || type === "developer_prompt";
 }
 function isInternalProgressMessage(blocks: HistoryBlock[]): boolean {
   const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
@@ -305,13 +349,18 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   let step = 0;
   for (const message of messages) {
     const role = entryRole(message);
+    if (role !== "user" && role !== "assistant") continue;
     const messageRunId = String((message as { run_id?: unknown })?.run_id ?? "") || undefined;
     const blocks = historyBlocks(message);
+    // System/developer prompts are runtime context, never conversation output.
+    if (role === "system" || role === "developer") continue;
+    const visibleBlocks = blocks.filter((block) => !isHiddenHistoryBlock(block));
+    if (!visibleBlocks.length) continue;
     // Canvas progress summaries are persisted as user messages for the model's
     // context, but they are internal bookkeeping and must not become chat turns.
     if (isInternalProgressMessage(blocks)) continue;
-    const text = blocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
-    const toolResults = blocks.filter((block) => String(block.type) === "tool_result");
+    const text = visibleBlocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
+    const toolResults = visibleBlocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {
       if (!step) step = 1;
       const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
@@ -332,6 +381,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
         runStats: messageRunId && runStats[messageRunId] ? {
           inputTokens: Number(runStats[messageRunId].input_tokens ?? 0),
           outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
+          cacheReadInputTokens: Number(runStats[messageRunId].cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
         } : undefined,
         userMessage: text,
@@ -341,14 +391,14 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     }
     if (!step) step = 1;
     const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
-    const thinking = blocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
-    const calls: ToolCallEntry[] = blocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
+    const thinking = visibleBlocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
+    const calls: ToolCallEntry[] = visibleBlocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
       id: String(block.id ?? block.tool_use_id ?? crypto.randomUUID()),
       name: String(block.name ?? "工具调用"),
       params: isRecord(block.input) ? block.input : isRecord(block.params) ? block.params : {},
       status: "done",
     }));
-    const events: TimelineEvent[] = blocks.flatMap((block, index) => {
+    const events: TimelineEvent[] = visibleBlocks.flatMap((block, index) => {
       if (String(block.type) === "text" && blockText(block)) return [{ id: `text-${step}-${index}`, kind: "text", text: blockText(block) }];
       if (String(block.type) === "thinking" && typeof block.thinking === "string" && block.thinking) return [{ id: `thinking-${step}-${index}`, kind: "thinking", text: block.thinking }];
       if (String(block.type) === "tool_use") return [{ id: `tool-${String(block.id ?? block.tool_use_id ?? index)}`, kind: "tool", toolCallId: String(block.id ?? block.tool_use_id ?? index) }];
@@ -407,7 +457,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   if (type === "run.started") {
     const messageStep = Math.max(0, ...timeline.value.keys());
     setStep(messageStep || 1, (current) => ({ ...current, status: "thinking", runId, runStartedAt: String(event.ts ?? new Date().toISOString()) }));
-    liveRunUsage.set(runId, { inputTokens: 0, outputTokens: 0 });
+    liveRunUsage.set(runId, { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 });
     return;
   }
   if (type === "step.started") {
@@ -446,8 +496,13 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     const step = stepFor(timelineEvent);
     const inputTokens = Number(event.input_tokens ?? 0);
     const outputTokens = Number(event.output_tokens ?? 0);
-    const previous = liveRunUsage.get(relatedRunId) ?? { inputTokens: 0, outputTokens: 0 };
-    const cumulative = { inputTokens: previous.inputTokens + inputTokens, outputTokens: previous.outputTokens + outputTokens };
+    const cacheReadInputTokens = Number(event.cache_read_input_tokens ?? 0);
+    const previous = liveRunUsage.get(relatedRunId) ?? { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 };
+    const cumulative = {
+      inputTokens: previous.inputTokens + inputTokens,
+      outputTokens: previous.outputTokens + outputTokens,
+      cacheReadInputTokens: previous.cacheReadInputTokens + cacheReadInputTokens,
+    };
     liveRunUsage.set(relatedRunId, cumulative);
     setStep(step, (current) => ({
       ...current,
@@ -596,6 +651,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
         runStats: {
           inputTokens: Number(event.total_input_tokens ?? 0),
           outputTokens: Number(event.total_output_tokens ?? 0),
+          cacheReadInputTokens: Number(event.cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(event.elapsed_s ?? 0),
         },
       } : current);
@@ -622,6 +678,7 @@ async function refreshIndex(loadHistory = false) {
   loading.value = false;
 }
 function beginTask(project: Workspace | null = workspace.value) {
+  historyLoadSeq += 1;
   projectActionsOpen.value = null;
   closeLauncherMenus();
   workspace.value = project;
@@ -679,13 +736,32 @@ async function stopActiveRun() {
   }
 }
 async function chooseTask(id: string) {
+  const loadSeq = ++historyLoadSeq;
+  // 完整历史已含各轮内容，直接 hydrate 展示；replay 会与各 run 的 step 编号冲突导致旧日志混排
+  const latestRunId = sessions.value.find((item) => item.session_id === id)?.latest_run_id ?? null;
+  window.clearTimeout(sessionLoadingTimer);
+  sessionLoading.value = false;
+  sessionLoadingTimer = window.setTimeout(() => { sessionLoading.value = true; }, 260);
+  let history;
+  try {
+    history = await sessionHistory(id);
+  } catch (error) {
+    if (loadSeq !== historyLoadSeq) return;
+    window.clearTimeout(sessionLoadingTimer);
+    sessionLoading.value = false;
+    console.warn("Failed to load session history", error);
+    return;
+  }
+  // 期间又切换了其他会话：放弃本次结果，且不干扰新请求的加载层
+  if (loadSeq !== historyLoadSeq) return;
+  window.clearTimeout(sessionLoadingTimer);
+  sessionLoading.value = false;
   activeId.value = id;
   currentStepByRun.clear();
   runStepBase.clear();
   liveRunUsage.clear();
-  // 完整历史已含各轮内容，直接 hydrate 展示；replay 会与各 run 的 step 编号冲突导致旧日志混排
-  const latestRunId = sessions.value.find((item) => item.session_id === id)?.latest_run_id ?? null;
-  const history = await sessionHistory(id);
+  activeRunId.value = null;
+  runActive.value = false;
   hydrateTimeline(history.messages, history.run_stats);
   activeRunId.value = latestRunId;
   // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
@@ -956,7 +1032,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
+function closeActiveSession() { historyLoadSeq += 1; activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function loadNativeSettings() {
   try {
     const settings = await getNativeSettings();
@@ -1238,6 +1314,7 @@ onBeforeUnmount(() => {
   document.body.style.userSelect = "";
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
   if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
+  if (sessionLoadingTimer) clearTimeout(sessionLoadingTimer);
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("resize", handleWindowResize);
   document.removeEventListener("pointerdown", handleDocumentPointerDown);
@@ -1286,59 +1363,37 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       <header class="sidebar-brand">
         <h1>SztuCode</h1>
         <button class="task-search-toggle" type="button" title="搜索任务或项目" aria-label="搜索任务或项目" :aria-expanded="taskSearchOpen" aria-controls="task-search-field" @click="toggleTaskSearch">
-          <Search :size="16" aria-hidden="true" />
+          <Search :size="16" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </header>
 
       <label v-if="taskSearchOpen || taskQuery" id="task-search-field" class="task-search">
-        <Search :size="15" aria-hidden="true" />
+        <Search :size="16" :stroke-width="1.8" aria-hidden="true" />
         <input ref="taskSearchInput" v-model="taskQuery" type="search" placeholder="搜索任务或项目" aria-label="搜索任务或项目" @keydown.esc="clearTaskSearch" />
-        <button v-if="taskQuery" type="button" title="清除搜索" aria-label="清除搜索" @click="clearTaskSearch"><X :size="14" /></button>
+        <button v-if="taskQuery" type="button" title="清除搜索" aria-label="清除搜索" @click="clearTaskSearch"><X :size="16" :stroke-width="1.8" /></button>
       </label>
 
       <div class="sidebar-command">
-        <button class="new-task-button" @click="beginTask()"><CirclePlus :size="18" />新建任务 <kbd>{{ isMacOS ? '⌘' : 'Ctrl' }} K</kbd></button>
+        <button class="new-task-button" @click="beginTask()"><CirclePlus :size="16" :stroke-width="1.8" />新建任务</button>
       </div>
 
       <nav class="sidebar-tools" aria-label="工作台工具">
-        <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="16" /><span>全部任务</span></button>
-        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" /><span>自动化</span><small>即将推出</small></button>
-        <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" /><span>更多</span><ChevronDown :size="13" /></button>
+        <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="16" :stroke-width="1.8" /><span>全部任务</span></button>
+        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" :stroke-width="1.8" /><span>自动化</span><small>即将推出</small></button>
+        <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" :stroke-width="1.8" /><span>更多</span><ChevronDown :size="16" :stroke-width="1.8" /></button>
         <div v-if="sidebarToolsExpanded" id="sidebar-more-tools" class="sidebar-more-tools">
           <div>
-            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" /><span>技能</span></button>
-            <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" /><span>浏览器连接</span></button>
-            <button v-if="chatEntryVisible" :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" /><span>通用问答</span></button>
+            <button :class="{ active: page === 'skills' }" @click="openPage('skills')"><Puzzle :size="16" :stroke-width="1.8" /><span>技能</span></button>
+            <button :class="{ active: page === 'webbridge' }" @click="openPage('webbridge')"><Globe2 :size="16" :stroke-width="1.8" /><span>浏览器连接</span></button>
+            <button v-if="chatEntryVisible" :class="{ active: page === 'chat' }" @click="openPage('chat')"><MessageCircle :size="16" :stroke-width="1.8" /><span>通用问答</span></button>
           </div>
         </div>
       </nav>
 
       <div class="sidebar-workspace">
-        <section v-if="!normalizedTaskQuery && (attentionTasks.length || runningTasks.length)" class="side-section task-focus">
-          <span class="side-label">任务</span>
-          <div v-if="attentionTasks.length" class="task-state-group attention">
-            <div class="task-state-heading"><span><ShieldCheck :size="14" />已完成</span><b>{{ attentionTasks.length }}</b></div>
-            <div v-for="task in attentionTasks" :key="`attention-${task.session_id}`" class="sidebar-session status-session">
-              <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
-              </button>
-              <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
-            </div>
-          </div>
-          <div v-if="runningTasks.length" class="task-state-group running">
-            <div class="task-state-heading"><span><RotateCcw :size="14" />等待输入</span><b>{{ runningTasks.length }}</b></div>
-            <div v-for="task in runningTasks" :key="`running-${task.session_id}`" class="sidebar-session status-session">
-              <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                <i /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
-              </button>
-              <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
-            </div>
-          </div>
-        </section>
-
         <section v-if="normalizedTaskQuery" class="side-section search-results">
           <span class="side-label">搜索结果 <small>{{ visibleSessions.length }}</small></span>
-          <div v-for="task in visibleSessions" :key="`search-${task.session_id}`" class="sidebar-session status-session">
+          <div v-for="task in visibleSessions" :key="`search-${task.session_id}`" class="sidebar-session status-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
             <button class="status-task-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
               <i :class="task.status" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ taskStatusLabel(task) }} · {{ formatSessionUsage(task) }}</small></span>
             </button>
@@ -1348,30 +1403,31 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
         </section>
 
         <section class="side-section project-tree">
-          <span class="side-label side-label--action">项目<button title="打开本地目录" aria-label="打开本地目录" @click="openLocalProject"><FolderOpen :size="14" /></button></span>
+          <span class="side-label side-label--action">项目<button title="打开本地目录" aria-label="打开本地目录" @click="openLocalProject"><FolderOpen :size="16" :stroke-width="1.8" /></button></span>
           <div v-for="item in projects" :key="item.workspace_id" class="project-group">
-            <div class="project-row-shell" :class="{ active: item.workspace_id === workspace?.workspace_id }">
-              <button class="project-collapse" :title="isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目'" :aria-expanded="!isProjectCollapsed(item.workspace_id)" @click="toggleProject(item.workspace_id)">
-                <ChevronRight :size="13" :class="{ expanded: !isProjectCollapsed(item.workspace_id) }" />
+            <div class="project-row-shell" :class="{ collapsed: isProjectCollapsed(item.workspace_id) }">
+              <button class="project-row-toggle" :title="isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目'" :aria-expanded="!isProjectCollapsed(item.workspace_id)" @click="toggleProject(item.workspace_id)">
+                <FolderOpen v-if="!isProjectCollapsed(item.workspace_id)" :size="16" :stroke-width="1.8" />
+                <Folder v-else :size="16" :stroke-width="1.8" />
+                <span>{{ item.name }}</span>
               </button>
-              <button class="project-row" @click="chooseWorkspace(item)"><Folder :size="16" /><span>{{ item.name }}</span></button>
-              <button class="side-item-action" title="项目操作" aria-label="项目操作" @click="projectActionsOpen = projectActionsOpen === item.workspace_id ? null : item.workspace_id"><Ellipsis :size="16" /></button>
+              <button class="side-item-action" title="项目操作" aria-label="项目操作" @click="projectActionsOpen = projectActionsOpen === item.workspace_id ? null : item.workspace_id"><Ellipsis :size="16" :stroke-width="1.8" /></button>
               <div v-if="projectActionsOpen === item.workspace_id" class="project-action-menu">
-                <button @click="createProjectTask(item)"><Plus :size="14" />新建任务</button>
-                <button @click="showProjectFiles(item)"><FolderSearch :size="14" />查看项目文件</button>
-                <button @click="deleteProject(item)"><Trash2 :size="14" />删除项目</button>
-                <button @click="toggleProject(item.workspace_id)"><ChevronRight :size="14" :class="{ expanded: !isProjectCollapsed(item.workspace_id) }" />{{ isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目' }}</button>
+                <button @click="createProjectTask(item)"><Plus :size="16" :stroke-width="1.8" />新建任务</button>
+                <button @click="showProjectFiles(item)"><FolderSearch :size="16" :stroke-width="1.8" />查看项目文件</button>
+                <button @click="deleteProject(item)"><Trash2 :size="16" :stroke-width="1.8" />删除项目</button>
+                <button @click="toggleProject(item.workspace_id)"><FolderOpen v-if="isProjectCollapsed(item.workspace_id)" :size="16" :stroke-width="1.8" /><Folder v-else :size="16" :stroke-width="1.8" />{{ isProjectCollapsed(item.workspace_id) ? '展开项目' : '收起项目' }}</button>
               </div>
             </div>
             <div class="project-task-list" :class="{ collapsed: isProjectCollapsed(item.workspace_id) }">
               <div class="project-task-list__inner">
-                <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session">
+                <div v-for="task in item.tasks" :key="task.session_id" class="sidebar-session project-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
                   <button class="project-task" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)">
-                    <i :class="task.status" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span>
+                    <span>{{ task.title || '未命名任务' }}</span>
                   </button>
                   <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
                 </div>
-                <p v-if="!item.tasks.length" class="project-empty">暂无任务</p>
+                <p v-if="!item.tasks.length" class="project-empty">没有聊天</p>
               </div>
             </div>
           </div>
@@ -1380,23 +1436,23 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 
         <section v-if="temporaryTasks.length && !normalizedTaskQuery" class="side-section temporary-tasks">
           <span class="side-label">临时任务</span>
-          <div v-for="task in temporaryTasks" :key="task.session_id" class="sidebar-session conversation-session">
-            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><i :class="{ running: task.status === 'active' }" /><span><b>{{ task.title || '未命名任务' }}</b><small>{{ formatSessionUsage(task) }}</small></span></button>
+          <div v-for="task in temporaryTasks" :key="task.session_id" class="sidebar-session conversation-session" @mouseenter="showSessionPreview(task, $event)" @mouseleave="hideSessionPreview">
+            <button class="conversation-row" :class="{ active: task.session_id === activeId }" @click="chooseTask(task.session_id)"><span>{{ task.title || '未命名任务' }}</span></button>
             <SessionActions :session="task" @changed="refreshIndex(false)" @closed="handleSessionClosed(task.session_id)" />
           </div>
         </section>
 
         <details v-if="archivedProjects.length && !normalizedTaskQuery" class="archived-projects">
-          <summary><Archive :size="14" />已归档项目 <small>{{ archivedProjects.length }}</small></summary>
+          <summary><Archive :size="16" :stroke-width="1.8" />已归档项目 <small>{{ archivedProjects.length }}</small></summary>
           <div v-for="item in archivedProjects" :key="item.workspace_id" class="project-row-shell">
-            <button class="project-row archived-project-row" title="恢复项目" @click="resumeProject(item)"><RotateCcw :size="14" /><span>{{ item.name }}</span></button>
+            <button class="project-row archived-project-row" title="恢复项目" @click="resumeProject(item)"><RotateCcw :size="16" :stroke-width="1.8" /><span>{{ item.name }}</span></button>
           </div>
         </details>
       </div>
 
       <footer class="sidebar-footer">
         <div class="service-status"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : '未连接' }}</small></span></div>
-        <button class="settings-link" title="设置" aria-label="设置" @click="openPage('settings')"><Settings :size="16" /></button>
+        <button class="settings-link" title="设置" aria-label="设置" @click="openPage('settings')"><Settings :size="16" :stroke-width="1.8" /></button>
       </footer>
       </aside>
     </div>
@@ -1415,11 +1471,23 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       @keydown="resizeSidebarWithKeyboard"
     ><span><GripVertical :size="13" :stroke-width="1.8" /></span></div>
 
+    <div v-if="sessionPreview" class="session-preview" :style="{ top: `${sessionPreview.top}px`, left: `${sessionPreview.left}px` }" role="tooltip">
+      <b class="session-preview__title">{{ sessionPreview.task.title || '未命名任务' }}</b>
+      <div class="session-preview__row"><Clock :size="16" :stroke-width="1.8" /><span>计时</span><em>{{ previewElapsed(sessionPreview.task) }}</em></div>
+      <div class="session-preview__row"><GitBranch :size="16" :stroke-width="1.8" /><span>分支</span><em>{{ previewBranch(sessionPreview.task) }}</em></div>
+      <div class="session-preview__row"><Folder :size="16" :stroke-width="1.8" /><span>项目目录</span><em>{{ previewDirectory(sessionPreview.task) }}</em></div>
+      <div class="session-preview__row"><Coins :size="16" :stroke-width="1.8" /><span>总 tokens</span><em>{{ previewTokens(sessionPreview.task) }}</em></div>
+    </div>
+
     <main class="kimi-main" :class="{ 'chat-main': page === 'chat' }">
       <template v-if="page === 'work'">
         <section v-if="active" class="work-page">
           <div class="work-layout" :class="{ 'no-inspector': !inspectorOpen || !activeWorkspace }" :style="workLayoutStyle">
             <section class="task-canvas">
+              <div v-if="sessionLoading" class="session-loading" role="status" aria-label="正在加载会话">
+                <Terminal :size="40" :stroke-width="1.5" />
+                <span>正在加载会话…</span>
+              </div>
               <header class="work-header">
                 <button class="workspace-trigger" @click="projectMenuOpen = !projectMenuOpen"><span>{{ activeWorkspace?.name || '未选择项目' }}</span><ChevronDown :size="14" /></button>
                 <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
@@ -1437,12 +1505,12 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
               </div>
               <div class="task-conversation" :class="{ 'task-conversation--empty': !orderedTimeline.length }">
                 <div class="task-stream">
-                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>要在「{{ activeWorkspace?.name || '当前项目' }}」里构建什么？</b></div>
+                  <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>开启「{{ activeWorkspace?.name || '当前项目' }}」的构筑之路。</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
                 <form class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
-                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '描述要完成的工作，或键入 / 调用技能'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
+                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '汝之所想，皆以言成'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
                   <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'">↑</button></div>
                 </form>
