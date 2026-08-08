@@ -150,11 +150,11 @@
 }
 
 /* Outcome-first task conversation. */
-.timeline-step { padding-bottom: 34px; }
+.timeline-step { padding-bottom: 18px; }
 .timeline-assistant { grid-template-columns: minmax(0, 1fr); gap: 0; }
 
-.turn-status { display: flex; min-height: 28px; align-items: center; gap: 8px; margin-bottom: 9px; }
-.turn-status b { color: #34383d; font-size: 14px; font-weight: 620; }
+.turn-status { display: flex; min-height: 23px; align-items: center; gap: 6px; margin-bottom: 5px; }
+.turn-status b { color: #34383d; font-size: 12px; font-weight: 620; }
 .turn-status span { color: #92979d; font: 10px/1 Consolas, monospace; }
 .turn-status .turn-status__usage { min-width: 0; color: #747b83; font-size: 11px; white-space: nowrap; }
 .turn-status.running b { color: #2867a7; }
@@ -163,14 +163,14 @@
 .turn-status.verified b { color: #2f7549; }
 .turn-status.running::after { width: 46px; height: 2px; margin-left: 2px; background: linear-gradient(90deg, #2b78bf 0 35%, #d9e8f5 35% 100%); background-size: 130% 100%; animation: task-progress 1.3s ease-in-out infinite alternate; content: ""; }
 
-.turn-result { margin: 0 0 13px; }
-.turn-result .token-stream { color: #25292e; font-size: 16px; line-height: 1.78; }
+.turn-result { margin: 0 0 8px; }
+.turn-result .token-stream { color: #25292e; font-size: 14px; line-height: 1.55; }
 .turn-result .markdown-body > div > :first-child { margin-top: 0; }
 .turn-result .markdown-body > div > :last-child { margin-bottom: 0; }
 .turn-result .markdown-body h1, .turn-result .markdown-body h2, .turn-result .markdown-body h3 { letter-spacing: 0; }
 
-.evidence-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 13px 0 10px; padding-top: 11px; border-top: 1px solid #eceeef; }
-.evidence-item { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 5px 8px; color: #5e646b; background: #f5f6f6; border: 1px solid #e7e9ea; border-radius: 6px; font-size: 11px; }
+.evidence-strip { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 6px; padding-top: 7px; border-top: 1px solid #eceeef; }
+.evidence-item { display: flex; align-items: center; gap: 5px; min-height: 24px; padding: 3px 6px; color: #5e646b; background: #f5f6f6; border: 1px solid #e7e9ea; border-radius: 6px; font-size: 10px; }
 .evidence-item b { color: inherit; font-weight: 650; }
 .evidence-item.passed { color: #2f7549; background: #f1f8f3; border-color: #d8eadc; }
 .evidence-item.failed { color: #a33d43; background: #fff3f3; border-color: #f0d8da; }

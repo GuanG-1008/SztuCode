@@ -112,6 +112,7 @@ const webBridgeAllowed = ref(false);
 const currentStepByRun = new Map<string, number>();
 const runStepBase = new Map<string, number>(); // 每个 run 的 step 起点偏移，避免跨 run 步号冲突
 const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number }>();
+let historyLoadSeq = 0;
 const reviewCtx = ref<ReviewContext | null>(null);
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
 const pendingPermissions = ref<Array<{ toolUseId: string; toolName: string; preview: string; runId: string }>>([]);
@@ -237,7 +238,7 @@ const slashItems = computed(() => slashQuery.value === null ? [] : slashMenuItem
 
 type HistoryBlock = Record<string, unknown>;
 
-function entryRole(entry: unknown) { return String((entry as { role?: unknown })?.role ?? "assistant").toLowerCase(); }
+function entryRole(entry: unknown) { return String((entry as { role?: unknown })?.role ?? "").toLowerCase(); }
 function isRecord(value: unknown): value is HistoryBlock { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function historyBlocks(entry: unknown): HistoryBlock[] {
   const content = (entry as { content?: unknown })?.content;
@@ -257,6 +258,10 @@ function blockText(block: HistoryBlock): string {
   if (typeof block.text === "string") return block.text;
   if (typeof block.content === "string") return block.content;
   return "";
+}
+function isHiddenHistoryBlock(block: HistoryBlock): boolean {
+  const type = String(block.type ?? block.role ?? "").toLowerCase();
+  return type === "system" || type === "developer" || type === "system_prompt" || type === "developer_prompt";
 }
 function isInternalProgressMessage(blocks: HistoryBlock[]): boolean {
   const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
@@ -300,13 +305,18 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   let step = 0;
   for (const message of messages) {
     const role = entryRole(message);
+    if (role !== "user" && role !== "assistant") continue;
     const messageRunId = String((message as { run_id?: unknown })?.run_id ?? "") || undefined;
     const blocks = historyBlocks(message);
+    // System/developer prompts are runtime context, never conversation output.
+    if (role === "system" || role === "developer") continue;
+    const visibleBlocks = blocks.filter((block) => !isHiddenHistoryBlock(block));
+    if (!visibleBlocks.length) continue;
     // Canvas progress summaries are persisted as user messages for the model's
     // context, but they are internal bookkeeping and must not become chat turns.
     if (isInternalProgressMessage(blocks)) continue;
-    const text = blocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
-    const toolResults = blocks.filter((block) => String(block.type) === "tool_result");
+    const text = visibleBlocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
+    const toolResults = visibleBlocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {
       if (!step) step = 1;
       const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
@@ -336,14 +346,14 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     }
     if (!step) step = 1;
     const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
-    const thinking = blocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
-    const calls: ToolCallEntry[] = blocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
+    const thinking = visibleBlocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
+    const calls: ToolCallEntry[] = visibleBlocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
       id: String(block.id ?? block.tool_use_id ?? crypto.randomUUID()),
       name: String(block.name ?? "工具调用"),
       params: isRecord(block.input) ? block.input : isRecord(block.params) ? block.params : {},
       status: "done",
     }));
-    const events: TimelineEvent[] = blocks.flatMap((block, index) => {
+    const events: TimelineEvent[] = visibleBlocks.flatMap((block, index) => {
       if (String(block.type) === "text" && blockText(block)) return [{ id: `text-${step}-${index}`, kind: "text", text: blockText(block) }];
       if (String(block.type) === "thinking" && typeof block.thinking === "string" && block.thinking) return [{ id: `thinking-${step}-${index}`, kind: "thinking", text: block.thinking }];
       if (String(block.type) === "tool_use") return [{ id: `tool-${String(block.id ?? block.tool_use_id ?? index)}`, kind: "tool", toolCallId: String(block.id ?? block.tool_use_id ?? index) }];
@@ -617,6 +627,7 @@ async function refreshIndex(loadHistory = false) {
   loading.value = false;
 }
 function beginTask(project: Workspace | null = workspace.value) {
+  historyLoadSeq += 1;
   projectActionsOpen.value = null;
   closeLauncherMenus();
   workspace.value = project;
@@ -674,13 +685,23 @@ async function stopActiveRun() {
   }
 }
 async function chooseTask(id: string) {
+  const loadSeq = ++historyLoadSeq;
+  // 完整历史已含各轮内容，直接 hydrate 展示；replay 会与各 run 的 step 编号冲突导致旧日志混排
+  const latestRunId = sessions.value.find((item) => item.session_id === id)?.latest_run_id ?? null;
+  let history;
+  try {
+    history = await sessionHistory(id);
+  } catch (error) {
+    if (loadSeq === historyLoadSeq) console.warn("Failed to load session history", error);
+    return;
+  }
+  if (loadSeq !== historyLoadSeq) return;
   activeId.value = id;
   currentStepByRun.clear();
   runStepBase.clear();
   liveRunUsage.clear();
-  // 完整历史已含各轮内容，直接 hydrate 展示；replay 会与各 run 的 step 编号冲突导致旧日志混排
-  const latestRunId = sessions.value.find((item) => item.session_id === id)?.latest_run_id ?? null;
-  const history = await sessionHistory(id);
+  activeRunId.value = null;
+  runActive.value = false;
   hydrateTimeline(history.messages, history.run_stats);
   activeRunId.value = latestRunId;
   // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
@@ -951,7 +972,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
+function closeActiveSession() { historyLoadSeq += 1; activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function loadNativeSettings() {
   try {
     const settings = await getNativeSettings();
