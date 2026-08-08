@@ -1,16 +1,224 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 
 # eval 不在安装包内（pyproject 仅打包 src/sztu_code），将仓库根目录加入导入路径
 _SRC_ROOT = Path(__file__).resolve().parents[2]
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
-from eval.swebench.adapter import TokenUsage, summarize_token_usage  # noqa: E402
+from eval.swebench.adapter import (  # noqa: E402
+    RunResult,
+    SWEbenchInstance,
+    TokenUsage,
+    _find_local_parquet,
+    build_prompt,
+    get_diff_via_git,
+    load_dataset,
+    summarize_token_usage,
+)
 
 from sztu_code.core.bus.events import LlmUsageEvent  # noqa: E402
+
+
+# 构造包含全部必需字段的最小 SWE-bench 实例
+def _sample_instance() -> SWEbenchInstance:
+    return SWEbenchInstance.from_dict(
+        {
+            "instance_id": "owner__repo-1",
+            "repo": "owner/repo",
+            "base_commit": "abc123",
+            "problem_statement": "Fix the failing behavior.",
+        }
+    )
+
+
+# 在临时仓库中执行 Git 命令并返回结果
+def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+# 创建带有一个基线提交的本地 Git 仓库
+def _create_git_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run_git(repo, "init", "--quiet")
+    _run_git(repo, "config", "user.name", "SztuCode Tests")
+    _run_git(repo, "config", "user.email", "tests@example.com")
+    (repo / "sample.py").write_text("value = 1\n", encoding="utf-8")
+    _run_git(repo, "add", "sample.py")
+    _run_git(repo, "commit", "--quiet", "-m", "baseline")
+    return repo
+
+
+# 功能：SWEbenchInstance.from_dict 拒绝缺失任一必需字段的输入
+# 设计：参数化删除四个核心字段，直接验证字典访问保留清晰的 KeyError 失败语义
+@pytest.mark.parametrize(
+    "missing_field",
+    ["instance_id", "repo", "base_commit", "problem_statement"],
+)
+def test_instance_from_dict_requires_core_fields(missing_field: str) -> None:
+    data = {
+        "instance_id": "owner__repo-1",
+        "repo": "owner/repo",
+        "base_commit": "abc123",
+        "problem_statement": "Fix the failing behavior.",
+    }
+    data.pop(missing_field)
+
+    with pytest.raises(KeyError, match=missing_field):
+        SWEbenchInstance.from_dict(data)
+
+
+# 功能：SWEbenchInstance.from_dict 为所有可选字段提供空字符串默认值
+# 设计：只传必需字段并逐项断言默认值，防止数据集缺少可选列时解析失败
+def test_instance_from_dict_defaults_optional_fields() -> None:
+    instance = _sample_instance()
+
+    assert instance.hints_text == ""
+    assert instance.test_patch == ""
+    assert instance.patch == ""
+    assert instance.fail_to_pass == ""
+    assert instance.pass_to_pass == ""
+
+
+# 功能：build_prompt 包含实例对应的仓库和问题描述
+# 设计：使用最小真实实例验证动态上下文，避免只检查固定模板文本
+def test_build_prompt_includes_instance_context() -> None:
+    prompt = build_prompt(_sample_instance())
+
+    assert "owner/repo" in prompt
+    assert "Fix the failing behavior." in prompt
+
+
+# 功能：build_prompt 明确要求定位根因、最小修改和受控测试文件变更
+# 设计：断言关键约束短语，模板弱化实现纪律时测试会给出直接反馈
+def test_build_prompt_includes_implementation_constraints() -> None:
+    prompt = build_prompt(_sample_instance())
+
+    assert "Identify the root cause, not just the symptom" in prompt
+    assert "Make minimal, targeted changes" in prompt
+    assert "Do not modify test files unless explicitly asked" in prompt
+
+
+# 功能：RunResult.to_pred_dict 只输出官方 predictions 所需的三个字段
+# 设计：同时填充内部遥测字段并断言完整字典相等，防止评测输出泄漏额外状态
+def test_run_result_to_pred_dict_exposes_only_prediction_fields() -> None:
+    result = RunResult(
+        instance_id="owner__repo-1",
+        model_patch="diff --git a/a.py b/a.py\n",
+        model_name_or_path="sztu-code-test",
+        status="success",
+        steps=3,
+        input_tokens=100,
+    )
+
+    assert result.to_pred_dict() == {
+        "instance_id": "owner__repo-1",
+        "model_patch": "diff --git a/a.py b/a.py\n",
+        "model_name_or_path": "sztu-code-test",
+    }
+
+
+# 功能：_find_local_parquet 优先识别数据集名称生成的标准文件名
+# 设计：切换到隔离临时目录并创建唯一候选，验证相对 data 路径契约
+def test_find_local_parquet_uses_standard_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    expected = Path("data/princeton-nlp_SWE-bench_Lite_test.parquet")
+    alias = Path("data/swebench_lite_test.parquet")
+    (tmp_path / expected).parent.mkdir()
+    (tmp_path / expected).touch()
+    (tmp_path / alias).touch()
+
+    assert _find_local_parquet("princeton-nlp/SWE-bench_Lite", "test") == expected
+
+
+# 功能：_find_local_parquet 在标准文件缺失时识别 SWE-bench 简写别名
+# 设计：仅创建别名候选，证明回退顺序不会依赖当前仓库中的 data 文件
+def test_find_local_parquet_uses_alias_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    expected = Path("data/swebench_lite_test.parquet")
+    (tmp_path / expected).parent.mkdir()
+    (tmp_path / expected).touch()
+
+    assert _find_local_parquet("princeton-nlp/SWE-bench_Lite", "test") == expected
+
+
+# 功能：_find_local_parquet 在没有本地候选文件时返回 None
+# 设计：使用空临时目录覆盖缺失路径，避免受开发机现有数据集影响
+def test_find_local_parquet_returns_none_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    assert _find_local_parquet("princeton-nlp/SWE-bench_Lite", "test") is None
+
+
+# 功能：get_diff_via_git 对没有工作区修改的本地仓库返回空补丁
+# 设计：创建真实基线提交后立即取 diff，覆盖 Git fallback 的空结果契约
+def test_get_diff_via_git_returns_empty_for_clean_repo(tmp_path: Path) -> None:
+    repo = _create_git_repo(tmp_path)
+
+    assert get_diff_via_git(repo) == ""
+
+
+# 功能：get_diff_via_git 为已跟踪文件的普通修改生成 unified diff
+# 设计：修改真实临时仓库中的文本文件并检查头部与增删行，不模拟 subprocess
+def test_get_diff_via_git_returns_tracked_file_changes(tmp_path: Path) -> None:
+    repo = _create_git_repo(tmp_path)
+    (repo / "sample.py").write_text("value = 2\n", encoding="utf-8")
+
+    patch = get_diff_via_git(repo)
+
+    assert "diff --git a/sample.py b/sample.py" in patch
+    assert "-value = 1" in patch
+    assert "+value = 2" in patch
+
+
+# 功能：load_dataset 存在本地 Parquet 时优先返回本地数据且不调用远程加载器
+# 设计：注入最小 pyarrow 与 datasets 内存模块，验证读取参数并以未调用断言阻止下载路径
+def test_load_dataset_prefers_local_parquet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    parquet_path = Path("data/princeton-nlp_SWE-bench_Lite_test.parquet")
+    (tmp_path / parquet_path).parent.mkdir()
+    (tmp_path / parquet_path).touch()
+    rows = [{"instance_id": "owner__repo-1"}]
+    table = SimpleNamespace(num_rows=1, to_pylist=Mock(return_value=rows))
+    read_table = Mock(return_value=table)
+    remote_load = Mock(side_effect=AssertionError("remote dataset loader must not be called"))
+    fake_pyarrow = ModuleType("pyarrow")
+    fake_parquet = ModuleType("pyarrow.parquet")
+    fake_datasets = ModuleType("datasets")
+    setattr(fake_pyarrow, "parquet", fake_parquet)
+    setattr(fake_parquet, "read_table", read_table)
+    setattr(fake_datasets, "load_dataset", remote_load)
+    monkeypatch.setitem(sys.modules, "pyarrow", fake_pyarrow)
+    monkeypatch.setitem(sys.modules, "pyarrow.parquet", fake_parquet)
+    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
+
+    result = load_dataset("princeton-nlp/SWE-bench_Lite", "test")
+
+    assert result == rows
+    read_table.assert_called_once_with(parquet_path)
+    remote_load.assert_not_called()
 
 
 # 功能：多个 llm.usage 事件按顶层字段正确累计输入、输出与缓存 token

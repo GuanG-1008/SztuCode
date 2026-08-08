@@ -57,6 +57,28 @@ _SYSTEM_PROMPT = (
 )
 
 
+# 在消息列表中扫描摘要确认消息，放置 cache_control 断点
+# 借鉴 Claude Code：摘要 ack 消息上的 cache_control 使前缀稳定可缓存
+# 缓存前缀 = [system + summary_user + summary_ack + 历史摘要]
+def _annotate_cache_control(messages: list[dict[str, object]]) -> None:
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "text":
+                continue
+            text = block.get("text", "")
+            if isinstance(text, str) and "Understood" in text:
+                # 放置 cache_control 断点 — 使此前所有内容可被 API 缓存
+                block["cache_control"] = {"type": "ephemeral"}
+                return
+
+
 # 返回当前 UTC 时间的 ISO 8601 字符串
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -107,6 +129,10 @@ class AnthropicProvider:
             last = dict(tools[-1])
             last["cache_control"] = {"type": "ephemeral"}
             tools = tools[:-1] + [last]
+
+        # 扫描消息列表，在摘要确认消息上放置 cache_control 断点
+        # 使 [system + summary_user + summary_ack] 前缀可被 API 缓存
+        _annotate_cache_control(messages)
 
         kwargs: dict[str, object] = {
             "model": self._model,

@@ -6,6 +6,7 @@ import {
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
 import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
@@ -48,9 +49,13 @@ let sidebarAutoCollapsed = sidebarCollapsed.value;
 const storedSidebarWidth = Number(localStorage.getItem("sztu.sidebarWidth"));
 const sidebarWidth = ref(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, storedSidebarWidth || 268)));
 const sidebarResizing = ref(false);
+const sidebarAnimating = ref(false);
 const sidebarCollapseArmed = ref(false);
 const sidebarPull = ref(0);
+const windowResizing = ref(false);
 let stopSidebarDragListeners: (() => void) | undefined;
+let sidebarAnimTimer: number | undefined;
+let windowResizeEndTimer: number | undefined;
 const connected = ref(false);
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
@@ -1128,10 +1133,63 @@ async function submitChat(content: string) {
 }
 const isMacOS = isMacOSPlatform();
 async function minimizeWindow() { await getCurrentWindow().minimize(); }
-async function toggleMaximizeWindow() { await getCurrentWindow().toggleMaximize(); }
+// macOS：Rust 无动画 work-area fill，避开 NSWindow.zoom 与主面板不同步
+async function toggleMaximizeWindow() {
+  if (isMacOS) {
+    await invoke("macos_toggle_work_area");
+    return;
+  }
+  await getCurrentWindow().toggleMaximize();
+}
 async function closeWindow() { await getCurrentWindow().close(); }
+let stopMacTitlebandDragArm: (() => void) | undefined;
+// 顶栏空白区：移动超过阈值再拖窗，避免吞掉单击/双击；双击用 dblclick 最大化
+function onMacTitlebandPointerDown(event: PointerEvent) {
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest(".nav-toggle-wrap, button, a, input, textarea, select, [role='button']")) return;
+  if (event.detail >= 2) {
+    event.preventDefault();
+    return;
+  }
+  stopMacTitlebandDragArm?.();
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const onMove = (moveEvent: PointerEvent) => {
+    if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 4) return;
+    stopMacTitlebandDragArm?.();
+    void getCurrentWindow().startDragging().catch(() => undefined);
+  };
+  const onUp = () => { stopMacTitlebandDragArm?.(); };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp, { once: true });
+  window.addEventListener("pointercancel", onUp, { once: true });
+  stopMacTitlebandDragArm = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
+    stopMacTitlebandDragArm = undefined;
+  };
+}
+async function onMacTitlebandDblClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest(".nav-toggle-wrap, button, a, input, textarea, select, [role='button']")) return;
+  event.preventDefault();
+  stopMacTitlebandDragArm?.();
+  try {
+    await toggleMaximizeWindow();
+  } catch (error) {
+    console.error("toggleMaximizeWindow failed", error);
+  }
+}
+function animateSidebarCollapsed(next: boolean) {
+  sidebarAnimating.value = true;
+  sidebarCollapsed.value = next;
+  window.clearTimeout(sidebarAnimTimer);
+  sidebarAnimTimer = window.setTimeout(() => { sidebarAnimating.value = false; }, 220);
+}
 function toggleSidebar() {
-  sidebarCollapsed.value = !sidebarCollapsed.value;
+  animateSidebarCollapsed(!sidebarCollapsed.value);
   sidebarAutoCollapsed = false;
 }
 // 拖动边界调整导航宽度，越过最小宽度后的折叠阈值才收起导航
@@ -1184,8 +1242,21 @@ function resizeSidebarWithKeyboard(event: KeyboardEvent) {
   sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth));
   localStorage.setItem("sztu.sidebarWidth", String(sidebarWidth.value));
 }
-function handleWindowResize() {
-  windowWidth.value = window.innerWidth;
+function applySidebarAutoCollapse() {
+  const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
+  if (belowFullSidebarSize) {
+    if (!sidebarCollapsed.value) {
+      animateSidebarCollapsed(true);
+      sidebarAutoCollapsed = true;
+    }
+    return;
+  }
+  if (sidebarAutoCollapsed) {
+    animateSidebarCollapsed(false);
+    sidebarAutoCollapsed = false;
+  }
+}
+function applyInspectorAutoCollapse() {
   // 窄窗口自动收起右侧功能栏，避免会话区被挤没
   if (window.innerWidth < INSPECTOR_AUTO_COLLAPSE_WIDTH) {
     if (inspectorOpen.value) {
@@ -1196,18 +1267,19 @@ function handleWindowResize() {
     inspectorAutoCollapsed = false;
     setInspectorOpen(true);
   }
-  const belowFullSidebarSize = window.innerWidth < FULL_SIDEBAR_MIN_WIDTH || window.innerHeight < FULL_SIDEBAR_MIN_HEIGHT;
-  if (belowFullSidebarSize) {
-    if (!sidebarCollapsed.value) {
-      sidebarCollapsed.value = true;
-      sidebarAutoCollapsed = true;
-    }
-    return;
-  }
-  if (sidebarAutoCollapsed) {
-    sidebarCollapsed.value = false;
-    sidebarAutoCollapsed = false;
-  }
+}
+function handleWindowResize() {
+  windowWidth.value = window.innerWidth;
+  windowResizing.value = true;
+  window.clearTimeout(windowResizeEndTimer);
+  windowResizeEndTimer = window.setTimeout(() => {
+    windowResizing.value = false;
+    // 先卸掉 window-resizing（transition:none），再播侧栏列宽动画
+    void nextTick(() => {
+      applySidebarAutoCollapse();
+      applyInspectorAutoCollapse();
+    });
+  }, 120);
 }
 function handleGlobalShortcut(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
@@ -1235,6 +1307,9 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   stopSidebarDragListeners?.();
+  stopMacTitlebandDragArm?.();
+  window.clearTimeout(sidebarAnimTimer);
+  window.clearTimeout(windowResizeEndTimer);
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
@@ -1253,18 +1328,29 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 <template>
   <div
     class="kimi-shell"
-    :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-collapse-armed': sidebarCollapseArmed }"
+    :class="{ 'is-macos': isMacOS, 'sidebar-collapsed': sidebarCollapsed, 'sidebar-resizing': sidebarResizing, 'sidebar-animating': sidebarAnimating, 'sidebar-collapse-armed': sidebarCollapseArmed, 'window-resizing': windowResizing }"
     :style="{ '--sidebar-width': `${sidebarWidth}px`, '--sidebar-pull': `${sidebarPull}px` }"
   >
-    <header class="kimi-titlebar" :class="{ 'is-macos': isMacOS }">
-      <div class="nav-toggle-wrap">
+    <!-- macOS: fixed toolbar — toggle never moves between titlebar / sidebar. -->
+    <header v-if="isMacOS" class="sidebar-macos-toolbar" @pointerdown="onMacTitlebandPointerDown" @dblclick="onMacTitlebandDblClick">
+      <div class="nav-toggle-wrap" @pointerdown.stop @dblclick.stop>
         <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
           <PanelLeftOpen v-if="sidebarCollapsed" :size="16" :stroke-width="1.8" />
           <PanelLeftClose v-else :size="16" :stroke-width="1.8" />
         </button>
-        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span></div>
+        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>⌘</kbd><kbd>B</kbd></div>
       </div>
-      <div class="titlebar-drag-region" data-tauri-drag-region @dblclick="toggleMaximizeWindow" />
+    </header>
+    <header class="kimi-titlebar" :class="{ 'is-macos': isMacOS }">
+      <div v-if="!isMacOS" class="nav-toggle-wrap">
+        <button class="nav-toggle" type="button" aria-controls="primary-navigation" :aria-expanded="!sidebarCollapsed" :aria-label="sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a'" @click="toggleSidebar">
+          <PanelLeftOpen v-if="sidebarCollapsed" :size="16" :stroke-width="1.8" />
+          <PanelLeftClose v-else :size="16" :stroke-width="1.8" />
+        </button>
+        <div class="nav-toggle-tooltip" role="tooltip"><span>{{ sidebarCollapsed ? '\u5c55\u5f00\u5bfc\u822a' : '\u6536\u8d77\u5bfc\u822a' }}</span><kbd>Ctrl</kbd><kbd>B</kbd></div>
+      </div>
+      <div v-if="isMacOS" class="titlebar-drag-region" @pointerdown="onMacTitlebandPointerDown" @dblclick="onMacTitlebandDblClick" />
+      <div v-else class="titlebar-drag-region" data-tauri-drag-region @dblclick="toggleMaximizeWindow" />
       <div v-if="!isMacOS" class="window-actions" aria-label="Window controls">
         <button class="window-action" type="button" title="Minimize" aria-label="Minimize window" @click="minimizeWindow"><Minus :size="15" :stroke-width="1.8" /></button>
         <button class="window-action" type="button" title="Maximize or restore" aria-label="Maximize or restore window" @click="toggleMaximizeWindow"><Square :size="13" :stroke-width="1.8" /></button>

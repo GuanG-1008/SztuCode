@@ -309,6 +309,8 @@ class AgentRunner:
                     denial_tracker=denial_tracker,
                     compactor=compactor,
                     compact_threshold=self._config.compaction.auto_threshold,
+                    auto_compact_min_tokens=self._config.compaction.auto_compact_min_tokens,
+                    auto_compact_min_steps=self._config.compaction.auto_compact_min_steps,
                     tool_result_limit=self._config.compaction.tool_result_limit,
                     tool_result_keep=self._config.compaction.tool_result_keep,
                     session_id=session_id_str,
@@ -320,6 +322,9 @@ class AgentRunner:
                         max_failures=self._config.agent.stuck_max_failures,
                         max_total=self._config.agent.stuck_max_total,
                     ),
+                    sliding_window_size=self._config.compaction.sliding_window_size,
+                    compact_cooldown_steps=self._config.compaction.compact_cooldown_steps,
+                    circuit_breaker_max_failures=self._config.compaction.circuit_breaker_max_failures,
                 )
                 await loop.run(context)
             except asyncio.CancelledError:

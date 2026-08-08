@@ -16,6 +16,25 @@ _IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv", ".codegraph", "
 _MAX_MATCHES = 200
 
 
+# 匹配相对路径，并允许每个 **/ 模式片段表示零级目录
+def _matches_glob(path: str, pattern: str) -> bool:
+    pending = [pattern]
+    seen: set[str] = set()
+    while pending:
+        candidate = pending.pop()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if fnmatch.fnmatch(path, candidate):
+            return True
+
+        start = 0
+        while (index := candidate.find("**/", start)) != -1:
+            pending.append(candidate[:index] + candidate[index + 3 :])
+            start = index + 1
+    return False
+
+
 class GlobSearchParams(BaseModel):
     model_config = ConfigDict(extra="ignore")
     pattern: str
@@ -63,14 +82,14 @@ class GlobSearchTool(BaseTool):
         results: list[str] = []
         if target.is_file():
             rel = target.relative_to(root).as_posix()
-            if fnmatch.fnmatch(rel, pattern):
+            if _matches_glob(rel, pattern):
                 results.append(rel)
             return results
         for dirpath, dirnames, filenames in os.walk(target):
             dirnames[:] = [d for d in dirnames if d not in _IGNORED_DIRS]
             for filename in filenames:
                 rel = (Path(dirpath) / filename).relative_to(root).as_posix()
-                if fnmatch.fnmatch(rel, pattern):
+                if _matches_glob(rel, pattern):
                     results.append(rel)
         return results
 

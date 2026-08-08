@@ -271,8 +271,7 @@ class OpenAIProvider:
             client_kwargs: dict[str, Any] = {"api_key": api_key or "keyless-placeholder"}
             if base_url:
                 client_kwargs["base_url"] = base_url
-            if is_campus_deepseek:
-                client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
+            client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
             if not api_key:
                 # 免 key 端点：SDK 需要非空 key，但用自定义 transport 剥掉 Authorization 头
                 client_kwargs["http_client"] = _keyless_http_client()
