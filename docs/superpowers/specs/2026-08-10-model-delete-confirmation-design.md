@@ -6,26 +6,26 @@
 
 ## 范围
 
-本 Issue 只修改 `desktop/src/components/ModelConfig/ModelManager.vue` 及对应 Playwright 交互测试：
+本 Issue 修改 `desktop/src/components/ModelConfig/ModelManager.vue`、对应工作台样式和 Playwright 交互测试：
 
 - 删除前展示包含模型名称的确认对话框。
 - 取消确认不调用删除 API。
 - 确认后只允许当前条目进行一次删除请求，并显示进行中状态。
 - 删除成功刷新模型列表并清除旧错误。
-- 删除失败保留模型，在管理页显示可读错误并允许重试。
+- 删除失败关闭确认框、保留模型，在管理页显示可读错误并允许重新发起。
 - 当前模型和内置模型继续不可删除。
 
 ## 方案
 
-增加两个局部状态：`deleteTarget` 保存待确认的模型，`deletingId` 保存正在删除的模型 ID。点击可删除条目只设置 `deleteTarget`，确认按钮才调用 `deleteModelProfile`。请求开始时设置 `deletingId`，成功后写入返回列表并关闭确认框，失败时保留目标和列表、写入页面错误，最后清空 `deletingId`。
+增加两个局部状态：`deleteTarget` 保存待确认的模型，`deletingId` 保存正在删除的模型 ID。点击可删除条目只设置 `deleteTarget`，确认按钮才调用 `deleteModelProfile`。请求开始时设置 `deletingId`，成功后写入返回列表并关闭确认框，失败时关闭确认框、保留列表并写入页面错误，最后清空 `deletingId`。
 
 确认框使用现有组件样式体系中的 `role="alertdialog"`、`aria-modal="true"` 和关联标题，提供取消与确认操作；遮罩点击只关闭确认，不触发删除。删除按钮在 `deleteTarget` 或 `deletingId` 非空时禁用，确认按钮在删除期间禁用并显示忙碌文案。原有的内置/当前模型条件仍由模板决定，后端协议不变。
 
 ## 错误与并发
 
 - 删除前清空页面错误，避免旧错误覆盖新操作。
-- 删除请求失败统一转换为 `Error.message` 或字符串并展示在模型管理页。
-- 删除进行中忽略同一条目的重复确认，确认框保留直至请求结束。
+- 删除请求失败统一转换为 `Error.message` 或字符串并展示在模型管理页，确认框关闭后用户可再次点击删除重试。
+- 删除进行中忽略同一条目的重复确认，确认框在请求结束前保持打开。
 - 删除成功关闭确认框并刷新列表；返回列表是唯一数据源。
 
 ## 验证

@@ -1021,6 +1021,7 @@
 .model-manager > header p { margin: 5px 0 0; color: #858b92; font-size: 12px; }
 .model-manager > header > button, .model-editor > header button { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: #636970; background: transparent; border-radius: 6px; }
 .model-manager > header > button:hover, .model-editor > header button:hover { background: #f0f1f2; }
+.model-manager > header > button:disabled, .model-add-button:disabled { cursor: default; opacity: .42; }
 .model-manager-body { min-height: 0; padding: 24px 32px 44px; overflow-y: auto; }
 .model-manager-error { margin: 12px 0 0; color: #a74343; font-size: 12px; line-height: 1.5; }
 .model-add-button { display: flex; min-height: 35px; align-items: center; gap: 6px; padding: 0 12px; color: #fff; background: #373b40; border-radius: 6px; font-size: 12px; }
@@ -1047,7 +1048,20 @@
 .model-table-row em { display: flex; align-items: center; gap: 3px; color: #37734b; font-size: 11px; font-style: normal; }
 .model-table-row button { display: grid; width: 27px; height: 27px; padding: 0; place-items: center; color: #858a90; background: transparent; border-radius: 5px; }
 .model-table-row button:hover { color: #a14343; background: #fff0f0; }
+.model-table-row button:disabled { cursor: default; opacity: .42; }
 .model-table > p { margin: 0; padding: 25px 12px; color: #858a91; font-size: 12px; text-align: center; }
+.model-delete-backdrop { position: absolute; z-index: 3; inset: 0; display: grid; padding: 24px; place-items: center; background: #15181d6b; backdrop-filter: blur(2px); animation: confirm-backdrop-in 140ms ease-out; }
+.model-delete-dialog { width: min(420px, 100%); overflow: hidden; color: #272b31; background: #fff; border-radius: 8px; box-shadow: 0 24px 70px #10131845; animation: confirm-dialog-in 160ms ease-out; }
+.model-delete-dialog > header { display: flex; gap: 12px; padding: 20px 20px 16px; }
+.model-delete-dialog > header > span { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; color: #a14343; background: #fff0f0; border-radius: 8px; }
+.model-delete-dialog h2 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: 0; }
+.model-delete-dialog header p { margin: 6px 0 0; color: #696f77; font-size: 12px; line-height: 1.6; }
+.model-delete-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 20px; background: #f6f6f6; }
+.model-delete-dialog > footer button { display: inline-flex; min-width: 72px; align-items: center; justify-content: center; gap: 5px; padding: 8px 13px; color: #34383e; background: #fff; border: 1px solid #dedfe1; border-radius: 7px; font-size: 12px; }
+.model-delete-dialog > footer button:hover { background: #f1f1f1; }
+.model-delete-dialog > footer button.danger { color: #fff; background: #b43b3b; border-color: #b43b3b; }
+.model-delete-dialog > footer button.danger:hover { background: #9f3030; }
+.model-delete-dialog > footer button:disabled { cursor: default; opacity: .55; }
 .model-editor-backdrop { position: absolute; z-index: 2; inset: 0; display: grid; padding: 7px; place-items: center; background: #20242a4d; }
 .model-editor { display: grid; width: min(560px, 100%); max-height: calc(100vh - 28px); grid-template-rows: 55px minmax(0, 1fr) auto; overflow: hidden; background: #fff; border: 1px solid #d8dade; border-radius: 8px; box-shadow: 0 22px 64px #181c2238; }
 .model-editor > header { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid #e4e6e8; }
