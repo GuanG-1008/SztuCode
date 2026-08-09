@@ -100,7 +100,7 @@ async function confirmRemove() {
 
 运行 `git diff --check` 和 `git status --short`，确认仅包含组件、交互测试及本 Issue 的设计/计划文档，没有后端协议或凭据文件。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 使用带 `Signed-off-by` 的中文提交，例如：
 
