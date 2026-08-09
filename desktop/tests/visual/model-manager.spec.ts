@@ -54,9 +54,13 @@ test("确认删除成功后只调用一次并移除模型", async ({ page }) => 
   await dialog.getByRole("button", { name: "确认删除", exact: true }).click();
   await expect(dialog.getByRole("button", { name: "删除中", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "删除 自定义模型" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "删除中", exact: true }).evaluate((button) => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
 
   await expect(dialog).toBeHidden();
   await expect(page.getByText("自定义模型", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("服务端返回模型", { exact: true })).toBeVisible();
   expect((await fixtureApi(page)).deleteCalls).toEqual(["custom"]);
 });
 

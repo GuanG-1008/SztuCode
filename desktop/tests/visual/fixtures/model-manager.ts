@@ -51,7 +51,9 @@ async function handleRpc(request: RpcRequest): Promise<Record<string, unknown>> 
     if (deleteDelayMs) await new Promise((resolve) => window.setTimeout(resolve, deleteDelayMs));
     if (deleteMode === "error") return { error: { code: 500, message: "删除模型失败：本地服务暂时不可用" } };
     models = models.filter((item) => item.id !== modelId);
-    return { result: { models: [...models] } };
+    const responseModels = [...models, profile({ id: "server-only", name: "服务端返回模型", model: "server-model" })];
+    models = responseModels;
+    return { result: { models: responseModels } };
   }
   if (request.method === "provider.model_select") {
     const modelId = String(request.params?.model_id ?? "");
