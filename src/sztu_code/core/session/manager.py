@@ -17,6 +17,7 @@ from sztu_code.core.bus.events import (
     SkillInvokedEvent,
 )
 from sztu_code.core.events.bus import EventBus
+from sztu_code.core.prompts import build_system_prompt
 from sztu_code.core.runs import new_run_id
 from sztu_code.core.session.model import Session, SessionMode
 from sztu_code.core.session.store import SessionStore
@@ -62,7 +63,6 @@ class SessionManager:
         self._locks: dict[str, asyncio.Lock] = {
             session.id: asyncio.Lock() for session in restored
         }
-        self._skill_loader = SkillLoader()
 
     def set_provider(self, provider: LLMProvider | None) -> None:
         self._provider = provider
@@ -149,14 +149,26 @@ class SessionManager:
             goal = content
             system_prompt_override: str | None = None
             tool_whitelist: list[str] | None = None
+            workspace_root = (
+                self._workspace_resolver(session.workspace_id)
+                if session.workspace_id is not None and self._workspace_resolver is not None
+                else None
+            )
+            skill_loader = SkillLoader(project_root=workspace_root)
             if content.startswith("/"):
                 parts = content[1:].split(None, 1)
                 skill_name = parts[0]
                 arguments = parts[1] if len(parts) > 1 else ""
-                skill = self._skill_loader.resolve(skill_name)
+                skill = skill_loader.resolve(skill_name)
                 if skill is not None:
-                    goal = self._skill_loader.render_prompt(skill, arguments)
-                    system_prompt_override = skill.system_prompt_template
+                    rendered_skill = skill_loader.render_prompt(skill, arguments)
+                    goal = arguments or content
+                    system_prompt_override = "\n\n".join(
+                        [
+                            build_system_prompt(workspace_root=workspace_root),
+                            f"## Active skill: {skill.name}\n{rendered_skill}",
+                        ]
+                    )
                     tool_whitelist = skill.allowed_tools or None
                     await self._bus.publish(
                         SkillInvokedEvent(
@@ -168,11 +180,6 @@ class SessionManager:
                     )
 
             runner = self._runner_factory()
-            workspace_root = (
-                self._workspace_resolver(session.workspace_id)
-                if session.workspace_id is not None and self._workspace_resolver is not None
-                else None
-            )
             try:
                 await runner.run_and_capture(
                     goal,

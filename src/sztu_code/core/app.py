@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -38,23 +38,44 @@ from sztu_code.core.bus.commands import (
     FileReadResult,
     FileSearchCommand,
     FileSearchResult,
+    MarketplacePluginSummary,
+    MarketplaceSummary,
+    ModelBenchmarkCommand,
+    ModelBenchmarkResult,
     ModelProfileDeleteCommand,
     ModelProfileDeleteResult,
     ModelProfileListCommand,
     ModelProfileListResult,
     ModelProfileSaveCommand,
     ModelProfileSaveResult,
-    ModelTestCommand,
-    ModelTestResult,
-    ModelBenchmarkCommand,
-    ModelBenchmarkResult,
     ModelProfileSelectCommand,
     ModelProfileSelectResult,
     ModelProfileSummary,
+    ModelTestCommand,
+    ModelTestResult,
     PermissionRespondCommand,
     PermissionRespondResult,
     PermissionSetModeCommand,
     PermissionSetModeResult,
+    PluginCatalogCommand,
+    PluginCatalogInstallCommand,
+    PluginCatalogInstallResult,
+    PluginCatalogResult,
+    PluginInstallCommand,
+    PluginInstallResult,
+    PluginListCommand,
+    PluginListResult,
+    PluginMarketplaceAddCommand,
+    PluginMarketplaceAddResult,
+    PluginMarketplaceRefreshCommand,
+    PluginMarketplaceRefreshResult,
+    PluginMarketplaceRemoveCommand,
+    PluginMarketplaceRemoveResult,
+    PluginSetEnabledCommand,
+    PluginSetEnabledResult,
+    PluginSummary,
+    PluginUninstallCommand,
+    PluginUninstallResult,
     PongResult,
     ProviderCcswitchApplyCommand,
     ProviderCcswitchApplyResult,
@@ -96,6 +117,13 @@ from sztu_code.core.bus.commands import (
     SettingsSnapshot,
     SettingsUpdateCommand,
     SettingsUpdateResult,
+    SkillInstallCommand,
+    SkillInstallResult,
+    SkillListCommand,
+    SkillListResult,
+    SkillSetEnabledCommand,
+    SkillSetEnabledResult,
+    SkillSummary,
     WorkspaceArchiveCommand,
     WorkspaceArchiveResult,
     WorkspaceDeleteCommand,
@@ -134,12 +162,13 @@ from sztu_code.core.mcp.server import McpServerManager
 from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.permissions.policy import PermissionMode
 from sztu_code.core.permissions.storage import load_policy_file
+from sztu_code.core.plugins import Marketplace, MarketplaceManager, MarketplacePlugin
 from sztu_code.core.runner import AgentRunner
 from sztu_code.core.runs import events_file, new_run_id
 from sztu_code.core.session import SessionManager, SessionStore
 from sztu_code.core.session.manager import SESSION_BUSY
 from sztu_code.core.session.model import Session
-from sztu_code.core.skills.loader import SkillLoader
+from sztu_code.core.skills.loader import Plugin, Skill, SkillLoader
 from sztu_code.core.trace.record import TraceRecord
 from sztu_code.core.trace.writer import TraceWriter
 from sztu_code.core.transport.ipc_broadcaster import IpcEventBroadcaster
@@ -269,6 +298,7 @@ class CoreApp:
             server_version=sztu_code.__version__,
             uptime_ms=int((time.monotonic() - self._start_time) * 1000),
             received_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            capabilities=["plugin.lifecycle.v1", "plugin.marketplace.v1"],
         )
 
     # 将 EventBus 事件写入 trace（作为 EventBus 订阅者）
@@ -930,6 +960,289 @@ class CoreApp:
             self._sessions.set_provider(provider)
         return SettingsUpdateResult(settings=self._settings_snapshot(), updated=updated)
 
+    # 为可选工作区创建技能加载器，确保目录扫描不依赖 daemon 启动目录
+    def _skill_loader_for_workspace(self, workspace_id: str | None) -> SkillLoader:
+        if workspace_id is None:
+            return SkillLoader()
+        if self._workspaces is None:
+            raise ValueError("workspace manager is not initialized")
+        workspace = self._workspaces.get(workspace_id)
+        return SkillLoader(project_root=Path(workspace.path))
+
+    # 将内部技能对象转换为稳定且可校验的目录协议模型
+    @staticmethod
+    def _skill_summary(skill: Skill) -> SkillSummary:
+        return SkillSummary(
+            id=skill.id,
+            name=skill.name,
+            display_name=skill.display_name or skill.name,
+            description=skill.description[:600],
+            short_description=(skill.short_description or skill.description)[:240],
+            source=skill.source,
+            scope=skill.scope,
+            path=str(skill.path or ""),
+            plugin=skill.plugin,
+            enabled=skill.enabled,
+            icon=skill.icon,
+            brand_color=skill.brand_color,
+            allow_implicit_invocation=skill.allow_implicit_invocation,
+        )
+
+    # 将内部插件对象转换为桌面端使用的插件摘要
+    @staticmethod
+    def _plugin_summary(plugin: Plugin) -> PluginSummary:
+        return PluginSummary(
+            id=plugin.id,
+            name=plugin.name,
+            description=plugin.description[:600],
+            version=plugin.version,
+            source=plugin.source,
+            path=str(plugin.path),
+            skills=list(plugin.skills),
+            installed=True,
+            display_name=plugin.display_name or plugin.name,
+            brand_color=plugin.brand_color,
+            enabled=plugin.enabled,
+        )
+
+    # 将官方兼容市场源转换为运行时协议摘要
+    @staticmethod
+    def _marketplace_summary(marketplace: Marketplace) -> MarketplaceSummary:
+        return MarketplaceSummary(
+            id=marketplace.id,
+            name=marketplace.name,
+            display_name=marketplace.display_name,
+            source=marketplace.source,
+            kind=marketplace.kind,
+            root_path=str(marketplace.root_path),
+            ref=marketplace.ref,
+            sparse_paths=list(marketplace.sparse_paths),
+            plugin_count=marketplace.plugin_count,
+            updated_at=marketplace.updated_at,
+            removable=marketplace.removable,
+            updatable=marketplace.updatable,
+        )
+
+    # 将市场插件条目与当前安装状态合并为目录摘要
+    @staticmethod
+    def _marketplace_plugin_summary(
+        plugin: MarketplacePlugin,
+        installed: dict[str, Plugin],
+    ) -> MarketplacePluginSummary:
+        current = installed.get(plugin.name)
+        return MarketplacePluginSummary(
+            id=plugin.id,
+            marketplace_id=plugin.marketplace_id,
+            marketplace_name=plugin.marketplace_name,
+            name=plugin.name,
+            display_name=plugin.display_name,
+            description=plugin.description[:600],
+            version=plugin.version,
+            category=plugin.category,
+            publisher=plugin.publisher,
+            installation=plugin.installation,
+            authentication=plugin.authentication,
+            installed=current is not None,
+            installed_plugin_id=current.id if current is not None else None,
+        )
+
+    # 为可选工作区创建插件市场管理器
+    def _marketplace_manager_for_workspace(
+        self, workspace_id: str | None
+    ) -> MarketplaceManager:
+        if workspace_id is None:
+            return MarketplaceManager()
+        if self._workspaces is None:
+            raise ValueError("workspace manager is not initialized")
+        workspace = self._workspaces.get(workspace_id)
+        return MarketplaceManager(project_root=Path(workspace.path))
+
+    # 返回工作区感知的完整技能目录，包括被禁用但仍已安装的条目
+    async def _skill_list_handler(self, params: dict[str, Any]) -> SkillListResult:
+        cmd = SkillListCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return SkillListResult(
+            skills=[
+                self._skill_summary(skill)
+                for skill in loader.list_all_skills(include_disabled=True)
+            ]
+        )
+
+    # 将用户选择的本地技能复制到个人或当前工作区目录
+    async def _skill_install_handler(self, params: dict[str, Any]) -> SkillInstallResult:
+        cmd = SkillInstallCommand.model_validate(params)
+        if cmd.scope == "workspace" and cmd.workspace_id is None:
+            raise HandlerError(-32602, "workspace scope requires workspace_id")
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            skill = loader.install_skill(Path(cmd.source_path), cmd.scope)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return SkillInstallResult(skill=self._skill_summary(skill))
+
+    # 持久化技能启停状态，禁用不会删除安装内容
+    async def _skill_set_enabled_handler(
+        self, params: dict[str, Any]
+    ) -> SkillSetEnabledResult:
+        cmd = SkillSetEnabledCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            skill = loader.set_enabled(cmd.skill_id, cmd.enabled)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return SkillSetEnabledResult(skill=self._skill_summary(skill))
+
+    # 返回个人和当前工作区已安装的插件及其所含技能
+    async def _plugin_list_handler(self, params: dict[str, Any]) -> PluginListResult:
+        cmd = PluginListCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginListResult(
+            plugins=[self._plugin_summary(plugin) for plugin in loader.list_plugins()]
+        )
+
+    # 将本地 Codex 兼容插件复制到个人或当前工作区插件目录
+    async def _plugin_install_handler(
+        self, params: dict[str, Any]
+    ) -> PluginInstallResult:
+        cmd = PluginInstallCommand.model_validate(params)
+        if cmd.scope == "workspace" and cmd.workspace_id is None:
+            raise HandlerError(-32602, "workspace scope requires workspace_id")
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            plugin = loader.install_plugin(Path(cmd.source_path), cmd.scope)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginInstallResult(plugin=self._plugin_summary(plugin))
+
+    # 返回官方兼容市场源和可安装插件目录
+    async def _plugin_catalog_handler(self, params: dict[str, Any]) -> PluginCatalogResult:
+        cmd = PluginCatalogCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            installed = {plugin.name: plugin for plugin in loader.list_plugins()}
+            return PluginCatalogResult(
+                marketplaces=[
+                    self._marketplace_summary(marketplace)
+                    for marketplace in manager.list_marketplaces()
+                ],
+                plugins=[
+                    self._marketplace_plugin_summary(plugin, installed)
+                    for plugin in manager.list_plugins()
+                ],
+            )
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+
+    # 添加 GitHub、Git URL 或本地目录插件市场
+    async def _plugin_marketplace_add_handler(
+        self, params: dict[str, Any]
+    ) -> PluginMarketplaceAddResult:
+        cmd = PluginMarketplaceAddCommand.model_validate(params)
+        try:
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            marketplace = manager.add(
+                cmd.source,
+                ref=cmd.git_ref,
+                sparse_paths=cmd.sparse_paths,
+            )
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginMarketplaceAddResult(
+            marketplace=self._marketplace_summary(marketplace)
+        )
+
+    # 刷新一个或全部 Git 插件市场快照
+    async def _plugin_marketplace_refresh_handler(
+        self, params: dict[str, Any]
+    ) -> PluginMarketplaceRefreshResult:
+        cmd = PluginMarketplaceRefreshCommand.model_validate(params)
+        try:
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            marketplaces = manager.refresh(cmd.marketplace_id)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginMarketplaceRefreshResult(
+            marketplaces=[self._marketplace_summary(item) for item in marketplaces]
+        )
+
+    # 移除显式配置的市场源，默认市场不可移除
+    async def _plugin_marketplace_remove_handler(
+        self, params: dict[str, Any]
+    ) -> PluginMarketplaceRemoveResult:
+        cmd = PluginMarketplaceRemoveCommand.model_validate(params)
+        try:
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            manager.remove(cmd.marketplace_id)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginMarketplaceRemoveResult(marketplace_id=cmd.marketplace_id)
+
+    # 从市场条目安装插件，并在完成后清理远程临时快照
+    async def _plugin_catalog_install_handler(
+        self, params: dict[str, Any]
+    ) -> PluginCatalogInstallResult:
+        cmd = PluginCatalogInstallCommand.model_validate(params)
+        if cmd.scope == "workspace" and cmd.workspace_id is None:
+            raise HandlerError(-32602, "workspace scope requires workspace_id")
+        materialized = None
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            catalog_plugin = next(
+                (
+                    item
+                    for item in manager.list_plugins()
+                    if item.id == cmd.catalog_plugin_id
+                ),
+                None,
+            )
+            if catalog_plugin is None:
+                raise ValueError(f"marketplace plugin not found: {cmd.catalog_plugin_id}")
+            materialized = manager.materialize_plugin(catalog_plugin.id)
+            plugin = loader.install_plugin(
+                materialized.path,
+                cmd.scope,
+                install_name=catalog_plugin.name,
+            )
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        finally:
+            if materialized is not None:
+                manager.cleanup_materialized(materialized)
+        return PluginCatalogInstallResult(plugin=self._plugin_summary(plugin))
+
+    # 启用或禁用已安装插件及其捆绑技能
+    async def _plugin_set_enabled_handler(
+        self, params: dict[str, Any]
+    ) -> PluginSetEnabledResult:
+        cmd = PluginSetEnabledCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            plugin = loader.set_plugin_enabled(cmd.plugin_id, cmd.enabled)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginSetEnabledResult(plugin=self._plugin_summary(plugin))
+
+    # 卸载用户明确选择的个人或工作区插件
+    async def _plugin_uninstall_handler(
+        self, params: dict[str, Any]
+    ) -> PluginUninstallResult:
+        cmd = PluginUninstallCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            loader.uninstall_plugin(cmd.plugin_id)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginUninstallResult(plugin_id=cmd.plugin_id)
+
+    # 返回模型连接状态及兼容旧客户端的默认工作区技能摘要
     async def _provider_status_handler(self, params: dict[str, Any]) -> ProviderStatusResult:
         assert self._config is not None
         ProviderStatusCommand.model_validate(params)
@@ -937,8 +1250,8 @@ class CoreApp:
         api_key_name = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
         endpoint_name = "OPENAI_BASE_URL" if provider == "openai" else "ANTHROPIC_BASE_URL"
         skills = [
-            {"name": skill.name, "description": skill.description[:180]}
-            for skill in SkillLoader().list_all_skills()
+            self._skill_summary(skill)
+            for skill in SkillLoader().list_all_skills(include_disabled=True)
         ]
         mcp_servers = (
             self._mcp_manager.statuses(self._config.mcp.servers)
@@ -1315,6 +1628,18 @@ class CoreApp:
         server.register("settings.get", self._settings_get_handler)
         server.register("settings.update", self._settings_update_handler)
         server.register("provider.status", self._provider_status_handler)
+        server.register("skill.list", self._skill_list_handler)
+        server.register("skill.install", self._skill_install_handler)
+        server.register("skill.set_enabled", self._skill_set_enabled_handler)
+        server.register("plugin.list", self._plugin_list_handler)
+        server.register("plugin.install", self._plugin_install_handler)
+        server.register("plugin.set_enabled", self._plugin_set_enabled_handler)
+        server.register("plugin.uninstall", self._plugin_uninstall_handler)
+        server.register("plugin.catalog", self._plugin_catalog_handler)
+        server.register("plugin.catalog_install", self._plugin_catalog_install_handler)
+        server.register("plugin.marketplace_add", self._plugin_marketplace_add_handler)
+        server.register("plugin.marketplace_refresh", self._plugin_marketplace_refresh_handler)
+        server.register("plugin.marketplace_remove", self._plugin_marketplace_remove_handler)
         server.register("provider.ccswitch_list", self._provider_ccswitch_list_handler)
         server.register("provider.ccswitch_apply", self._provider_ccswitch_apply_handler)
         server.register("provider.model_list", self._model_profile_list_handler)
@@ -1327,7 +1652,13 @@ class CoreApp:
 
         addr = await server.start()
         logger.info("sztu-code %s listening addr=%s", sztu_code.__version__, addr)
-        logger.info("config: %s", self._config)
+        logger.info(
+            "config: provider=%s api_format=%s model=%s permission=%s",
+            self._config.llm.provider,
+            self._config.llm.api_format,
+            self._config.llm.default_model,
+            self._config.permission.mode,
+        )
 
         loop = asyncio.get_running_loop()
         shutdown = asyncio.Event()

@@ -17,6 +17,13 @@ type PendingRequest = {
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
+export class IpcRequestError extends Error {
+  constructor(public readonly code: number, message: string) {
+    super(message);
+    this.name = "IpcRequestError";
+  }
+}
+
 export class IpcClient {
   private pending = new Map<string, PendingRequest>();
   private eventHandlers = new Set<(event: IpcEvent) => void>();
@@ -96,7 +103,7 @@ export class IpcClient {
       if (!pending) return;
       this.pending.delete(message.id);
       window.clearTimeout(pending.timeout);
-      if (message.error) pending.reject(new Error(`[${message.error.code}] ${message.error.message}`));
+      if (message.error) pending.reject(new IpcRequestError(message.error.code, message.error.message));
       else pending.resolve(message.result ?? {});
       return;
     }

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { IpcClient } from "../lib/ipc";
+import { IpcClient, IpcRequestError } from "../lib/ipc";
 
 export type Workspace = { workspace_id: string; name: string; path: string; archived: boolean };
 export type NativeSettings = { autostart: boolean; stay_awake: boolean; supported: boolean };
@@ -37,12 +37,35 @@ export type ModelRequestSettings = {
 };
 export type RuntimeSettings = ModelRequestSettings & { provider: "anthropic" | "openai"; model: string; permission_mode: "normal" | "accept_edits" | "plan" | "auto"; base_url?: string };
 export type RuntimeSettingsUpdate = Partial<RuntimeSettings> & { api_key?: string };
-export type ProviderStatus = { provider: "anthropic" | "openai"; api_format: ApiFormat; model: string; api_key_configured: boolean; ready_for_next_run: boolean; skills: Array<{ name: string; description: string }>; mcp_servers: Array<{ name: string; status: string; tool_count?: number }> };
+export type SkillSummary = {
+  id: string; name: string; display_name: string; description: string; short_description: string;
+  source: string; scope: "system" | "personal" | "workspace"; path: string; plugin?: string | null;
+  enabled: boolean; icon?: string | null; brand_color?: string | null; allow_implicit_invocation: boolean;
+};
+export type PluginSummary = {
+  id: string; name: string; description: string; version: string;
+  source: "personal" | "workspace"; path: string; skills: string[]; installed: boolean;
+  display_name: string; brand_color?: string | null; enabled: boolean;
+};
+export type MarketplaceSummary = {
+  id: string; name: string; display_name: string; source: string;
+  kind: "default" | "git" | "local"; root_path: string; ref: string;
+  sparse_paths: string[]; plugin_count: number; updated_at: string;
+  removable: boolean; updatable: boolean;
+};
+export type MarketplacePluginSummary = {
+  id: string; marketplace_id: string; marketplace_name: string;
+  name: string; display_name: string; description: string; version: string;
+  category: string; publisher: string; installation: string; authentication: string;
+  installed: boolean; installed_plugin_id?: string | null;
+};
+export type ProviderStatus = { provider: "anthropic" | "openai"; api_format: ApiFormat; model: string; api_key_configured: boolean; ready_for_next_run: boolean; skills: SkillSummary[]; mcp_servers: Array<{ name: string; status: string; tool_count?: number }> };
 export type ModelProfile = ModelRequestSettings & { id: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; has_api_key: boolean; is_current: boolean; builtin: boolean };
 export type ModelProfileInput = ModelRequestSettings & { id?: string; name: string; vendor: string; provider: "anthropic" | "openai"; model: string; base_url: string; api_key?: string; keyless?: boolean };
 
 const client = new IpcClient();
 let subscribed = false;
+const PLUGIN_PROTOCOL_ERROR = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
 client.onDisconnect(() => { subscribed = false; });
 const EVENT_TOPICS = [
   "session.*", "run.*", "step.*", "llm.*", "tool.*", "permission.*",
@@ -301,6 +324,86 @@ export async function selectModelProfile(modelId: string): Promise<{ settings: R
 export async function deleteModelProfile(modelId: string): Promise<ModelProfile[]> {
   const result = await client.request("provider.model_delete", { model_id: modelId });
   return (result.models as ModelProfile[] | undefined) ?? [];
+}
+
+export async function listSkills(workspaceId?: string | null): Promise<SkillSummary[]> {
+  const result = await client.request("skill.list", { workspace_id: workspaceId ?? null });
+  return (result.skills as SkillSummary[] | undefined) ?? [];
+}
+
+export async function installSkill(sourcePath: string, scope: "personal" | "workspace", workspaceId?: string | null): Promise<SkillSummary> {
+  const result = await client.request("skill.install", { source_path: sourcePath, scope, workspace_id: workspaceId ?? null });
+  return result.skill as SkillSummary;
+}
+
+export async function setSkillEnabled(skillId: string, enabled: boolean, workspaceId?: string | null): Promise<SkillSummary> {
+  const result = await client.request("skill.set_enabled", { skill_id: skillId, enabled, workspace_id: workspaceId ?? null });
+  return result.skill as SkillSummary;
+}
+
+export async function listPlugins(workspaceId?: string | null): Promise<PluginSummary[]> {
+  const result = await client.request("plugin.list", { workspace_id: workspaceId ?? null });
+  return (result.plugins as PluginSummary[] | undefined) ?? [];
+}
+
+export async function installPlugin(sourcePath: string, scope: "personal" | "workspace", workspaceId?: string | null): Promise<PluginSummary> {
+  const result = await client.request("plugin.install", { source_path: sourcePath, scope, workspace_id: workspaceId ?? null });
+  return result.plugin as PluginSummary;
+}
+
+async function requestPluginProtocol(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  try {
+    return await client.request(method, params);
+  } catch (reason) {
+    if (reason instanceof IpcRequestError && reason.code === -32601) {
+      throw new Error(PLUGIN_PROTOCOL_ERROR);
+    }
+    throw reason;
+  }
+}
+
+export async function setPluginEnabled(pluginId: string, enabled: boolean, workspaceId?: string | null): Promise<PluginSummary> {
+  const result = await requestPluginProtocol("plugin.set_enabled", { plugin_id: pluginId, enabled, workspace_id: workspaceId ?? null });
+  return result.plugin as PluginSummary;
+}
+
+export async function uninstallPlugin(pluginId: string, workspaceId?: string | null): Promise<void> {
+  await requestPluginProtocol("plugin.uninstall", { plugin_id: pluginId, workspace_id: workspaceId ?? null, confirm: "uninstall" });
+}
+
+export async function getPluginCatalog(workspaceId?: string | null): Promise<{ marketplaces: MarketplaceSummary[]; plugins: MarketplacePluginSummary[]; supported: boolean }> {
+  try {
+    const result = await client.request("plugin.catalog", { workspace_id: workspaceId ?? null });
+    return {
+      marketplaces: (result.marketplaces as MarketplaceSummary[] | undefined) ?? [],
+      plugins: (result.plugins as MarketplacePluginSummary[] | undefined) ?? [],
+      supported: true,
+    };
+  } catch (reason) {
+    if (reason instanceof IpcRequestError && reason.code === -32601) {
+      return { marketplaces: [], plugins: [], supported: false };
+    }
+    throw reason;
+  }
+}
+
+export async function addPluginMarketplace(source: string, gitRef: string, sparsePaths: string[], workspaceId?: string | null): Promise<MarketplaceSummary> {
+  const result = await requestPluginProtocol("plugin.marketplace_add", { source, git_ref: gitRef, sparse_paths: sparsePaths, workspace_id: workspaceId ?? null });
+  return result.marketplace as MarketplaceSummary;
+}
+
+export async function refreshPluginMarketplaces(marketplaceId?: string | null, workspaceId?: string | null): Promise<MarketplaceSummary[]> {
+  const result = await requestPluginProtocol("plugin.marketplace_refresh", { marketplace_id: marketplaceId ?? null, workspace_id: workspaceId ?? null });
+  return (result.marketplaces as MarketplaceSummary[] | undefined) ?? [];
+}
+
+export async function removePluginMarketplace(marketplaceId: string, workspaceId?: string | null): Promise<void> {
+  await requestPluginProtocol("plugin.marketplace_remove", { marketplace_id: marketplaceId, workspace_id: workspaceId ?? null, confirm: "remove" });
+}
+
+export async function installCatalogPlugin(catalogPluginId: string, scope: "personal" | "workspace", workspaceId?: string | null): Promise<PluginSummary> {
+  const result = await requestPluginProtocol("plugin.catalog_install", { catalog_plugin_id: catalogPluginId, scope, workspace_id: workspaceId ?? null });
+  return result.plugin as PluginSummary;
 }
 
 export type ModelTestResult = { success: boolean; elapsed_ms: number; input_tokens: number; output_tokens: number; error?: string | null };

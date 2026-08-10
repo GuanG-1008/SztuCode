@@ -1,171 +1,514 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
-  Bot, Check, ChevronDown, CirclePlus, Code2, Database, FileText, Image,
-  Link2, PackageCheck, Plus, RefreshCw, Search, Sparkles, Star,
-  WandSparkles, X,
+  Check, ChevronDown, FolderOpen, Package, Plug, Plus, Power,
+  RefreshCw, Search, Settings2, Sparkles, Trash2, X,
 } from "@lucide/vue";
-import { BUILT_IN_SKILLS } from "../CommandPalette/slash-menu";
+import {
+  addPluginMarketplace, getPluginCatalog, installCatalogPlugin, installPlugin,
+  installSkill, listPlugins, listSkills, refreshPluginMarketplaces,
+  removePluginMarketplace, setPluginEnabled, setSkillEnabled, uninstallPlugin,
+  type MarketplacePluginSummary, type MarketplaceSummary, type PluginSummary,
+  type SkillSummary,
+} from "../../services/sztu-runtime";
 
-type LocalSkill = { name: string; description: string; avatar_url?: string | null };
-type HubSkill = {
-  id: string; skillId: string; name: string; source: string; installs: number;
-  description?: string; avatar_url?: string | null;
-};
-type SkillItem = LocalSkill & { source: "local" | "hub"; id: string; installs: number; category: string; tone: string };
+const props = defineProps<{
+  connected: boolean;
+  workspaceId?: string | null;
+  workspaceName?: string | null;
+}>();
 
-const props = defineProps<{ skills: LocalSkill[]; connected: boolean }>();
-const activeArea = ref<"experts" | "skills" | "connectors">("skills");
-const activeCollection = ref<"recommended" | "hub" | "bundles">("recommended");
-const activeCategory = ref("全部");
+type Area = "plugins" | "skills";
+type InstallKind = "plugin" | "skill";
+type InstallScope = "personal" | "workspace";
+type SourceOption = { key: string; label: string; scope: SkillSummary["scope"] };
+
+const activeArea = ref<Area>("plugins");
 const query = ref("");
-const installedOnly = ref(false);
-const featuredOffset = ref(0);
-const addDialogOpen = ref(false);
-const customSkillName = ref("");
-const customSkillSource = ref("");
-const customSkills = ref<LocalSkill[]>([]);
-const hubSkills = ref<HubSkill[]>([]);
-const hubLoading = ref(false);
-const hubError = ref("");
-const hubQueried = ref("");
-const defaultInstalled = ["frontend-design", "find-skills", "review-agent", "documents", "presentations", "imagegen", "visualize", "openai-docs"];
-const storedInstalled = localStorage.getItem("sztu.installedSkills");
-let persistedInstalled: string[] = defaultInstalled;
-try {
-  const parsed = storedInstalled ? JSON.parse(storedInstalled) : null;
-  if (Array.isArray(parsed) && parsed.every((value) => typeof value === "string")) persistedInstalled = parsed;
-} catch { /* Ignore malformed state from an older build. */ }
-const installed = ref(new Set<string>(persistedInstalled));
+const loading = ref(false);
+const error = ref("");
+const skills = ref<SkillSummary[]>([]);
+const plugins = ref<PluginSummary[]>([]);
+const marketplaces = ref<MarketplaceSummary[]>([]);
+const catalogPlugins = ref<MarketplacePluginSummary[]>([]);
+const pluginMarketplaceSupported = ref(true);
+const activeSkillSource = ref("");
+const activeMarketplace = ref("all");
+const addMenuOpen = ref(false);
+const installDialogOpen = ref(false);
+const installKind = ref<InstallKind>("skill");
+const installScope = ref<InstallScope>("personal");
+const installSource = ref("");
+const installError = ref("");
+const installing = ref(false);
+const updatingSkill = ref("");
+const updatingPlugin = ref("");
+const installingCatalogPlugin = ref("");
+const pluginManageOpen = ref(false);
+const marketplaceDialogOpen = ref(false);
+const marketplaceSourceInput = ref<HTMLInputElement | null>(null);
+const marketplaceSource = ref("");
+const marketplaceGitRef = ref("");
+const marketplaceSparsePaths = ref("");
+const marketplaceError = ref("");
+const addingMarketplace = ref(false);
+const refreshingMarketplaces = ref(false);
 
-const curatedSkills: LocalSkill[] = [
-  { name: "公众号爆款封面设计", description: "基于全网每日收录的10w+爆文元数据，分析同类封面视觉元素，AI生成高转化封面设计方案" },
-  { name: "腾讯微云", description: "管理腾讯微云网盘文件（列表、上传、下载、删除、分享）" },
-  { name: "腾讯问卷", description: "腾讯问卷操作（创建、修改、逻辑设置、统计）" },
-  { name: "鹅厂辩证助手", description: "面向腾讯相关性的辩证辅助 Skill，结合内部参考与实时联网核查，给出结论、事实依据和防护提醒" },
-  { name: "NeoData金融搜索服务", description: "自然语言查询股票、基金、宏观、外汇、大宗商品等金融数据" },
-  { name: "东方财富妙想金融数据", description: "基于东方财富数据库，支持自然语言查询金融数据，覆盖A港美、基金、债券等多种资产" },
-  { name: "东方财富妙想市场搜索", description: "基于东方财富数据库，支持自然语言搜索全网最新公告、研报、财经新闻和市场动态" },
-  { name: "战略洞察生成器", description: "基于财报分析生成3-5条核心战略洞察，重点关注经营业务相关高频词和组织架构变化" },
-  { name: "MarkItDown", description: "文档转 Markdown（PDF/Word/PPT/图片OCR/音频转写/网页）" },
-  { name: "抖音热榜", description: "获取抖音实时热榜TOP50，支持历史回溯与定时推送" },
-  { name: "QQ音乐助手", description: "QQ音乐官方智能助手，支持歌曲搜索、每日推荐、AI歌单、排行榜和听歌报告" },
-  { name: "财报文字数据提取器", description: "自动识别并提取股份制银行财报中的文字描述和核心指标" },
-  { name: "Web Access（浏览器自动化）", description: "CDP直连本地 Chrome，智能调度联网工具，支持登录态与并行批量操作" },
-  { name: "腾讯自选股-金融数据查询", description: "由腾讯自选股团队提供，查询A股、港股、美股个股、指数和ETF的详细数据" },
-  { name: "PDF图片文字提取", description: "从图片或PDF中识别提取文字，保留原始格式输出结构化结果" },
-  { name: "fbs-bookwriter", description: "福帮手出品，高质量长文档手稿工具链：书籍、手册、白皮书、行业指南、长篇报道" },
-  { name: "技能创建指南", description: "创建和维护自定义技能的指南" },
-  { name: "Excel 文件处理", description: "Excel 文件创建与分析" },
-  { name: "创业可以学", description: "服务创业者和管理者，解答创业、商业和管理问题，引发深度思考" },
-  { name: "平安证券资讯查询", description: "投股票、公司、行业、ETF、概念或市场主题检索相关新闻、快讯和财经报道" },
-  { name: "同花顺iFinD金融数据查询", description: "同花顺iFinD金融数据查询，覆盖股票、基金、宏观经济、行业经济和新闻公告" },
-  { name: "A股全数数据", description: "A股行情、研报、资金流、公告与财报查询工具包" },
-  { name: "Word 文档生成", description: "Word 文档生成与编辑" },
-  { name: "股份制银行财报数据分析", description: "基于Skill和数据接口获取的银行财报数据，进行经营分析与对比" },
-];
+const title = computed(() => activeArea.value === "plugins" ? "插件" : "技能");
+const subtitle = computed(() => activeArea.value === "plugins"
+  ? "在常用工具中扩展 SztuCode 的能力"
+  : "通过任务专用技能扩展 SztuCode 的能力");
+const normalizedQuery = computed(() => query.value.trim().toLocaleLowerCase());
 
-const metadata: Record<string, { category: string; tone: string }> = {
-  "frontend-design": { category: "设计多媒体", tone: "graphite" }, "find-skills": { category: "AI Agent", tone: "lime" },
-  "review-agent": { category: "开发编程", tone: "coral" }, documents: { category: "办公效率", tone: "blue" },
-  presentations: { category: "办公效率", tone: "amber" }, spreadsheets: { category: "数据分析", tone: "green" },
-  pdf: { category: "内容创作", tone: "olive" }, imagegen: { category: "设计多媒体", tone: "rose" },
-  visualize: { category: "数据分析", tone: "cyan" }, "openai-docs": { category: "知识管理", tone: "black" },
-  "skill-creator": { category: "开发编程", tone: "violet" }, "plugin-creator": { category: "开发编程", tone: "orange" },
-};
-
-const categories = ["全部", "办公效率", "内容创作", "开发编程", "数据分析", "设计多媒体", "AI Agent", "知识管理"];
-const initials = (name: string) => name.split(/[-_\s/]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "S";
-const avatarFor = (skill: SkillItem | HubSkill) => {
-  if (skill.avatar_url) return skill.avatar_url;
-  if (!("source" in skill) || skill.source === "local") return "";
-  const source = skill.source;
-  const owner = source.split("/")[0];
-  return owner ? `https://github.com/${owner}.png?size=96` : "";
-};
-const fallbackTone = (name: string) => ["graphite", "green", "amber", "blue", "violet"][name.length % 5];
-const categoryFor = (name: string) => metadata[name.toLowerCase()]?.category ?? "AI Agent";
-
-const localSkills = computed<SkillItem[]>(() => {
-  const merged = new Map<string, SkillItem>();
-  for (const skill of curatedSkills) merged.set(skill.name.toLowerCase(), { ...skill, id: skill.name, source: "local", installs: 0, category: categoryFor(skill.name), tone: metadata[skill.name]?.tone ?? fallbackTone(skill.name) });
-  for (const skill of BUILT_IN_SKILLS) merged.set(skill.name.toLowerCase(), { ...skill, id: skill.name, source: "local", installs: 0, category: categoryFor(skill.name), tone: metadata[skill.name]?.tone ?? fallbackTone(skill.name) });
-  for (const skill of props.skills) merged.set(skill.name.toLowerCase(), { ...skill, id: skill.name, source: "local", installs: 0, category: categoryFor(skill.name), tone: metadata[skill.name]?.tone ?? fallbackTone(skill.name) });
-  for (const skill of customSkills.value) merged.set(skill.name.toLowerCase(), { ...skill, id: skill.name, source: "local", installs: 0, category: categoryFor(skill.name), tone: metadata[skill.name]?.tone ?? fallbackTone(skill.name) });
-  return [...merged.values()];
+const sourceOptions = computed<SourceOption[]>(() => {
+  const options = new Map<string, SourceOption>();
+  for (const skill of skills.value) {
+    let label = skill.source;
+    if (skill.plugin) label = skill.plugin;
+    else if (skill.source === "project") label = props.workspaceName || "当前项目";
+    else if (skill.source === "user") label = "个人";
+    else if (skill.source === "builtin") label = "系统";
+    options.set(skill.source, { key: skill.source, label, scope: skill.scope });
+  }
+  const rank = { workspace: 0, personal: 1, system: 2 } as const;
+  return [...options.values()].sort((left, right) => rank[left.scope] - rank[right.scope] || left.label.localeCompare(right.label));
 });
-const remoteSkills = computed<SkillItem[]>(() => hubSkills.value.map((skill) => ({
-  name: skill.name || skill.skillId, description: skill.description || `来自 ${skill.source} 的社区技能`, id: skill.id,
-  source: "hub", installs: skill.installs || 0, category: categoryFor(skill.name || skill.skillId), tone: fallbackTone(skill.name || skill.skillId), avatar_url: skill.avatar_url,
-})));
-const allSkills = computed(() => {
-  const map = new Map(localSkills.value.map((skill) => [skill.name.toLowerCase(), skill]));
-  for (const skill of remoteSkills.value) if (!map.has(skill.name.toLowerCase())) map.set(skill.name.toLowerCase(), skill);
-  return [...map.values()];
-});
-const featured = computed(() => (allSkills.value.length ? Array.from({ length: Math.min(4, allSkills.value.length) }, (_, i) => allSkills.value[(featuredOffset.value + i) % allSkills.value.length]) : []));
-const filteredSkills = computed(() => {
-  const value = query.value.trim().toLowerCase();
-  return allSkills.value.filter((skill) => (activeCategory.value === "全部" || skill.category === activeCategory.value) && (!installedOnly.value || installed.value.has(skill.name)) && (!value || `${skill.name} ${skill.description} ${skill.category}`.toLowerCase().includes(value)));
-});
-const installedCount = computed(() => [...installed.value].filter((name) => allSkills.value.some((skill) => skill.name === name)).length);
 
-async function searchHub(term = query.value) {
-  const value = term.trim();
-  if (!value) { hubSkills.value = []; hubError.value = ""; hubQueried.value = ""; return; }
-  hubLoading.value = true; hubError.value = ""; hubQueried.value = value;
-  try {
-    const response = await fetch(`https://skills.sh/api/search?q=${encodeURIComponent(value)}`, { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`SkillHub 返回 ${response.status}`);
-    const data = await response.json() as { skills?: HubSkill[] };
-    hubSkills.value = (data.skills ?? []).slice(0, 60);
-  } catch (error) {
-    hubSkills.value = [];
-    hubError.value = error instanceof Error ? error.message : "SkillHub 暂时不可用";
-  } finally { hubLoading.value = false; }
+const matchingSkills = computed(() => {
+  const value = normalizedQuery.value;
+  return skills.value.filter((skill) => !value || `${skill.display_name} ${skill.name} ${skill.short_description} ${skill.description} ${skill.plugin ?? ""}`.toLocaleLowerCase().includes(value));
+});
+const installedSkills = computed(() => matchingSkills.value.filter((skill) => skill.enabled));
+const visibleInstalledSkills = computed(() => installedSkills.value.slice(0, 6));
+const remainingInstalled = computed(() => Math.max(0, installedSkills.value.length - visibleInstalledSkills.value.length));
+const catalogSkills = computed(() => matchingSkills.value.filter((skill) => !activeSkillSource.value || skill.source === activeSkillSource.value));
+const visibleInstalledPlugins = computed(() => {
+  const value = normalizedQuery.value;
+  return plugins.value.filter((plugin) => !value || `${plugin.display_name} ${plugin.name} ${plugin.description} ${plugin.skills.join(" ")}`.toLocaleLowerCase().includes(value));
+});
+const visibleCatalogPlugins = computed(() => {
+  const value = normalizedQuery.value;
+  return catalogPlugins.value.filter((plugin) => (activeMarketplace.value === "all" || plugin.marketplace_id === activeMarketplace.value)
+    && plugin.installation !== "NOT_AVAILABLE"
+    && (!value || `${plugin.display_name} ${plugin.name} ${plugin.description} ${plugin.category} ${plugin.publisher}`.toLocaleLowerCase().includes(value)));
+});
+const activeMarketplaceName = computed(() => activeMarketplace.value === "all"
+  ? "全部插件"
+  : marketplaces.value.find((item) => item.id === activeMarketplace.value)?.display_name ?? "插件市场");
+const activeMarketplaceInfo = computed(() => marketplaces.value.find((item) => item.id === activeMarketplace.value) ?? null);
+
+function initials(name: string): string {
+  return name.split(/[-_\s/]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "S";
 }
-let searchTimer: number | undefined;
-watch(query, (value) => { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(() => void searchHub(value), 320); });
-function toggleInstalled(name: string) { const next = new Set(installed.value); next.has(name) ? next.delete(name) : next.add(name); installed.value = next; localStorage.setItem("sztu.installedSkills", JSON.stringify([...next])); }
-function rotateFeatured() { featuredOffset.value = (featuredOffset.value + 4) % Math.max(1, allSkills.value.length); }
-function addCustomSkill() { const name = customSkillName.value.trim(); if (!name) return; customSkills.value = [...customSkills.value, { name, description: customSkillSource.value.trim() || "本地自定义技能" }]; toggleInstalled(name); customSkillName.value = ""; customSkillSource.value = ""; addDialogOpen.value = false; }
-function iconFor(skill: SkillItem) { if (skill.category === "开发编程") return Code2; if (skill.category === "数据分析") return Database; if (skill.category === "设计多媒体") return Image; if (skill.category === "办公效率" || skill.category === "内容创作") return FileText; return Sparkles; }
-onMounted(() => { if (query.value) void searchHub(); });
+
+function fallbackColor(name: string): string {
+  const colors = ["#24282e", "#7867d9", "#1d8f6f", "#d36b44", "#307bc4", "#a27a20"];
+  return colors[[...name].reduce((sum, item) => sum + (item.codePointAt(0) ?? 0), 0) % colors.length];
+}
+
+function skillStyle(skill: SkillSummary): Record<string, string> {
+  return { "--skill-color": skill.brand_color || fallbackColor(skill.name) };
+}
+
+function skillDescription(skill: SkillSummary): string {
+  return skill.short_description || skill.description || "可复用的任务工作流";
+}
+
+function pluginDescription(plugin: PluginSummary): string {
+  if (plugin.description) return plugin.description;
+  if (plugin.skills.length) return `包含 ${plugin.skills.length} 个技能：${plugin.skills.slice(0, 3).join("、")}`;
+  return "本地安装的 SztuCode 插件";
+}
+
+async function refreshCatalog(): Promise<void> {
+  if (!props.connected) {
+    skills.value = [];
+    plugins.value = [];
+    marketplaces.value = [];
+    catalogPlugins.value = [];
+    error.value = "尚未连接本地运行时";
+    return;
+  }
+  loading.value = true;
+  error.value = "";
+  try {
+    const [nextSkills, nextPlugins, nextCatalog] = await Promise.all([
+      listSkills(props.workspaceId),
+      listPlugins(props.workspaceId),
+      getPluginCatalog(props.workspaceId),
+    ]);
+    skills.value = nextSkills;
+    plugins.value = nextPlugins;
+    marketplaces.value = nextCatalog.marketplaces;
+    catalogPlugins.value = nextCatalog.plugins;
+    pluginMarketplaceSupported.value = nextCatalog.supported;
+    if (!nextCatalog.supported) {
+      error.value = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
+    }
+    const sources = new Set(nextSkills.map((skill) => skill.source));
+    if (!activeSkillSource.value || !sources.has(activeSkillSource.value)) {
+      activeSkillSource.value = sourceOptions.value[0]?.key ?? "";
+    }
+    if (activeMarketplace.value !== "all" && !nextCatalog.marketplaces.some((item) => item.id === activeMarketplace.value)) {
+      activeMarketplace.value = "all";
+    }
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "能力目录加载失败";
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function toggleSkill(skill: SkillSummary): Promise<void> {
+  updatingSkill.value = skill.id;
+  error.value = "";
+  try {
+    const updated = await setSkillEnabled(skill.id, !skill.enabled, props.workspaceId);
+    skills.value = skills.value.map((item) => item.id === updated.id ? updated : item);
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "技能状态更新失败";
+  } finally {
+    updatingSkill.value = "";
+  }
+}
+
+async function togglePlugin(plugin: PluginSummary): Promise<void> {
+  updatingPlugin.value = plugin.id;
+  error.value = "";
+  try {
+    const updated = await setPluginEnabled(plugin.id, !plugin.enabled, props.workspaceId);
+    plugins.value = plugins.value.map((item) => item.id === updated.id ? updated : item);
+    await refreshCatalog();
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "插件状态更新失败";
+  } finally {
+    updatingPlugin.value = "";
+  }
+}
+
+async function installFromCatalog(plugin: MarketplacePluginSummary): Promise<void> {
+  installingCatalogPlugin.value = plugin.id;
+  error.value = "";
+  try {
+    const scope: InstallScope = props.workspaceId ? "workspace" : "personal";
+    await installCatalogPlugin(plugin.id, scope, props.workspaceId);
+    await refreshCatalog();
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "市场插件安装失败";
+  } finally {
+    installingCatalogPlugin.value = "";
+  }
+}
+
+async function removeInstalledPlugin(plugin: PluginSummary): Promise<void> {
+  const confirmed = await confirmDialog(`卸载“${plugin.display_name || plugin.name}”？捆绑技能将不再可用。`, { title: "卸载插件", kind: "warning" });
+  if (!confirmed) return;
+  updatingPlugin.value = plugin.id;
+  try {
+    await uninstallPlugin(plugin.id, props.workspaceId);
+    await refreshCatalog();
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "插件卸载失败";
+  } finally {
+    updatingPlugin.value = "";
+  }
+}
+
+function openMarketplaceDialog(): void {
+  addMenuOpen.value = false;
+  if (!pluginMarketplaceSupported.value) {
+    error.value = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
+    return;
+  }
+  marketplaceSource.value = "";
+  marketplaceGitRef.value = "";
+  marketplaceSparsePaths.value = "";
+  marketplaceError.value = "";
+  marketplaceDialogOpen.value = true;
+  void nextTick(() => marketplaceSourceInput.value?.focus());
+}
+
+async function submitMarketplace(): Promise<void> {
+  const source = marketplaceSource.value.trim();
+  if (!source) return;
+  addingMarketplace.value = true;
+  marketplaceError.value = "";
+  try {
+    const sparsePaths = marketplaceSparsePaths.value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+    const added = await addPluginMarketplace(source, marketplaceGitRef.value.trim(), sparsePaths, props.workspaceId);
+    marketplaceDialogOpen.value = false;
+    activeMarketplace.value = added.id;
+    await refreshCatalog();
+  } catch (reason) {
+    marketplaceError.value = reason instanceof Error ? reason.message : "添加插件市场失败";
+  } finally {
+    addingMarketplace.value = false;
+  }
+}
+
+async function refreshMarketplaces(): Promise<void> {
+  refreshingMarketplaces.value = true;
+  error.value = "";
+  try {
+    await refreshPluginMarketplaces(null, props.workspaceId);
+    await refreshCatalog();
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "插件市场刷新失败";
+  } finally {
+    refreshingMarketplaces.value = false;
+  }
+}
+
+async function removeMarketplace(marketplace: MarketplaceSummary): Promise<void> {
+  const confirmed = await confirmDialog(`移除插件市场“${marketplace.display_name}”？已安装插件不会被卸载。`, { title: "移除插件市场", kind: "warning" });
+  if (!confirmed) return;
+  try {
+    await removePluginMarketplace(marketplace.id, props.workspaceId);
+    activeMarketplace.value = "all";
+    await refreshCatalog();
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "插件市场移除失败";
+  }
+}
+
+function openInstall(kind: InstallKind): void {
+  installKind.value = kind;
+  installScope.value = props.workspaceId ? "workspace" : "personal";
+  installSource.value = "";
+  installError.value = "";
+  addMenuOpen.value = false;
+  installDialogOpen.value = true;
+}
+
+async function browseInstallSource(): Promise<void> {
+  try {
+    const selected = await openDialog({ directory: true, multiple: false, title: installKind.value === "plugin" ? "选择插件目录" : "选择技能目录" });
+    if (typeof selected === "string") installSource.value = selected;
+  } catch (reason) {
+    installError.value = reason instanceof Error ? reason.message : "无法打开目录选择器";
+  }
+}
+
+async function submitInstall(): Promise<void> {
+  const source = installSource.value.trim();
+  if (!source) return;
+  installing.value = true;
+  installError.value = "";
+  try {
+    if (installKind.value === "skill") await installSkill(source, installScope.value, props.workspaceId);
+    else await installPlugin(source, installScope.value, props.workspaceId);
+    installDialogOpen.value = false;
+    await refreshCatalog();
+    activeArea.value = installKind.value === "skill" ? "skills" : "plugins";
+  } catch (reason) {
+    installError.value = reason instanceof Error ? reason.message : "安装失败";
+  } finally {
+    installing.value = false;
+  }
+}
+
+watch(() => [props.workspaceId, props.connected], () => void refreshCatalog());
+watch(activeArea, () => { query.value = ""; addMenuOpen.value = false; });
+onMounted(() => void refreshCatalog());
 </script>
 
 <template>
-  <section class="skill-center" aria-label="技能中心">
+  <section class="skill-center" aria-label="插件与技能">
     <header class="skill-center__topbar">
-      <nav aria-label="能力类型">
-        <button :class="{ active: activeArea === 'experts' }" @click="activeArea = 'experts'"><Bot :size="16" />专家</button>
-        <button :class="{ active: activeArea === 'skills' }" @click="activeArea = 'skills'"><WandSparkles :size="16" />技能</button>
-        <button :class="{ active: activeArea === 'connectors' }" @click="activeArea = 'connectors'"><Link2 :size="16" />连接器</button>
+      <nav aria-label="能力目录">
+        <button :class="{ active: activeArea === 'plugins' }" @click="activeArea = 'plugins'">插件</button>
+        <button :class="{ active: activeArea === 'skills' }" @click="activeArea = 'skills'">技能</button>
       </nav>
       <div class="skill-center__actions">
-        <label><Search :size="15" /><input v-model="query" :placeholder="activeArea === 'skills' ? '搜索技能' : '搜索能力'" /></label>
-        <button :class="{ active: installedOnly }" @click="installedOnly = !installedOnly"><PackageCheck :size="16" />我安装的 <span>{{ installedCount }}</span></button>
-        <button @click="addDialogOpen = true"><CirclePlus :size="16" />添加技能</button>
+        <button title="刷新目录" aria-label="刷新目录" :disabled="loading" @click="refreshCatalog"><RefreshCw :size="18" :class="{ spin: loading }" /></button>
+        <button :title="activeArea === 'plugins' ? '管理已安装插件' : '技能设置'" :aria-label="activeArea === 'plugins' ? '管理已安装插件' : '技能设置'" :disabled="activeArea !== 'plugins'" @click="pluginManageOpen = true"><Settings2 :size="18" /></button>
+        <div class="skill-add">
+          <button class="skill-add__trigger" :aria-expanded="addMenuOpen" @click="addMenuOpen = !addMenuOpen"><span>添加</span><ChevronDown :size="15" /></button>
+          <div v-if="addMenuOpen" class="skill-add__menu">
+            <button @click="openMarketplaceDialog"><Package :size="15" /><span><b>添加插件市场</b><small>GitHub、Git URL 或本地目录</small></span></button>
+            <button @click="openInstall('plugin')"><Plug :size="15" /><span><b>从本地安装插件</b><small>选择 Codex 兼容插件目录</small></span></button>
+            <button @click="openInstall('skill')"><Sparkles :size="15" /><span><b>添加技能</b><small>从包含 SKILL.md 的目录安装</small></span></button>
+          </div>
+        </div>
       </div>
     </header>
 
-    <main v-if="activeArea === 'skills'" class="skill-center__body">
-      <section class="hub-status" :class="{ 'hub-status--error': hubError }" aria-live="polite">
-        <span class="hub-status__dot" :class="{ online: !hubError && !hubLoading, loading: hubLoading }"></span>
-        <span v-if="hubLoading">正在连接 SkillHub，搜索“{{ hubQueried }}”</span><span v-else-if="hubError">SkillHub 连接失败：{{ hubError }}</span><span v-else>{{ hubQueried ? `SkillHub 已返回 ${hubSkills.length} 项结果` : 'SkillHub 社区目录 · 输入关键词开始搜索' }}</span>
-        <button v-if="hubError" aria-label="重试 SkillHub" @click="searchHub()"><RefreshCw :size="13" /></button>
-      </section>
-      <section class="featured-skills" aria-labelledby="featured-title">
-        <header><h1 id="featured-title">精选技能</h1><button @click="rotateFeatured"><RefreshCw :size="14" />换一换</button></header>
-        <div><article v-for="skill in featured" :key="skill.id" class="featured-skill"><div class="skill-avatar" :data-tone="skill.tone"><img v-if="avatarFor(skill)" :src="avatarFor(skill)" :alt="`${skill.name} 头像`" loading="lazy" @error="($event.target as HTMLImageElement).style.display = 'none'" /><span>{{ initials(skill.name) }}</span></div><div><h2>{{ skill.name }}</h2><p>{{ skill.description }}</p></div><button :aria-label="`${installed.has(skill.name) ? '移除' : '添加'} ${skill.name}`" :class="{ installed: installed.has(skill.name) }" @click="toggleInstalled(skill.name)"><Check v-if="installed.has(skill.name)" :size="15" /><Plus v-else :size="16" /></button></article></div>
-      </section>
-      <section class="skill-catalog" aria-labelledby="catalog-title">
-        <header class="skill-catalog__tabs"><button :class="{ active: activeCollection === 'recommended' }" @click="activeCollection = 'recommended'">推荐</button><button id="catalog-title" :class="{ active: activeCollection === 'hub' }" @click="activeCollection = 'hub'">SkillHub</button><button :class="{ active: activeCollection === 'bundles' }" @click="activeCollection = 'bundles'">套件</button><small>{{ connected ? '已连接本地运行时' : '离线模式' }}</small></header>
-        <div class="skill-catalog__filters"><button v-for="category in categories" :key="category" :class="{ active: activeCategory === category }" @click="activeCategory = category">{{ category }}</button><button class="skill-sort">综合评分<ChevronDown :size="13" /></button></div>
-        <div v-if="filteredSkills.length" class="skill-grid"><article v-for="skill in filteredSkills" :key="`${skill.source}:${skill.id}`" class="skill-card"><header><div class="skill-avatar skill-avatar--small" :data-tone="skill.tone"><img v-if="avatarFor(skill)" :src="avatarFor(skill)" :alt="`${skill.name} 头像`" loading="lazy" @error="($event.target as HTMLImageElement).style.display = 'none'" /><span>{{ initials(skill.name) }}</span></div><h2>{{ skill.name }}</h2><button :aria-label="`${installed.has(skill.name) ? '移除' : '添加'} ${skill.name}`" :class="{ installed: installed.has(skill.name) }" @click="toggleInstalled(skill.name)"><Check v-if="installed.has(skill.name)" :size="15" /><Plus v-else :size="16" /></button></header><p>{{ skill.description }}</p><footer><span v-if="skill.installs">↓ {{ skill.installs >= 1000 ? `${(skill.installs / 1000).toFixed(1).replace('.0', '')}k` : skill.installs }}</span><span v-else>本地技能</span><span v-if="skill.source === 'hub'">SkillHub</span><span><Star :size="11" />{{ skill.source === 'hub' ? '社区' : '内置' }}</span></footer></article></div>
-        <div v-else class="skill-empty"><Search :size="22" /><b>{{ hubError ? 'SkillHub 暂无结果' : '没有匹配的技能' }}</b><button @click="query = ''; activeCategory = '全部'; installedOnly = false">清除筛选</button></div>
-      </section>
+    <main class="skill-center__body">
+      <header class="skill-page-heading">
+        <h1>{{ title }}</h1>
+        <p>{{ subtitle }}</p>
+      </header>
+
+      <label class="skill-search">
+        <Search :size="18" />
+        <input v-model="query" :placeholder="`搜索${title}`" />
+      </label>
+
+      <p v-if="error" class="skill-runtime-error" role="alert">{{ error }}<button @click="refreshCatalog">重试</button></p>
+
+      <template v-if="activeArea === 'skills'">
+        <section class="installed-section" aria-labelledby="installed-skills-title">
+          <h2 id="installed-skills-title">已安装</h2>
+          <div v-if="visibleInstalledSkills.length" class="capability-list capability-list--installed">
+            <article v-for="skill in visibleInstalledSkills" :key="skill.id" class="capability-row">
+              <span class="capability-icon" :style="skillStyle(skill)">{{ initials(skill.display_name) }}</span>
+              <span class="capability-copy"><b>{{ skill.display_name }}</b><small>{{ skillDescription(skill) }}</small></span>
+              <Check :size="18" class="installed-check" />
+            </article>
+          </div>
+          <p v-else-if="!loading" class="section-empty">没有启用的技能</p>
+          <p v-if="remainingInstalled" class="installed-more">另有 {{ remainingInstalled }} 项已安装技能</p>
+        </section>
+
+        <nav v-if="sourceOptions.length" class="source-tabs" aria-label="技能来源">
+          <button v-for="source in sourceOptions" :key="source.key" :class="{ active: activeSkillSource === source.key }" @click="activeSkillSource = source.key">{{ source.label }}</button>
+        </nav>
+
+        <section class="catalog-section" aria-label="技能目录">
+          <div v-if="catalogSkills.length" class="capability-list">
+            <article v-for="skill in catalogSkills" :key="skill.id" class="capability-row" :class="{ disabled: !skill.enabled }">
+              <span class="capability-icon" :style="skillStyle(skill)">{{ initials(skill.display_name) }}</span>
+              <span class="capability-copy"><b>{{ skill.display_name }}</b><small>{{ skillDescription(skill) }}</small><em v-if="skill.plugin">{{ skill.plugin }}</em></span>
+              <button class="skill-state" :class="{ enabled: skill.enabled }" :disabled="updatingSkill === skill.id" :title="skill.enabled ? '禁用技能' : '启用技能'" @click="toggleSkill(skill)">
+                <RefreshCw v-if="updatingSkill === skill.id" :size="16" class="spin" />
+                <Check v-else-if="skill.enabled" :size="18" />
+                <Power v-else :size="16" />
+              </button>
+            </article>
+          </div>
+          <p v-else-if="!loading" class="section-empty">没有匹配的技能</p>
+        </section>
+      </template>
+
+      <template v-else>
+        <section class="plugin-installed-strip" aria-labelledby="installed-plugins-title">
+          <header><h2 id="installed-plugins-title">已安装</h2><button class="plugin-manage-trigger" @click="pluginManageOpen = true"><Settings2 :size="16" />管理</button></header>
+          <div v-if="plugins.length" class="plugin-icons">
+            <button v-for="plugin in plugins.slice(0, 9)" :key="plugin.id" :title="`${plugin.display_name} · ${plugin.enabled ? '已启用' : '已禁用'}`" :class="{ disabled: !plugin.enabled }" :style="{ '--plugin-color': plugin.brand_color || fallbackColor(plugin.name) }" @click="pluginManageOpen = true"><Plug :size="19" /></button>
+          </div>
+          <p v-else-if="!loading" class="section-empty">尚未安装本地插件</p>
+        </section>
+
+        <div class="marketplace-toolbar">
+          <nav class="source-tabs plugin-source-tabs" aria-label="插件市场">
+            <button :class="{ active: activeMarketplace === 'all' }" @click="activeMarketplace = 'all'">全部</button>
+            <button v-for="marketplace in marketplaces" :key="marketplace.id" :class="{ active: activeMarketplace === marketplace.id }" :title="marketplace.source" @click="activeMarketplace = marketplace.id">{{ marketplace.display_name }}</button>
+          </nav>
+          <div class="marketplace-toolbar__actions">
+            <button title="刷新插件市场" :disabled="refreshingMarketplaces || !marketplaces.some((item) => item.updatable)" @click="refreshMarketplaces"><RefreshCw :size="15" :class="{ spin: refreshingMarketplaces }" /></button>
+            <button v-if="activeMarketplaceInfo?.removable" title="移除当前插件市场" @click="removeMarketplace(activeMarketplaceInfo)"><Trash2 :size="15" /></button>
+            <button title="添加插件市场" @click="openMarketplaceDialog"><Plus :size="16" /></button>
+          </div>
+        </div>
+
+        <section class="catalog-section plugin-catalog" aria-label="插件目录">
+          <header><h2>{{ activeMarketplaceName }}</h2><small v-if="activeMarketplaceInfo">{{ activeMarketplaceInfo.plugin_count }} 个插件</small></header>
+          <div v-if="visibleCatalogPlugins.length" class="capability-list">
+            <article v-for="plugin in visibleCatalogPlugins" :key="plugin.id" class="capability-row plugin-row marketplace-plugin-row">
+              <span class="capability-icon plugin-icon" :style="{ '--skill-color': fallbackColor(plugin.name) }"><Package :size="18" /></span>
+              <span class="capability-copy"><b>{{ plugin.display_name }}<em v-if="plugin.version">{{ plugin.version }}</em></b><small>{{ plugin.description || 'Codex 兼容插件' }}</small><em>{{ plugin.marketplace_name }}<template v-if="plugin.publisher"> · {{ plugin.publisher }}</template><template v-if="plugin.category"> · {{ plugin.category }}</template></em></span>
+              <span v-if="plugin.installed" class="catalog-installed"><Check :size="15" />已安装</span>
+              <button v-else class="catalog-install" :disabled="installingCatalogPlugin === plugin.id" @click="installFromCatalog(plugin)"><RefreshCw v-if="installingCatalogPlugin === plugin.id" :size="14" class="spin" /><Plus v-else :size="14" />{{ installingCatalogPlugin === plugin.id ? '安装中' : '安装' }}</button>
+            </article>
+          </div>
+          <div v-else-if="!loading" class="plugin-empty">
+            <Plug :size="22" /><b>{{ marketplaces.length ? '此市场还没有可用插件' : '还没有插件市场' }}</b><p>{{ marketplaces.length ? '切换其他市场，或刷新已添加的 Git 市场。' : '添加仓库或本地市场，发现并安装 Codex 兼容插件。' }}</p><button @click="openMarketplaceDialog"><Plus :size="14" />添加插件市场</button>
+          </div>
+        </section>
+      </template>
     </main>
-    <main v-else class="skill-center__body capability-view"><header><component :is="activeArea === 'experts' ? Bot : Link2" :size="22" /><div><h1>{{ activeArea === 'experts' ? '专家' : '连接器' }}</h1><p>{{ activeArea === 'experts' ? '面向特定开发场景的任务角色' : '连接本地工具与外部服务' }}</p></div></header><div class="capability-grid"><article v-for="item in activeArea === 'experts' ? ['代码审查专家', '前端实现专家', '项目分析专家'] : ['本地工作区', '浏览器连接', 'MCP 服务']" :key="item"><span><Bot v-if="activeArea === 'experts'" :size="19" /><Link2 v-else :size="19" /></span><h2>{{ item }}</h2><p>{{ activeArea === 'experts' ? '用于聚焦任务的可复用角色配置' : '按需授权并管理连接状态' }}</p><button><Plus :size="15" />添加</button></article></div></main>
-    <div v-if="addDialogOpen" class="skill-dialog-backdrop" @mousedown.self="addDialogOpen = false"><form class="skill-dialog" role="dialog" aria-modal="true" aria-labelledby="add-skill-title" @submit.prevent="addCustomSkill"><header><div><h2 id="add-skill-title">添加技能</h2><p>从本地目录或 Git 仓库登记技能。</p></div><button type="button" aria-label="关闭" @click="addDialogOpen = false"><X :size="17" /></button></header><label>技能名称<input v-model="customSkillName" autofocus placeholder="例如：release-notes" /></label><label>来源<input v-model="customSkillSource" placeholder="本地路径或仓库地址" /></label><footer><button type="button" @click="addDialogOpen = false">取消</button><button class="primary" :disabled="!customSkillName.trim()">添加</button></footer></form></div>
+
+    <div v-if="installDialogOpen" class="skill-dialog-backdrop" @mousedown.self="installDialogOpen = false">
+      <form class="skill-dialog" role="dialog" aria-modal="true" aria-labelledby="install-title" @submit.prevent="submitInstall">
+        <header><div><h2 id="install-title">添加{{ installKind === 'plugin' ? '插件' : '技能' }}</h2><p>{{ installKind === 'plugin' ? '选择包含 .codex-plugin/plugin.json 或 plugin.json 的目录。' : '选择包含 SKILL.md 的目录，也可粘贴 Markdown 文件路径。' }}</p></div><button type="button" aria-label="关闭" @click="installDialogOpen = false"><X :size="17" /></button></header>
+        <label>安装位置<select v-model="installScope"><option value="personal">个人</option><option value="workspace" :disabled="!workspaceId">当前工作区{{ workspaceName ? ` · ${workspaceName}` : '' }}</option></select></label>
+        <label>本地来源<div class="source-path-input"><input v-model="installSource" autofocus placeholder="选择或粘贴本地目录路径" /><button type="button" @click="browseInstallSource"><FolderOpen :size="15" />浏览</button></div></label>
+        <p v-if="installError" class="install-error">{{ installError }}</p>
+        <footer><button type="button" @click="installDialogOpen = false">取消</button><button class="primary" :disabled="!installSource.trim() || installing">{{ installing ? '安装中…' : '安装' }}</button></footer>
+      </form>
+    </div>
+
+    <div v-if="marketplaceDialogOpen" class="skill-dialog-backdrop marketplace-backdrop" @mousedown.self="marketplaceDialogOpen = false">
+      <form class="skill-dialog marketplace-dialog" role="dialog" aria-modal="true" aria-labelledby="marketplace-title" @submit.prevent="submitMarketplace">
+        <header><div><h2 id="marketplace-title">添加插件市场</h2><p>从 GitHub 仓库、Git URL 或本地文件夹添加。 <a href="https://developers.openai.com/plugins/build/plugins" target="_blank" rel="noreferrer">了解更多</a></p></div><button type="button" aria-label="关闭" @click="marketplaceDialogOpen = false"><X :size="19" /></button></header>
+        <label>来源<input ref="marketplaceSourceInput" v-model="marketplaceSource" placeholder="openai/plugins 或 git@github.com:org/repo.git" /></label>
+        <label>Git 引用<input v-model="marketplaceGitRef" placeholder="主分支" /></label>
+        <label>稀疏路径<textarea v-model="marketplaceSparsePaths" rows="4" placeholder="plugins/codex" /></label>
+        <p v-if="marketplaceError" class="install-error">{{ marketplaceError }}</p>
+        <footer><button type="button" @click="marketplaceDialogOpen = false">取消</button><button class="primary" :disabled="!marketplaceSource.trim() || addingMarketplace">{{ addingMarketplace ? '添加中…' : '添加市场' }}</button></footer>
+      </form>
+    </div>
+
+    <div v-if="pluginManageOpen" class="skill-dialog-backdrop" @mousedown.self="pluginManageOpen = false">
+      <section class="skill-dialog plugin-manage-dialog" role="dialog" aria-modal="true" aria-labelledby="plugin-manage-title">
+        <header><div><h2 id="plugin-manage-title">管理已安装插件</h2><p>插件被禁用后，其捆绑技能不会进入任务上下文。</p></div><button type="button" aria-label="关闭" @click="pluginManageOpen = false"><X :size="17" /></button></header>
+        <div v-if="visibleInstalledPlugins.length" class="plugin-manage-list">
+          <article v-for="plugin in visibleInstalledPlugins" :key="plugin.id" :class="{ disabled: !plugin.enabled }">
+            <span class="plugin-manage-icon" :style="{ '--plugin-color': plugin.brand_color || fallbackColor(plugin.name) }"><Plug :size="17" /></span>
+            <span><b>{{ plugin.display_name }}</b><small>{{ pluginDescription(plugin) }}</small><em>{{ plugin.source === 'workspace' ? '当前工作区' : '个人' }}<template v-if="plugin.version"> · {{ plugin.version }}</template></em></span>
+            <button class="plugin-toggle" :class="{ enabled: plugin.enabled }" :disabled="updatingPlugin === plugin.id" :title="plugin.enabled ? '禁用插件' : '启用插件'" @click="togglePlugin(plugin)"><RefreshCw v-if="updatingPlugin === plugin.id" :size="14" class="spin" /><span v-else /></button>
+            <button class="plugin-remove" :disabled="updatingPlugin === plugin.id" title="卸载插件" @click="removeInstalledPlugin(plugin)"><Trash2 :size="15" /></button>
+          </article>
+        </div>
+        <p v-else class="section-empty">没有匹配的已安装插件。</p>
+      </section>
+    </div>
   </section>
 </template>
+
+<style scoped>
+.skill-center button:focus { outline: 0; }
+.skill-center button:focus-visible { box-shadow: inset 0 0 0 1px #8e9297; }
+.plugin-manage-trigger { display: flex; align-items: center; gap: 5px; padding: 4px 7px; color: #777a7e; background: transparent; border: 0; border-radius: 6px; font-size: 11px; }
+.plugin-manage-trigger:hover { color: #292b2e; background: #f3f3f3; }
+.plugin-icons button { display: grid; width: 46px; height: 46px; padding: 0; place-items: center; color: #fff; background: var(--plugin-color, #333); border: 0; border-radius: 11px; box-shadow: inset 0 0 0 1px #ffffff26, 0 2px 5px #00000012; }
+.plugin-icons button:hover { transform: translateY(-1px); box-shadow: inset 0 0 0 1px #ffffff26, 0 5px 12px #0000001c; }
+.plugin-icons button.disabled { opacity: .42; filter: grayscale(.45); }
+.marketplace-toolbar { display: flex; margin-top: 38px; align-items: end; justify-content: space-between; gap: 14px; }
+.marketplace-toolbar .source-tabs { min-width: 0; margin-top: 0; }
+.marketplace-toolbar__actions { display: flex; flex: none; gap: 4px; }
+.marketplace-toolbar__actions button { display: grid; width: 31px; height: 31px; padding: 0; place-items: center; color: #777a7e; background: #f5f5f5; border: 1px solid #e8e8e8; border-radius: 8px; }
+.marketplace-toolbar__actions button:hover:not(:disabled) { color: #25272a; background: #ededed; }
+.marketplace-toolbar__actions button:disabled { opacity: .38; }
+.plugin-catalog > header { display: flex; align-items: baseline; justify-content: space-between; }
+.plugin-catalog > header small { color: #a1a3a7; font-size: 11px; }
+.marketplace-plugin-row { grid-template-columns: 50px minmax(0, 1fr) auto; }
+.catalog-install { display: flex; height: 31px; padding: 0 10px; align-items: center; gap: 4px; color: #34363a; background: #f1f2f3; border: 1px solid #e1e2e3; border-radius: 8px; font-size: 12px; }
+.catalog-install:hover:not(:disabled) { background: #e8e9ea; }
+.catalog-install:disabled { opacity: .55; }
+.catalog-installed { display: flex; align-items: center; gap: 4px; color: #8d9094; font-size: 11px; white-space: nowrap; }
+.marketplace-dialog { width: min(520px, 100%); padding: 28px 30px 30px; border-radius: 20px; }
+.marketplace-dialog > header { margin-bottom: 22px; }
+.marketplace-dialog > header h2 { font-size: 20px; letter-spacing: -.25px; }
+.marketplace-dialog > header p { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; margin-top: 7px; font-size: 13px; }
+.marketplace-dialog > header p a { display: inline-flex; align-items: center; gap: 3px; color: #1683ef; text-decoration: none; }
+.marketplace-dialog > header p a:hover { color: #006bd6; }
+.marketplace-dialog > header > button { color: #55585c; background: transparent; }
+.marketplace-dialog > header > button:hover { background: #f2f2f2; }
+.marketplace-dialog > label { margin-top: 16px; gap: 8px; color: #73767a; font-size: 13px; }
+.marketplace-dialog input { height: 43px; padding-inline: 12px; background: #fff; border-color: #dcdddf; border-radius: 8px; font-size: 14px; }
+.marketplace-dialog textarea { min-height: 88px; padding: 11px 12px; resize: vertical; color: #303236; background: #fff; border: 1px solid #dcdddf; border-radius: 8px; outline: 0; font: inherit; font-size: 14px; }
+.marketplace-dialog input:focus, .marketplace-dialog textarea:focus { border-color: #1683ef; box-shadow: 0 0 0 1px #1683ef; }
+.marketplace-dialog > footer { margin-top: 18px; }
+.marketplace-dialog > footer button { height: 40px; padding-inline: 17px; border: 1px solid #e2e3e5; border-radius: 10px; font-size: 13px; }
+.marketplace-dialog > footer button.primary { border-color: #24262a; }
+.plugin-manage-dialog { width: min(610px, 100%); max-height: min(680px, calc(100vh - 40px)); overflow: auto; }
+.plugin-manage-list { display: grid; gap: 4px; }
+.plugin-manage-list article { display: grid; min-width: 0; padding: 9px 7px; grid-template-columns: 42px minmax(0, 1fr) 38px 32px; align-items: center; gap: 9px; border-radius: 9px; }
+.plugin-manage-list article:hover { background: #f7f7f7; }
+.plugin-manage-list article.disabled { opacity: .62; }
+.plugin-manage-icon { display: grid; width: 40px; height: 40px; place-items: center; color: #fff; background: var(--plugin-color, #333); border-radius: 9px; }
+.plugin-manage-list article > span:nth-child(2) { display: block; min-width: 0; }
+.plugin-manage-list b, .plugin-manage-list small, .plugin-manage-list em { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-manage-list b { color: #303236; font-size: 13px; }
+.plugin-manage-list small { margin-top: 3px; color: #8e9195; font-size: 11px; }
+.plugin-manage-list em { margin-top: 3px; color: #b0b2b5; font-size: 9px; font-style: normal; }
+.plugin-toggle { display: grid; width: 34px; height: 20px; padding: 2px; align-items: center; justify-items: start; background: #d5d6d8; border: 0; border-radius: 10px; }
+.plugin-toggle > span { width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px #0003; transition: transform .15s ease; }
+.plugin-toggle.enabled { background: #26282b; }
+.plugin-toggle.enabled > span { transform: translateX(14px); }
+.plugin-remove { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: #9a7773; background: transparent; border: 0; border-radius: 7px; }
+.plugin-remove:hover { color: #a33d32; background: #fff0ee; }
+@media (max-width: 620px) { .marketplace-toolbar { align-items: stretch; flex-direction: column; } .marketplace-toolbar__actions { justify-content: flex-end; } .marketplace-plugin-row { grid-template-columns: 44px minmax(0, 1fr) auto; } .catalog-install { width: 31px; padding: 0; justify-content: center; font-size: 0; } .marketplace-dialog { padding: 23px 20px 22px; } }
+</style>
