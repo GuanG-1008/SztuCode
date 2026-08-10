@@ -603,3 +603,137 @@ test("workspace panel fullscreen hides all other windows and fills the viewport"
   await expect(page.locator(".sidebar-viewport")).toBeVisible();
   await expect(page.locator(".task-canvas")).toBeVisible();
 });
+
+// 功能：模型管理页在窄窗口下不横向溢出、文字不重叠
+// 设计：独立 fixture 挂载 ModelManager（IPC 已 mock），分别以 920px（宽）/620px（窄）两个视口渲染，
+// 断言页面无横向滚动、操作列与按钮不重叠，并对窄视口提交视觉快照
+async function openModelManagerFixture(page: import("@playwright/test").Page, width: number, height = 800) {
+  await page.setViewportSize({ width, height });
+  await page.goto("/tests/visual/fixtures/model-manager.html");
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.locator(".model-table-row")).toHaveCount(4);
+}
+
+test("model manager keeps a clear table layout at 920px and never overflows horizontally", async ({ page }) => {
+  await openModelManagerFixture(page, 920);
+
+  const geometry = await page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>(".model-manager-body")!;
+    const table = document.querySelector<HTMLElement>(".model-table")!;
+    const row = document.querySelector<HTMLElement>(".model-table-row")!;
+    const action = row.querySelector<HTMLElement>("span:last-child")!;
+    return {
+      bodyScrollWidth: body.scrollWidth,
+      bodyClientWidth: body.clientWidth,
+      rowRight: row.getBoundingClientRect().right,
+      tableRight: table.getBoundingClientRect().right,
+      actionRight: action.getBoundingClientRect().right,
+      headerVisible: !!Array.from(document.querySelectorAll(".model-table > header span")).find((el) => (el as HTMLElement).offsetParent),
+      nameEllipsized: getComputedStyle(row.querySelector("b")!).textOverflow === "ellipsis",
+    };
+  });
+
+  expect(geometry.bodyScrollWidth).toBeLessThanOrEqual(geometry.bodyClientWidth);
+  expect(geometry.rowRight).toBeLessThanOrEqual(geometry.tableRight);
+  expect(geometry.actionRight).toBeLessThanOrEqual(geometry.tableRight);
+  expect(geometry.headerVisible).toBe(true);
+  expect(geometry.nameEllipsized).toBe(true);
+
+  // 920px 仍是完整表格：四列表头全部可见
+  const headerLabels = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>(".model-table > header span"))
+      .filter((el) => el.offsetParent)
+      .map((el) => el.textContent?.trim()),
+  );
+  expect(headerLabels).toEqual(["模型", "服务商", "接口", "操作"]);
+  await expect(page).toHaveScreenshot("model-manager-920.png", { fullPage: true });
+});
+
+test("model manager switches to single column at 620px without horizontal overflow", async ({ page }) => {
+  await openModelManagerFixture(page, 620);
+
+  const geometry = await page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>(".model-manager-body")!;
+    const table = document.querySelector<HTMLElement>(".model-table")!;
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".model-table-row"));
+    const firstRow = rows[0]!;
+    const header = document.querySelector<HTMLElement>(".model-table > header")!;
+    const editorButton = document.querySelector<HTMLElement>(".model-add-button")!;
+    const vendorCell = firstRow.querySelector<HTMLElement>(":scope > span:nth-child(2)")!;
+    const apiCell = firstRow.querySelector<HTMLElement>(":scope > span:nth-child(3)")!;
+    return {
+      bodyScrollWidth: body.scrollWidth,
+      bodyClientWidth: body.clientWidth,
+      tableRight: table.getBoundingClientRect().right,
+      bodyRight: body.getBoundingClientRect().right,
+      firstRowRight: firstRow.getBoundingClientRect().right,
+      editorButtonRight: editorButton.getBoundingClientRect().right,
+      rowCount: rows.length,
+      headerRight: header.getBoundingClientRect().right,
+      vendorCellHidden: getComputedStyle(vendorCell).display === "none",
+      apiCellHidden: getComputedStyle(apiCell).display === "none",
+      nameTitle: firstRow.querySelector("b")!.getAttribute("title"),
+      modelTitle: firstRow.querySelector("small")!.getAttribute("title"),
+    };
+  });
+
+  expect(geometry.bodyScrollWidth).toBeLessThanOrEqual(geometry.bodyClientWidth);
+  expect(geometry.firstRowRight).toBeLessThanOrEqual(geometry.tableRight);
+  expect(geometry.tableRight).toBeLessThanOrEqual(geometry.bodyRight);
+  expect(geometry.editorButtonRight).toBeLessThanOrEqual(geometry.bodyRight);
+  expect(geometry.headerRight).toBeLessThanOrEqual(geometry.bodyRight);
+  expect(geometry.rowCount).toBe(4);
+  // 窄窗口下服务商/接口列让位于名称与操作，完整值保留在 title 中
+  expect(geometry.vendorCellHidden).toBe(true);
+  expect(geometry.apiCellHidden).toBe(true);
+  expect(geometry.nameTitle).toBeTruthy();
+  expect(geometry.modelTitle).toBeTruthy();
+  await expect(page).toHaveScreenshot("model-manager-620.png", { fullPage: true });
+});
+
+test("model editor form becomes single column at 620px and stays inside the dialog", async ({ page }) => {
+  await openModelManagerFixture(page, 620);
+  // 直接注入编辑器打开状态与服务商选择（绕过点击，避免 backdrop 拦截，与 diff-review 注入模式一致）
+  await page.locator(".model-manager").evaluate((el) => {
+    const instance = (el as HTMLElement & { __vueParentComponent?: { setupState?: Record<string, unknown> } }).__vueParentComponent;
+    const setup = instance?.setupState;
+    if (!setup) throw new Error("ModelManager setupState is unavailable");
+    const apply = (key: string, value: unknown) => {
+      const refish = setup[key] as { value?: unknown } | undefined;
+      if (refish && typeof refish === "object" && "value" in refish) refish.value = value;
+      else setup[key] = value;
+    };
+    apply("editorOpen", true);
+    apply("selectedVendor", { name: "DeepSeek", logo: null, mark: "D", provider: "openai", baseUrl: "https://api.deepseek.com/v1", apiKeyUrl: "https://platform.deepseek.com/api_keys" });
+  });
+  await expect(page.locator(".model-editor-fields")).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const editor = document.querySelector<HTMLElement>(".model-editor")!;
+    const fields = document.querySelector<HTMLElement>(".model-editor-fields")!;
+    const grid = document.querySelector<HTMLElement>(".model-vendor-grid")!;
+    const labels = Array.from(fields.querySelectorAll<HTMLElement>("label"));
+    const editorRect = editor.getBoundingClientRect();
+    const columns = getComputedStyle(fields).gridTemplateColumns.split(" ").length;
+    const vendorColumns = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+    return {
+      editorWidth: editorRect.width,
+      editorRight: editorRect.right,
+      viewportWidth: window.innerWidth,
+      fieldsColumns: columns,
+      vendorColumns,
+      fieldsInside: fields.getBoundingClientRect().right <= editorRect.right,
+      labelCount: labels.length,
+      labelsInside: labels.every((label) => label.getBoundingClientRect().right <= editorRect.right + 0.5),
+    };
+  });
+
+  expect(geometry.editorWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.editorRight).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.fieldsColumns).toBe(1);
+  expect(geometry.vendorColumns).toBe(1);
+  expect(geometry.fieldsInside).toBe(true);
+  expect(geometry.labelCount).toBeGreaterThan(0);
+  expect(geometry.labelsInside).toBe(true);
+  await expect(page.locator(".model-editor")).toHaveScreenshot("model-editor-620.png", { fullPage: true });
+});
