@@ -611,7 +611,8 @@ async function openModelManagerFixture(page: import("@playwright/test").Page, wi
   await page.setViewportSize({ width, height });
   await page.goto("/tests/visual/fixtures/model-manager.html");
   await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
-  await expect(page.locator(".model-table-row")).toHaveCount(4);
+  // fixture 提供 3 个本地模型（mock 的 query_profile 服务端模型仅用于注入场景，不计入表格行）
+  await expect(page.locator(".model-table-row")).toHaveCount(3);
 }
 
 test("model manager keeps a clear table layout at 920px and never overflows horizontally", async ({ page }) => {
@@ -682,7 +683,7 @@ test("model manager switches to single column at 620px without horizontal overfl
   expect(geometry.tableRight).toBeLessThanOrEqual(geometry.bodyRight);
   expect(geometry.editorButtonRight).toBeLessThanOrEqual(geometry.bodyRight);
   expect(geometry.headerRight).toBeLessThanOrEqual(geometry.bodyRight);
-  expect(geometry.rowCount).toBe(4);
+  expect(geometry.rowCount).toBe(3);
   // 窄窗口下服务商/接口列让位于名称与操作，完整值保留在 title 中
   expect(geometry.vendorCellHidden).toBe(true);
   expect(geometry.apiCellHidden).toBe(true);
@@ -737,3 +738,115 @@ test("model editor form becomes single column at 620px and stays inside the dial
   expect(geometry.labelsInside).toBe(true);
   await expect(page.locator(".model-editor")).toHaveScreenshot("model-editor-620.png", { fullPage: true });
 });
+
+// 功能：模型管理页模态框的键盘与焦点交互（Issue #28）
+// 设计：独立 fixture 挂载包装组件（触发按钮 + ModelManager），验证
+// 初始焦点、Tab/Shift+Tab 焦点循环、Escape 分层关闭、关闭后焦点恢复。
+async function openModelManagerKeyboard(page: import("@playwright/test").Page, width = 920, height = 800) {
+  await page.setViewportSize({ width, height });
+  await page.goto("/tests/visual/fixtures/model-manager-keyboard.html");
+  await expect(page.locator("#open-model-manager")).toBeVisible();
+  await page.locator("#open-model-manager").click();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.locator(".model-table-row")).toHaveCount(3);
+}
+
+test("model manager dialog receives initial focus and restores focus to the trigger on close", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 初始焦点应在模型管理面板内，而不是停留在触发按钮或 body
+  const initialFocusInside = await page.locator(".model-manager").evaluate((el) =>
+    el.contains(document.activeElement),
+  );
+  expect(initialFocusInside).toBe(true);
+
+  // 关闭模型管理（点击关闭按钮），焦点应回到触发按钮
+  await page.getByRole("button", { name: "关闭模型管理", exact: true }).click();
+  await expect(page.locator(".model-manager")).not.toBeVisible();
+  await expect(page.locator("#open-model-manager")).toBeFocused();
+});
+
+test("model manager editor dialog traps Tab focus and closes with Escape", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 通过注入打开编辑器（绕过 backdrop 点击拦截，与既有测试一致）
+  await page.locator(".model-manager").evaluate((el) => {
+    const instance = (el as HTMLElement & { __vueParentComponent?: { setupState?: Record<string, unknown> } }).__vueParentComponent;
+    const setup = instance?.setupState;
+    if (!setup) throw new Error("ModelManager setupState is unavailable");
+    const apply = (key: string, value: unknown) => {
+      const refish = setup[key] as { value?: unknown } | undefined;
+      if (refish && typeof refish === "object" && "value" in refish) refish.value = value;
+      else setup[key] = value;
+    };
+    apply("editorOpen", true);
+    apply("selectedVendor", { name: "DeepSeek", logo: null, mark: "D", provider: "openai", baseUrl: "https://api.deepseek.com/v1", apiKeyUrl: "https://platform.deepseek.com/api_keys" });
+  });
+  const editor = page.locator(".model-editor");
+  await expect(editor).toBeVisible();
+
+  // 初始焦点应在编辑器内（首个可聚焦控件）
+  const firstFocusable = editor.locator("button, input, select, textarea").first();
+  await expect(firstFocusable).toBeFocused();
+
+  // Tab 循环：在编辑器内连续 Tab，焦点始终不离开编辑器
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Tab");
+    const stillInside = await editor.evaluate((el) => el.contains(document.activeElement));
+    expect(stillInside).toBe(true);
+  }
+
+  // Shift+Tab 反向循环，焦点仍不离开编辑器
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  const insideAfterShiftTab = await editor.evaluate((el) => el.contains(document.activeElement));
+  expect(insideAfterShiftTab).toBe(true);
+
+  // Escape 关闭编辑器，且模型管理面板仍打开
+  await page.keyboard.press("Escape");
+  await expect(editor).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+});
+
+test("model delete dialog closes with Escape and restores focus to the delete button", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 打开删除弹窗（点击自定义模型的删除按钮）
+  const deleteButton = page.locator(".model-table-row").filter({ hasText: "自定义模型" }).getByRole("button", { name: /删除/ });
+  await deleteButton.click();
+  await expect(page.getByRole("alertdialog", { name: "删除模型" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "取消", exact: true })).toBeFocused();
+
+  // Escape 关闭删除弹窗
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("alertdialog", { name: "删除模型" })).not.toBeVisible();
+  // 焦点应回到删除按钮
+  await expect(deleteButton).toBeFocused();
+});
+
+test("Escape closes only the topmost dialog, a second Escape closes the manager", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 打开编辑器（第一层弹窗）
+  await page.locator(".model-manager").evaluate((el) => {
+    const instance = (el as HTMLElement & { __vueParentComponent?: { setupState?: Record<string, unknown> } }).__vueParentComponent;
+    const setup = instance?.setupState;
+    if (!setup) throw new Error("ModelManager setupState is unavailable");
+    const apply = (key: string, value: unknown) => {
+      const refish = setup[key] as { value?: unknown } | undefined;
+      if (refish && typeof refish === "object" && "value" in refish) refish.value = value;
+      else setup[key] = value;
+    };
+    apply("editorOpen", true);
+    apply("selectedVendor", { name: "DeepSeek", logo: null, mark: "D", provider: "openai", baseUrl: "https://api.deepseek.com/v1", apiKeyUrl: "https://platform.deepseek.com/api_keys" });
+  });
+  const editor = page.locator(".model-editor");
+  await expect(editor).toBeVisible();
+
+  // 第一次 Escape：只关闭编辑器，模型管理面板仍打开
+  await page.keyboard.press("Escape");
+  await expect(editor).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+
+  // 第二次 Escape：关闭模型管理面板，焦点回到触发按钮
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".model-manager")).not.toBeVisible();
+  await expect(page.locator("#open-model-manager")).toBeFocused();
+});
+
