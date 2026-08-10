@@ -2,7 +2,7 @@
 import { Check, ChevronDown, ExternalLink, Eye, EyeOff, LoaderCircle, Play, Plus, Settings2, Trash2, X } from "@lucide/vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import {
   deleteModelProfile, getProviderStatus, listModelProfiles, saveModelProfile, selectModelProfile, testModelProfile,
   type ModelProfile, type ProviderStatus, type RuntimeSettings,
@@ -29,6 +29,10 @@ const reasoningEffort = ref<"" | "low" | "medium" | "high" | "xhigh" | "max">(""
 const timeoutS = ref(120); const maxRetries = ref(2); const contextWindow = ref(0); const cacheControl = ref(true);
 const showKey = ref(false); const saving = ref(false); const error = ref("");
 const testing = ref(false); const testResult = ref("");
+const deleteTarget = ref<ModelProfile | null>(null); const deletingId = ref<string | null>(null);
+const deleteTrigger = ref<HTMLButtonElement | null>(null); const modelManagerBody = ref<HTMLElement | null>(null);
+const deleteCancelButton = ref<HTMLButtonElement | null>(null);
+let modelRequestVersion = 0;
 const canSave = computed(() => Boolean(selectedVendor.value && name.value.trim() && model.value.trim() && apiKey.value.trim()));
 
 async function refresh() {
@@ -52,11 +56,16 @@ async function getApiKey() {
 async function save() {
   if (!canSave.value || !selectedVendor.value) return;
   if (baseUrl.value && !/^https?:\/\//i.test(baseUrl.value)) { error.value = "API 地址需要以 http:// 或 https:// 开头"; return; }
+  const requestVersion = ++modelRequestVersion;
   saving.value = true; error.value = "";
   try {
     const result = await saveModelProfile({ name: name.value.trim(), vendor: selectedVendor.value.name, provider: provider.value, api_format: apiFormat.value, model: model.value.trim(), base_url: baseUrl.value.trim(), api_key: apiKey.value.trim(), max_output_tokens: maxOutputTokens.value, temperature: temperature.value, top_p: topP.value, reasoning_effort: reasoningEffort.value, timeout_s: timeoutS.value, max_retries: maxRetries.value, context_window: contextWindow.value, cache_control: cacheControl.value });
+    if (requestVersion !== modelRequestVersion) return;
     models.value = result.models; emit("updated", result.settings, await getProviderStatus()); editorOpen.value = false;
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  } catch (reason) {
+    if (requestVersion !== modelRequestVersion) return;
+    error.value = reason instanceof Error ? reason.message : String(reason);
+  }
   finally { saving.value = false; }
 }
 async function testConnection() {
@@ -69,34 +78,87 @@ async function testConnection() {
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
   finally { testing.value = false; }
 }
-async function remove(item: ModelProfile) { if (item.is_current) return; models.value = await deleteModelProfile(item.id); }
+function remove(item: ModelProfile, event?: MouseEvent) {
+  if (item.is_current || item.builtin || deleteTarget.value || deletingId.value) return;
+  error.value = "";
+  deleteTrigger.value = event?.currentTarget instanceof HTMLButtonElement ? event.currentTarget : null;
+  modelRequestVersion += 1;
+  deleteTarget.value = item;
+  void focusDeleteDialog();
+}
+async function focusDeleteDialog() {
+  await nextTick();
+  deleteCancelButton.value?.focus();
+}
+async function restoreDeleteFocus() {
+  const trigger = deleteTrigger.value;
+  deleteTrigger.value = null;
+  await nextTick();
+  if (trigger?.isConnected) trigger.focus();
+  else modelManagerBody.value?.focus();
+}
+function cancelRemove() {
+  if (!deletingId.value) {
+    deleteTarget.value = null;
+    void restoreDeleteFocus();
+  }
+}
+async function confirmRemove() {
+  const target = deleteTarget.value;
+  if (!target || target.is_current || target.builtin || deletingId.value) return;
+  deletingId.value = target.id;
+  error.value = "";
+  try {
+    models.value = await deleteModelProfile(target.id);
+    deleteTarget.value = null;
+    void restoreDeleteFocus();
+  } catch (reason) {
+    deleteTarget.value = null;
+    error.value = reason instanceof Error ? reason.message : String(reason);
+    void restoreDeleteFocus();
+  } finally {
+    deletingId.value = null;
+  }
+}
 // 点击开关把该模型设为当前使用；已是当前模型则忽略
 async function selectModel(item: ModelProfile) {
   if (item.is_current) return;
+  const requestVersion = ++modelRequestVersion;
   error.value = "";
   try {
     const result = await selectModelProfile(item.id);
+    if (requestVersion !== modelRequestVersion) return;
     models.value = result.models;
     emit("updated", result.settings, await getProviderStatus());
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  } catch (reason) {
+    if (requestVersion !== modelRequestVersion) return;
+    error.value = reason instanceof Error ? reason.message : String(reason);
+  }
 }
 onMounted(() => { void refresh(); });
 </script>
 
 <template>
   <section class="model-manager" aria-label="模型管理">
-    <header><div><h1>模型</h1><p>配置 API Key，添加并管理本机可用模型。</p></div><button type="button" aria-label="关闭模型管理" @click="emit('close')"><X :size="18" /></button></header>
-    <div class="model-manager-body">
-      <button type="button" class="model-add-button" @click="beginAdd"><Plus :size="15" />添加模型</button>
+    <header><div><h1>模型</h1><p>配置 API Key，添加并管理本机可用模型。</p></div><button type="button" :disabled="Boolean(deleteTarget || deletingId)" aria-label="关闭模型管理" @click="emit('close')"><X :size="18" /></button></header>
+    <div ref="modelManagerBody" class="model-manager-body" tabindex="-1" :inert="Boolean(deleteTarget || deletingId)">
+      <button type="button" class="model-add-button" :disabled="Boolean(deleteTarget || deletingId)" @click="beginAdd"><Plus :size="15" />添加模型</button>
       <div class="model-table">
         <header><span>模型</span><span>服务商</span><span>接口</span><span>操作</span></header>
         <div v-for="item in models" :key="item.id" class="model-table-row">
-          <span><span class="model-table-name"><button type="button" class="model-toggle" :class="{ on: item.is_current }" :aria-pressed="item.is_current" :title="item.is_current ? '当前模型' : '设为当前模型'" :aria-label="item.is_current ? `${item.name} 是当前模型` : `将 ${item.name} 设为当前模型`" @click="selectModel(item)"><i /></button><span><b :title="item.name">{{ item.name }}</b><small :title="item.model">{{ item.model }}</small></span></span></span><span :title="item.vendor">{{ item.vendor }}</span><span>{{ item.provider === 'openai' ? 'OpenAI 兼容' : 'Anthropic' }}</span>
-          <span><em v-if="item.is_current"><Check :size="12" />当前</em><small v-else-if="item.builtin">内置</small><button v-else type="button" :aria-label="`删除 ${item.name}`" @click="remove(item)"><Trash2 :size="14" /></button></span>
+          <span><span class="model-table-name"><button type="button" class="model-toggle" :class="{ on: item.is_current }" :disabled="Boolean(deleteTarget || deletingId)" :aria-pressed="item.is_current" :title="item.is_current ? '当前模型' : '设为当前模型'" :aria-label="item.is_current ? `${item.name} 是当前模型` : `将 ${item.name} 设为当前模型`" @click="selectModel(item)"><i /></button><span><b>{{ item.name }}</b><small>{{ item.model }}</small></span></span></span><span>{{ item.vendor }}</span><span>{{ item.provider === 'openai' ? 'OpenAI 兼容' : 'Anthropic' }}</span>
+          <span><em v-if="item.is_current"><Check :size="12" />当前</em><small v-else-if="item.builtin">内置</small><button v-else type="button" :disabled="Boolean(deleteTarget || deletingId)" :aria-label="`删除 ${item.name}`" @click="remove(item, $event)"><Trash2 :size="14" /></button></span>
         </div>
         <p v-if="!models.length">暂无自定义模型，点击“添加模型”开始配置。</p>
       </div>
-      <p v-if="error && !editorOpen" class="model-manager-error">{{ error }}</p>
+      <p v-if="error && !editorOpen" class="model-manager-error" role="alert" aria-live="assertive">{{ error }}</p>
+    </div>
+
+    <div v-if="deleteTarget" class="model-delete-backdrop" @mousedown.self="cancelRemove">
+      <section class="model-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="model-delete-title" aria-describedby="model-delete-description" @keydown.esc.stop="cancelRemove">
+        <header><span><Trash2 :size="18" /></span><div><h2 id="model-delete-title">删除模型</h2><p id="model-delete-description">确定要删除“{{ deleteTarget.name }}”吗？此操作无法撤销。</p></div></header>
+        <footer><button ref="deleteCancelButton" type="button" autofocus :disabled="Boolean(deletingId)" @click="cancelRemove">取消</button><button type="button" class="danger" :disabled="Boolean(deletingId)" @click="confirmRemove"><LoaderCircle v-if="deletingId" class="spin" :size="13" />{{ deletingId ? "删除中" : "确认删除" }}</button></footer>
+      </section>
     </div>
 
     <div v-if="editorOpen" class="model-editor-backdrop" @mousedown.self="editorOpen = false">
