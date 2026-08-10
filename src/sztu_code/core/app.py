@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ import sztu_code
 from sztu_code.core.bus.commands import (
     AgentRunCommand,
     AgentRunResult,
+    ApiFormat,
     CcswitchProviderSummary,
     ChangeDiffCommand,
     ChangeDiffResult,
@@ -83,6 +84,7 @@ from sztu_code.core.bus.commands import (
     ProviderCcswitchListResult,
     ProviderStatusCommand,
     ProviderStatusResult,
+    ReasoningEffort,
     RunCancelCommand,
     RunCancelResult,
     RunGetCommand,
@@ -734,7 +736,7 @@ class CoreApp:
                 name=str(item.get("name", "")),
                 vendor=str(item.get("vendor", "")),
                 provider=item.get("provider", "anthropic"),
-                api_format=normalize_api_format(item.get("api_format"), item.get("provider")),
+                api_format=cast(ApiFormat, normalize_api_format(item.get("api_format"), item.get("provider"))),
                 model=str(item.get("model", "")),
                 base_url=str(item.get("base_url", "")),
                 has_api_key=bool(
@@ -748,7 +750,7 @@ class CoreApp:
                 max_output_tokens=int(item.get("max_output_tokens", 8192) or 8192),
                 temperature=item.get("temperature"),
                 top_p=item.get("top_p"),
-                reasoning_effort=str(item.get("reasoning_effort", "")),
+                reasoning_effort=cast(ReasoningEffort, str(item.get("reasoning_effort", ""))),
                 timeout_s=float(item.get("timeout_s", 120) or 120),
                 max_retries=int(item.get("max_retries", 2) or 0),
                 cache_control=bool(item.get("cache_control", True)),
@@ -791,11 +793,16 @@ class CoreApp:
         self._config.llm.api_key_env = str(profile.get("api_key_env", ""))
         self._config.llm.keyless = bool(profile.get("keyless"))
         for name, default in (("context_window", 0), ("max_output_tokens", 8192), ("max_retries", 2)):
-            value = profile.get(name, default)
-            setattr(self._config.llm, name, int(default if value is None else value))
-        for name, default in (("temperature", None), ("top_p", None), ("timeout_s", 120.0)):
-            value = profile.get(name, default)
-            setattr(self._config.llm, name, None if value is None and name != "timeout_s" else float(value or default))
+            raw_value = profile.get(name, default)
+            setattr(self._config.llm, name, int(default if raw_value is None else raw_value))
+        for float_name, float_default in (("temperature", None), ("top_p", None), ("timeout_s", 120.0)):
+            float_value = profile.get(float_name, float_default)
+            resolved = float(float_value) if float_value is not None else float_default
+            setattr(
+                self._config.llm,
+                float_name,
+                None if resolved is None else float(resolved),
+            )
         self._config.llm.reasoning_effort = str(profile.get("reasoning_effort", ""))
         self._config.llm.cache_control = bool(profile.get("cache_control", True))
         if self._sessions is not None:
