@@ -194,6 +194,55 @@ def test_get_diff_via_git_returns_tracked_file_changes(tmp_path: Path) -> None:
     assert "-value = 1" in patch
     assert "+value = 2" in patch
 
+# 功能：get_diff_via_git 将未跟踪的新建文件纳入 unified diff
+# 设计：在真实临时仓库中新建但不暂存文件，验证 Git fallback 返回标准新文件补丁
+def test_get_diff_via_git_includes_untracked_new_file(tmp_path: Path) -> None:
+    repo = _create_git_repo(tmp_path)
+    (repo / "new_file.py").write_text("value = 42\n", encoding="utf-8")
+
+    patch = get_diff_via_git(repo)
+
+    assert "diff --git a/new_file.py b/new_file.py" in patch
+    assert "new file mode 100644" in patch
+    assert "+value = 42" in patch
+
+# 功能：get_diff_via_git 同时保留修改、删除和新建文件，并忽略被 Git ignore 的文件
+# 设计：在真实临时仓库中构造多类变更，验证补丁可应用且调用前后 Git 状态保持不变
+def test_get_diff_via_git_includes_all_supported_changes(tmp_path: Path) -> None:
+    repo = _create_git_repo(tmp_path)
+    (repo / "deleted.py").write_text("deleted = True\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
+    _run_git(repo, "add", "deleted.py", ".gitignore")
+    _run_git(repo, "commit", "--quiet", "-m", "add deletion fixture")
+
+    (repo / "sample.py").write_text("value = 2\n", encoding="utf-8")
+    (repo / "new_file.py").write_text("value = 42\n", encoding="utf-8")
+    (repo / "deleted.py").unlink()
+    (repo / "ignored.tmp").write_text("ignore me\n", encoding="utf-8")
+    status_before = _run_git(repo, "status", "--porcelain=v1").stdout
+
+    patch = get_diff_via_git(repo)
+
+    assert "diff --git a/sample.py b/sample.py" in patch
+    assert "-value = 1" in patch
+    assert "+value = 2" in patch
+    assert "diff --git a/new_file.py b/new_file.py" in patch
+    assert "new file mode 100644" in patch
+    assert "+value = 42" in patch
+    assert "diff --git a/deleted.py b/deleted.py" in patch
+    assert "deleted file mode 100644" in patch
+    assert "ignored.tmp" not in patch
+    assert _run_git(repo, "status", "--porcelain=v1").stdout == status_before
+
+    patch_path = tmp_path / "model.patch"
+    patch_path.write_text(patch, encoding="utf-8")
+    apply_target = tmp_path / "apply-target"
+    _run_git(tmp_path, "clone", "--quiet", str(repo), str(apply_target))
+    _run_git(apply_target, "apply", str(patch_path))
+
+    assert (apply_target / "sample.py").read_text(encoding="utf-8") == "value = 2\n"
+    assert (apply_target / "new_file.py").read_text(encoding="utf-8") == "value = 42\n"
+    assert not (apply_target / "deleted.py").exists()
 
 # 功能：load_dataset 存在本地 Parquet 时优先返回本地数据且不调用远程加载器
 # 设计：注入最小 pyarrow 与 datasets 内存模块，验证读取参数并以未调用断言阻止下载路径

@@ -218,7 +218,27 @@ def get_diff_via_git(repo_dir: Path) -> str:
         text=True,
         timeout=30,
     )
-    return result.stdout
+    patches = [result.stdout]
+
+    untracked_result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    for file_path in untracked_result.stdout.splitlines():
+        new_file_result = subprocess.run(
+            ["git", "diff", "--no-index", "--", "/dev/null", file_path],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if new_file_result.returncode in (0, 1):
+            patches.append(new_file_result.stdout)
+
+    return "".join(patches)
 
 
 # ──────────────────── RPC 调用 ────────────────────

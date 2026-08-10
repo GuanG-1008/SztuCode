@@ -7,10 +7,23 @@ from sztu_code.core.tools.registry import ToolRegistry
 class _FakeTool(BaseTool):
     name = "fake"
     description = "A fake tool"
-    input_schema: dict[str, object] = {"type": "object", "properties": {}, "required": []}
+    input_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {"value": {"type": "string"}},
+        "required": [],
+    }
 
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         return ToolResult(content="ok")
+
+
+class _AnotherTool(BaseTool):
+    name = "another"
+    description = "Another"
+    input_schema: dict[str, object] = {"type": "object", "properties": {}, "required": []}
+
+    async def invoke(self, params: dict[str, object]) -> ToolResult:
+        return ToolResult(content="")
 
 
 # 功能：验证注册工具后能通过名称检索到同一实例
@@ -46,14 +59,6 @@ def test_tool_schemas_contains_name_description_input_schema() -> None:
 # 功能：验证多工具注册后 tool_schemas() 包含所有工具，不遗漏
 # 设计：用 set 比较名称集合而非检查顺序，聚焦"完整性"而非"顺序"，确认 registry 不遗漏任何已注册工具
 def test_multiple_tools_all_appear_in_schemas() -> None:
-    class _AnotherTool(BaseTool):
-        name = "another"
-        description = "Another"
-        input_schema: dict[str, object] = {"type": "object", "properties": {}, "required": []}
-
-        async def invoke(self, params: dict[str, object]) -> ToolResult:
-            return ToolResult(content="")
-
     registry = ToolRegistry()
     registry.register(_FakeTool())
     registry.register(_AnotherTool())
@@ -61,16 +66,63 @@ def test_multiple_tools_all_appear_in_schemas() -> None:
     assert names == {"fake", "another"}
 
 
-# 功能：验证工具 schema 在注册表未变化时复用同一缓存对象
-# 设计：连续调用检查对象身份，再注册新工具确认缓存失效并包含新 schema
-def test_tool_schemas_are_cached_until_registration() -> None:
+# 功能：验证一个 Provider 修改公开 Schema 的任意可变层级都不会污染后续 Provider
+# 设计：同时追加顶层列表、改写工具字典并清空嵌套 properties，覆盖浅拷贝无法隔离的边界
+def test_tool_schemas_returns_isolated_provider_snapshots() -> None:
     registry = ToolRegistry()
     registry.register(_FakeTool())
-    first = registry.tool_schemas()
-    assert registry.tool_schemas() is first
 
+    provider_a_schemas = registry.tool_schemas()
+    provider_a_schemas.append({"name": "injected"})
+    provider_a_schemas[0]["description"] = "changed"
+    input_schema = provider_a_schemas[0]["input_schema"]
+    assert isinstance(input_schema, dict)
+    properties = input_schema["properties"]
+    assert isinstance(properties, dict)
+    properties.clear()
+
+    provider_b_schemas = registry.tool_schemas()
+    assert len(provider_b_schemas) == 1
+    assert provider_b_schemas[0]["name"] == "fake"
+    assert provider_b_schemas[0]["description"] == "A fake tool"
+    provider_b_input_schema = provider_b_schemas[0]["input_schema"]
+    assert isinstance(provider_b_input_schema, dict)
+    provider_b_properties = provider_b_input_schema["properties"]
+    assert isinstance(provider_b_properties, dict)
+    assert set(provider_b_properties) == {"value", "description"}
+
+
+# 功能：验证连续调用复用内部缓存，但每次公开结果都是独立快照
+# 设计：分别比较 `_schema_cache` 与公开结果的对象身份，避免把缓存实现误当成公开所有权契约
+def test_tool_schemas_reuses_internal_cache_without_sharing_results() -> None:
+    registry = ToolRegistry()
     registry.register(_FakeTool())
-    assert registry.tool_schemas() is not first
+
+    first = registry.tool_schemas()
+    cached = registry._schema_cache
+    second = registry.tool_schemas()
+
+    assert registry._schema_cache is cached
+    assert second == first
+    assert second is not first
+    assert second[0] is not first[0]
+    assert second[0]["input_schema"] is not first[0]["input_schema"]
+
+
+# 功能：验证注册新工具会替换内部缓存，且不会反向修改注册前取得的快照
+# 设计：保留旧快照和旧缓存引用，注册另一工具后同时比较名称集合与缓存身份
+def test_registration_invalidates_cache_without_changing_old_snapshot() -> None:
+    registry = ToolRegistry()
+    registry.register(_FakeTool())
+    old_snapshot = registry.tool_schemas()
+    old_cache = registry._schema_cache
+
+    registry.register(_AnotherTool())
+    new_snapshot = registry.tool_schemas()
+
+    assert {schema["name"] for schema in old_snapshot} == {"fake"}
+    assert {schema["name"] for schema in new_snapshot} == {"fake", "another"}
+    assert registry._schema_cache is not old_cache
 
 
 # 功能：验证重复注册同名工具时新版本覆盖旧版本（覆盖语义而非追加）
