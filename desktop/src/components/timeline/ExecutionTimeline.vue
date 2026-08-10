@@ -385,7 +385,7 @@ const turns = computed<TurnView[]>(() => {
             <div v-if="turn.state === 'failed' && turn.failureReason" class="evidence-item failed"><CircleAlert :size="15" /><span>{{ turn.failureReason }}</span></div>
           </section>
 
-          <button v-if="isTurnExpanded(turn) && turn.state === 'interrupted'" class="continue-button" type="button" @click="$emit('continue', turn.runId)">
+          <button v-if="isTurnExpanded(turn) && turn.state === 'interrupted'" class="continue-button" type="button" title="从中断处继续执行" @click="$emit('continue', turn.runId)">
             <Play :size="14" />继续执行
           </button>
         </div>

@@ -286,13 +286,13 @@ samp,
 }
 
 .slash-menu__scroll {
-  max-height: min(340px, 42vh);
-  padding: 7px;
+  max-height: min(250px, 34vh);
+  padding: 5px;
 }
 
 .slash-menu__group h3 {
-  height: 30px;
-  padding-inline: 9px;
+  height: 25px;
+  padding-inline: 7px;
   font-size: var(--text-caption);
   line-height: 1.5;
 }
@@ -302,10 +302,10 @@ samp,
 }
 
 .slash-menu__group button {
-  grid-template-columns: 26px minmax(120px, 210px) minmax(0, 1fr) 18px;
-  gap: 10px;
-  min-height: 42px;
-  padding: 6px 9px;
+  grid-template-columns: 24px minmax(110px, 180px) minmax(0, 1fr) 16px;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 7px;
 }
 
 .slash-menu__group button b {
@@ -313,8 +313,8 @@ samp,
 }
 
 .slash-menu__group button > span:nth-of-type(2) {
-  font-size: var(--text-control);
-  line-height: 1.55;
+  font-size: var(--text-caption);
+  line-height: 1.4;
 }
 
 .slash-menu__empty b {
@@ -329,8 +329,8 @@ samp,
 }
 
 .slash-menu > footer {
-  min-height: 38px;
-  padding-inline: 12px;
+  min-height: 32px;
+  padding-inline: 9px;
 }
 
 .slash-menu kbd {

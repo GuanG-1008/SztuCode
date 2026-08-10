@@ -63,6 +63,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | `server_version` | `string` | yes |
 | `uptime_ms` | `integer` | yes |
 | `received_at` | `string` | yes |
+| `capabilities` | `array` | no |
 
 ```json
 {
@@ -78,6 +79,13 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     "received_at": {
       "title": "Received At",
       "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
     }
   },
   "required": [
@@ -1022,6 +1030,107 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 
 ```json
 {
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
   "properties": {
     "provider": {
       "enum": [
@@ -1067,10 +1176,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     },
     "skills": {
       "items": {
-        "additionalProperties": {
-          "type": "string"
-        },
-        "type": "object"
+        "$ref": "#/$defs/SkillSummary"
       },
       "title": "Skills",
       "type": "array"
@@ -1086,6 +1192,1792 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     "skills"
   ],
   "title": "ProviderStatusResult",
+  "type": "object"
+}
+```
+
+### SkillListCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "skill.list",
+      "default": "skill.list",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "SkillListCommand",
+  "type": "object"
+}
+```
+
+### SkillListResult
+
+| Field | Type | Required |
+|---|---|---|
+| `skills` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "skills": {
+      "items": {
+        "$ref": "#/$defs/SkillSummary"
+      },
+      "title": "Skills",
+      "type": "array"
+    }
+  },
+  "required": [
+    "skills"
+  ],
+  "title": "SkillListResult",
+  "type": "object"
+}
+```
+
+### SkillInstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `source_path` | `string` | yes |
+| `scope` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "skill.install",
+      "default": "skill.install",
+      "title": "Type",
+      "type": "string"
+    },
+    "source_path": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Source Path",
+      "type": "string"
+    },
+    "scope": {
+      "default": "personal",
+      "enum": [
+        "personal",
+        "workspace"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "source_path"
+  ],
+  "title": "SkillInstallCommand",
+  "type": "object"
+}
+```
+
+### SkillInstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `skill` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "skill": {
+      "$ref": "#/$defs/SkillSummary"
+    }
+  },
+  "required": [
+    "skill"
+  ],
+  "title": "SkillInstallResult",
+  "type": "object"
+}
+```
+
+### SkillSetEnabledCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `skill_id` | `string` | yes |
+| `enabled` | `boolean` | yes |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "skill.set_enabled",
+      "default": "skill.set_enabled",
+      "title": "Type",
+      "type": "string"
+    },
+    "skill_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Skill Id",
+      "type": "string"
+    },
+    "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "skill_id",
+    "enabled"
+  ],
+  "title": "SkillSetEnabledCommand",
+  "type": "object"
+}
+```
+
+### SkillSetEnabledResult
+
+| Field | Type | Required |
+|---|---|---|
+| `skill` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "skill": {
+      "$ref": "#/$defs/SkillSummary"
+    }
+  },
+  "required": [
+    "skill"
+  ],
+  "title": "SkillSetEnabledResult",
+  "type": "object"
+}
+```
+
+### PluginListCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.list",
+      "default": "plugin.list",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "PluginListCommand",
+  "type": "object"
+}
+```
+
+### PluginListResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugins` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugins": {
+      "items": {
+        "$ref": "#/$defs/PluginSummary"
+      },
+      "title": "Plugins",
+      "type": "array"
+    }
+  },
+  "required": [
+    "plugins"
+  ],
+  "title": "PluginListResult",
+  "type": "object"
+}
+```
+
+### PluginInstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `source_path` | `string` | yes |
+| `scope` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.install",
+      "default": "plugin.install",
+      "title": "Type",
+      "type": "string"
+    },
+    "source_path": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Source Path",
+      "type": "string"
+    },
+    "scope": {
+      "default": "personal",
+      "enum": [
+        "personal",
+        "workspace"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "source_path"
+  ],
+  "title": "PluginInstallCommand",
+  "type": "object"
+}
+```
+
+### PluginInstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugin": {
+      "$ref": "#/$defs/PluginSummary"
+    }
+  },
+  "required": [
+    "plugin"
+  ],
+  "title": "PluginInstallResult",
+  "type": "object"
+}
+```
+
+### PluginSetEnabledCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `plugin_id` | `string` | yes |
+| `enabled` | `boolean` | yes |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.set_enabled",
+      "default": "plugin.set_enabled",
+      "title": "Type",
+      "type": "string"
+    },
+    "plugin_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "plugin_id",
+    "enabled"
+  ],
+  "title": "PluginSetEnabledCommand",
+  "type": "object"
+}
+```
+
+### PluginSetEnabledResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugin": {
+      "$ref": "#/$defs/PluginSummary"
+    }
+  },
+  "required": [
+    "plugin"
+  ],
+  "title": "PluginSetEnabledResult",
+  "type": "object"
+}
+```
+
+### PluginUninstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `plugin_id` | `string` | yes |
+| `workspace_id` | `string | null` | no |
+| `confirm` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.uninstall",
+      "default": "plugin.uninstall",
+      "title": "Type",
+      "type": "string"
+    },
+    "plugin_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    },
+    "confirm": {
+      "const": "uninstall",
+      "title": "Confirm",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plugin_id",
+    "confirm"
+  ],
+  "title": "PluginUninstallCommand",
+  "type": "object"
+}
+```
+
+### PluginUninstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin_id` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "plugin_id": {
+      "title": "Plugin Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plugin_id"
+  ],
+  "title": "PluginUninstallResult",
+  "type": "object"
+}
+```
+
+### PluginCatalogCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.catalog",
+      "default": "plugin.catalog",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "PluginCatalogCommand",
+  "type": "object"
+}
+```
+
+### PluginCatalogResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplaces` | `array` | yes |
+| `plugins` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "MarketplacePluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "marketplace_id": {
+          "title": "Marketplace Id",
+          "type": "string"
+        },
+        "marketplace_name": {
+          "title": "Marketplace Name",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "publisher": {
+          "title": "Publisher",
+          "type": "string"
+        },
+        "installation": {
+          "title": "Installation",
+          "type": "string"
+        },
+        "authentication": {
+          "title": "Authentication",
+          "type": "string"
+        },
+        "installed": {
+          "default": false,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "installed_plugin_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Installed Plugin Id"
+        }
+      },
+      "required": [
+        "id",
+        "marketplace_id",
+        "marketplace_name",
+        "name",
+        "display_name",
+        "description",
+        "version",
+        "category",
+        "publisher",
+        "installation",
+        "authentication"
+      ],
+      "title": "MarketplacePluginSummary",
+      "type": "object"
+    },
+    "MarketplaceSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "default",
+            "git",
+            "local"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "root_path": {
+          "title": "Root Path",
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sparse_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sparse Paths",
+          "type": "array"
+        },
+        "plugin_count": {
+          "title": "Plugin Count",
+          "type": "integer"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "removable": {
+          "default": false,
+          "title": "Removable",
+          "type": "boolean"
+        },
+        "updatable": {
+          "default": false,
+          "title": "Updatable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "source",
+        "kind",
+        "root_path",
+        "sparse_paths",
+        "plugin_count"
+      ],
+      "title": "MarketplaceSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplaces": {
+      "items": {
+        "$ref": "#/$defs/MarketplaceSummary"
+      },
+      "title": "Marketplaces",
+      "type": "array"
+    },
+    "plugins": {
+      "items": {
+        "$ref": "#/$defs/MarketplacePluginSummary"
+      },
+      "title": "Plugins",
+      "type": "array"
+    }
+  },
+  "required": [
+    "marketplaces",
+    "plugins"
+  ],
+  "title": "PluginCatalogResult",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceAddCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `source` | `string` | yes |
+| `git_ref` | `string` | no |
+| `sparse_paths` | `array` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.marketplace_add",
+      "default": "plugin.marketplace_add",
+      "title": "Type",
+      "type": "string"
+    },
+    "source": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "git_ref": {
+      "default": "",
+      "maxLength": 500,
+      "title": "Git Ref",
+      "type": "string"
+    },
+    "sparse_paths": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Sparse Paths",
+      "type": "array"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "source"
+  ],
+  "title": "PluginMarketplaceAddCommand",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceAddResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplace` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "MarketplaceSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "default",
+            "git",
+            "local"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "root_path": {
+          "title": "Root Path",
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sparse_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sparse Paths",
+          "type": "array"
+        },
+        "plugin_count": {
+          "title": "Plugin Count",
+          "type": "integer"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "removable": {
+          "default": false,
+          "title": "Removable",
+          "type": "boolean"
+        },
+        "updatable": {
+          "default": false,
+          "title": "Updatable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "source",
+        "kind",
+        "root_path",
+        "sparse_paths",
+        "plugin_count"
+      ],
+      "title": "MarketplaceSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplace": {
+      "$ref": "#/$defs/MarketplaceSummary"
+    }
+  },
+  "required": [
+    "marketplace"
+  ],
+  "title": "PluginMarketplaceAddResult",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRefreshCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `marketplace_id` | `string | null` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.marketplace_refresh",
+      "default": "plugin.marketplace_refresh",
+      "title": "Type",
+      "type": "string"
+    },
+    "marketplace_id": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Marketplace Id"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "PluginMarketplaceRefreshCommand",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRefreshResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplaces` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "MarketplaceSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "default",
+            "git",
+            "local"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "root_path": {
+          "title": "Root Path",
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sparse_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sparse Paths",
+          "type": "array"
+        },
+        "plugin_count": {
+          "title": "Plugin Count",
+          "type": "integer"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "removable": {
+          "default": false,
+          "title": "Removable",
+          "type": "boolean"
+        },
+        "updatable": {
+          "default": false,
+          "title": "Updatable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "source",
+        "kind",
+        "root_path",
+        "sparse_paths",
+        "plugin_count"
+      ],
+      "title": "MarketplaceSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplaces": {
+      "items": {
+        "$ref": "#/$defs/MarketplaceSummary"
+      },
+      "title": "Marketplaces",
+      "type": "array"
+    }
+  },
+  "required": [
+    "marketplaces"
+  ],
+  "title": "PluginMarketplaceRefreshResult",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRemoveCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `marketplace_id` | `string` | yes |
+| `workspace_id` | `string | null` | no |
+| `confirm` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.marketplace_remove",
+      "default": "plugin.marketplace_remove",
+      "title": "Type",
+      "type": "string"
+    },
+    "marketplace_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Marketplace Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    },
+    "confirm": {
+      "const": "remove",
+      "title": "Confirm",
+      "type": "string"
+    }
+  },
+  "required": [
+    "marketplace_id",
+    "confirm"
+  ],
+  "title": "PluginMarketplaceRemoveCommand",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRemoveResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplace_id` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "marketplace_id": {
+      "title": "Marketplace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "marketplace_id"
+  ],
+  "title": "PluginMarketplaceRemoveResult",
+  "type": "object"
+}
+```
+
+### PluginCatalogInstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `catalog_plugin_id` | `string` | yes |
+| `scope` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.catalog_install",
+      "default": "plugin.catalog_install",
+      "title": "Type",
+      "type": "string"
+    },
+    "catalog_plugin_id": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Catalog Plugin Id",
+      "type": "string"
+    },
+    "scope": {
+      "default": "personal",
+      "enum": [
+        "personal",
+        "workspace"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "catalog_plugin_id"
+  ],
+  "title": "PluginCatalogInstallCommand",
+  "type": "object"
+}
+```
+
+### PluginCatalogInstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugin": {
+      "$ref": "#/$defs/PluginSummary"
+    }
+  },
+  "required": [
+    "plugin"
+  ],
+  "title": "PluginCatalogInstallResult",
   "type": "object"
 }
 ```

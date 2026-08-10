@@ -106,3 +106,7 @@
 .permission-badge span { font-size: 11px; }
 .permission-actions { gap: 4px; }
 .permission-actions button { padding: 3px 6px; font-size: 11px; }
+
+/* Resume is a clear primary action without overpowering the task result. */
+.continue-button { display: inline-flex; min-height: 32px; align-items: center; gap: 6px; margin: 8px 0 2px; padding: 0 11px; color: #fff; background: #292c31; border: 1px solid #292c31; border-radius: 8px; box-shadow: 0 1px 2px rgb(21 24 29 / 16%); font-size: 12px; font-weight: 600; line-height: 1; transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
+.continue-button svg { width: 13px; height: 13px; fill: currentColor; stroke-width: 2.2; }.continue-button:hover { background: #15171a; border-color: #15171a; box-shadow: 0 4px 10px rgb(21 24 29 / 18%); transform: translateY(-1px); }.continue-button:active { transform: translateY(0); box-shadow: 0 1px 2px rgb(21 24 29 / 16%); }.continue-button:focus-visible { outline: 2px solid #5b9cf2; outline-offset: 2px; }

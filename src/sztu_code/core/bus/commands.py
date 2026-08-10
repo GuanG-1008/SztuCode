@@ -34,6 +34,7 @@ class PongResult(BaseModel):
     server_version: str
     uptime_ms: int
     received_at: str  # ISO 8601
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class AgentRunCommand(BaseModel):
@@ -436,6 +437,194 @@ class ProviderStatusCommand(BaseModel):
     type: Literal["provider.status"] = "provider.status"
 
 
+class SkillSummary(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    description: str
+    short_description: str
+    source: str
+    scope: Literal["system", "personal", "workspace"]
+    path: str
+    plugin: str | None = None
+    enabled: bool = True
+    icon: str | None = None
+    brand_color: str | None = None
+    allow_implicit_invocation: bool = True
+
+
+class PluginSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+    version: str
+    source: Literal["personal", "workspace"]
+    path: str
+    skills: list[str]
+    installed: bool = True
+    display_name: str
+    brand_color: str | None = None
+    enabled: bool = True
+
+
+class MarketplaceSummary(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    source: str
+    kind: Literal["default", "git", "local"]
+    root_path: str
+    ref: str = ""
+    sparse_paths: list[str]
+    plugin_count: int
+    updated_at: str = ""
+    removable: bool = False
+    updatable: bool = False
+
+
+class MarketplacePluginSummary(BaseModel):
+    id: str
+    marketplace_id: str
+    marketplace_name: str
+    name: str
+    display_name: str
+    description: str
+    version: str
+    category: str
+    publisher: str
+    installation: str
+    authentication: str
+    installed: bool = False
+    installed_plugin_id: str | None = None
+
+
+class SkillListCommand(BaseModel):
+    type: Literal["skill.list"] = "skill.list"
+    workspace_id: str | None = None
+
+
+class SkillListResult(BaseModel):
+    skills: list[SkillSummary]
+
+
+class SkillInstallCommand(BaseModel):
+    type: Literal["skill.install"] = "skill.install"
+    source_path: str = Field(min_length=1, max_length=4000)
+    scope: Literal["personal", "workspace"] = "personal"
+    workspace_id: str | None = None
+
+
+class SkillInstallResult(BaseModel):
+    skill: SkillSummary
+
+
+class SkillSetEnabledCommand(BaseModel):
+    type: Literal["skill.set_enabled"] = "skill.set_enabled"
+    skill_id: str = Field(min_length=1, max_length=500)
+    enabled: bool
+    workspace_id: str | None = None
+
+
+class SkillSetEnabledResult(BaseModel):
+    skill: SkillSummary
+
+
+class PluginListCommand(BaseModel):
+    type: Literal["plugin.list"] = "plugin.list"
+    workspace_id: str | None = None
+
+
+class PluginListResult(BaseModel):
+    plugins: list[PluginSummary]
+
+
+class PluginInstallCommand(BaseModel):
+    type: Literal["plugin.install"] = "plugin.install"
+    source_path: str = Field(min_length=1, max_length=4000)
+    scope: Literal["personal", "workspace"] = "personal"
+    workspace_id: str | None = None
+
+
+class PluginInstallResult(BaseModel):
+    plugin: PluginSummary
+
+
+class PluginSetEnabledCommand(BaseModel):
+    type: Literal["plugin.set_enabled"] = "plugin.set_enabled"
+    plugin_id: str = Field(min_length=1, max_length=500)
+    enabled: bool
+    workspace_id: str | None = None
+
+
+class PluginSetEnabledResult(BaseModel):
+    plugin: PluginSummary
+
+
+class PluginUninstallCommand(BaseModel):
+    type: Literal["plugin.uninstall"] = "plugin.uninstall"
+    plugin_id: str = Field(min_length=1, max_length=500)
+    workspace_id: str | None = None
+    confirm: Literal["uninstall"]
+
+
+class PluginUninstallResult(BaseModel):
+    plugin_id: str
+
+
+class PluginCatalogCommand(BaseModel):
+    type: Literal["plugin.catalog"] = "plugin.catalog"
+    workspace_id: str | None = None
+
+
+class PluginCatalogResult(BaseModel):
+    marketplaces: list[MarketplaceSummary]
+    plugins: list[MarketplacePluginSummary]
+
+
+class PluginMarketplaceAddCommand(BaseModel):
+    type: Literal["plugin.marketplace_add"] = "plugin.marketplace_add"
+    source: str = Field(min_length=1, max_length=4000)
+    git_ref: str = Field(default="", max_length=500)
+    sparse_paths: list[str] = Field(default_factory=list, max_length=32)
+    workspace_id: str | None = None
+
+
+class PluginMarketplaceAddResult(BaseModel):
+    marketplace: MarketplaceSummary
+
+
+class PluginMarketplaceRefreshCommand(BaseModel):
+    type: Literal["plugin.marketplace_refresh"] = "plugin.marketplace_refresh"
+    marketplace_id: str | None = Field(default=None, max_length=500)
+    workspace_id: str | None = None
+
+
+class PluginMarketplaceRefreshResult(BaseModel):
+    marketplaces: list[MarketplaceSummary]
+
+
+class PluginMarketplaceRemoveCommand(BaseModel):
+    type: Literal["plugin.marketplace_remove"] = "plugin.marketplace_remove"
+    marketplace_id: str = Field(min_length=1, max_length=500)
+    workspace_id: str | None = None
+    confirm: Literal["remove"]
+
+
+class PluginMarketplaceRemoveResult(BaseModel):
+    marketplace_id: str
+
+
+class PluginCatalogInstallCommand(BaseModel):
+    type: Literal["plugin.catalog_install"] = "plugin.catalog_install"
+    catalog_plugin_id: str = Field(min_length=1, max_length=1000)
+    scope: Literal["personal", "workspace"] = "personal"
+    workspace_id: str | None = None
+
+
+class PluginCatalogInstallResult(BaseModel):
+    plugin: PluginSummary
+
+
 class ProviderStatusResult(BaseModel):
     provider: Literal["anthropic", "openai"]
     api_format: ApiFormat = "anthropic_messages"
@@ -444,7 +633,7 @@ class ProviderStatusResult(BaseModel):
     custom_endpoint_configured: bool
     ready_for_next_run: bool
     mcp_servers: list[dict[str, Any]]
-    skills: list[dict[str, str]]
+    skills: list[SkillSummary]
 
 
 class CcswitchProviderSummary(BaseModel):
@@ -616,6 +805,18 @@ Command = Annotated[
     | SettingsGetCommand
     | SettingsUpdateCommand
     | ProviderStatusCommand
+    | SkillListCommand
+    | SkillInstallCommand
+    | SkillSetEnabledCommand
+    | PluginListCommand
+    | PluginInstallCommand
+    | PluginSetEnabledCommand
+    | PluginUninstallCommand
+    | PluginCatalogCommand
+    | PluginMarketplaceAddCommand
+    | PluginMarketplaceRefreshCommand
+    | PluginMarketplaceRemoveCommand
+    | PluginCatalogInstallCommand
     | ProviderCcswitchListCommand
     | ProviderCcswitchApplyCommand
     | ModelProfileListCommand

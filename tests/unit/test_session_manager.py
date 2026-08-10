@@ -31,6 +31,9 @@ class _Runner:
         assert run_id is not None
         assert session is not None
         assert store is not None
+        self.goal = goal
+        self.system_prompt_override = system_prompt_override
+        self.tool_whitelist = tool_whitelist
         self.workspace_root = workspace_root
         store.append_messages(
             session.id,
@@ -343,3 +346,34 @@ async def test_session_workspace_is_persisted_and_passed_to_runner(tmp_path: Pat
 
     assert runner.workspace_root == workspace
     assert store.read_meta(session.id).workspace_id == "ws-project"
+
+
+# 功能：显式技能调用应保留基础系统提示，并且不把完整技能正文再次拼成用户目标
+# 设计：工作区放置带参数的技能，以可观察 runner 分别断言 goal、system prompt 与工具白名单。
+async def test_skill_invocation_keeps_base_prompt_without_goal_duplication(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    skill_dir = workspace / ".sztu" / "skills" / "inspect"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: inspect\ndescription: Inspect a path\nallowed_tools:\n  - read_file\n"
+        "---\nInspect $ARGUMENTS carefully.\n",
+        encoding="utf-8",
+    )
+    runner = _Runner()
+    store = SessionStore(tmp_path / "sessions")
+    manager = SessionManager(
+        store,
+        lambda: runner,  # type: ignore[arg-type]
+        EventBus(),
+        workspace_resolver=lambda workspace_id: workspace,
+    )
+    session = await manager.create("chat", workspace_id="ws-project")
+
+    await manager.send_message(session.id, "/inspect src/app.py")
+
+    assert runner.goal == "src/app.py"
+    assert runner.system_prompt_override is not None
+    assert "## Active skill: inspect" in runner.system_prompt_override
+    assert "Inspect src/app.py carefully." in runner.system_prompt_override
+    assert "# Environment" in runner.system_prompt_override
+    assert runner.tool_whitelist == ["read_file"]
