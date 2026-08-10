@@ -159,10 +159,14 @@ function diffLines(text: string) {
   <div class="diff-review">
     <header class="diff-review__top">
       <button type="button" class="diff-review__back" @click="emit('close')"><ArrowLeft :size="16" />返回</button>
-      <h1>代码变更审核</h1>
-      <span class="diff-review__run">run {{ runId.slice(0, 8) }}</span>
-      <button type="button" class="diff-review__accept-all" :disabled="busyAll || !pending.length" @click="acceptAll">全部接受</button>
-      <button type="button" class="diff-review__reject-all" :disabled="busyAll || !pending.length" @click="rejectAll">全部拒绝</button>
+      <div class="diff-review__identity">
+        <h1>代码变更审核</h1>
+        <span class="diff-review__run">run {{ runId.slice(0, 8) }}</span>
+      </div>
+      <div class="diff-review__bulk-actions">
+        <button type="button" class="diff-review__accept-all" :disabled="busyAll || !pending.length" @click="acceptAll">全部接受</button>
+        <button type="button" class="diff-review__reject-all" :disabled="busyAll || !pending.length" @click="rejectAll">全部拒绝</button>
+      </div>
     </header>
     <div class="diff-review__body">
       <aside class="diff-review__files">
