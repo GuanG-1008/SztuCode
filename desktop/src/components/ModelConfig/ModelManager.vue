@@ -2,7 +2,8 @@
 import { Check, ChevronDown, ExternalLink, Eye, EyeOff, LoaderCircle, Play, Plus, Settings2, Trash2, X } from "@lucide/vue";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useFocusTrap } from "../../composables/useFocusTrap";
 import {
   deleteModelProfile, getProviderStatus, listModelProfiles, saveModelProfile, selectModelProfile, testModelProfile,
   type ModelProfile, type ProviderStatus, type RuntimeSettings,
@@ -32,6 +33,11 @@ const testing = ref(false); const testResult = ref("");
 const deleteTarget = ref<ModelProfile | null>(null); const deletingId = ref<string | null>(null);
 const deleteTrigger = ref<HTMLButtonElement | null>(null); const modelManagerBody = ref<HTMLElement | null>(null);
 const deleteCancelButton = ref<HTMLButtonElement | null>(null);
+const editorDialog = ref<HTMLElement | null>(null);
+const deleteDialog = ref<HTMLElement | null>(null);
+const editorTrigger = ref<HTMLButtonElement | null>(null);
+const managerDialog = ref<HTMLElement | null>(null);
+const { setInitialFocus, trapTab, restoreFocus } = useFocusTrap();
 let modelRequestVersion = 0;
 const canSave = computed(() => Boolean(selectedVendor.value && name.value.trim() && model.value.trim() && apiKey.value.trim()));
 
@@ -40,7 +46,14 @@ async function refresh() {
   try { models.value = await listModelProfiles(); }
   catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
 }
-function beginAdd() { editorOpen.value = true; selectedVendor.value = null; name.value = ""; model.value = ""; baseUrl.value = ""; apiKey.value = ""; apiFormat.value = "anthropic_messages"; maxOutputTokens.value = 8192; temperature.value = null; topP.value = null; reasoningEffort.value = ""; timeoutS.value = 120; maxRetries.value = 2; contextWindow.value = 0; cacheControl.value = true; advancedOpen.value = false; error.value = ""; }
+function beginAdd(event?: MouseEvent) {
+  editorTrigger.value = event?.currentTarget instanceof HTMLButtonElement ? event.currentTarget : editorTrigger.value;
+  editorOpen.value = true; selectedVendor.value = null; name.value = ""; model.value = ""; baseUrl.value = ""; apiKey.value = ""; apiFormat.value = "anthropic_messages"; maxOutputTokens.value = 8192; temperature.value = null; topP.value = null; reasoningEffort.value = ""; timeoutS.value = 120; maxRetries.value = 2; contextWindow.value = 0; cacheControl.value = true; advancedOpen.value = false; error.value = "";
+}
+// 编辑器打开后聚焦首个控件（点击 beginAdd 或程序注入 editorOpen 都生效）
+watch(editorOpen, (open) => {
+  if (open) void setInitialFocus(editorDialog);
+});
 function chooseVendor(item: ModelVendor) { selectedVendor.value = item; name.value = item.name; provider.value = item.provider; apiFormat.value = item.provider === "openai" ? "openai_chat_completions" : "anthropic_messages"; baseUrl.value = item.baseUrl; }
 async function getApiKey() {
   const url = selectedVendor.value?.apiKeyUrl;
@@ -53,6 +66,10 @@ async function getApiKey() {
     error.value = `无法打开 API 密钥页面：${reason instanceof Error ? reason.message : String(reason)}`;
   }
 }
+function closeEditor() {
+  editorOpen.value = false;
+  void restoreFocus(editorTrigger.value, modelManagerBody.value);
+}
 async function save() {
   if (!canSave.value || !selectedVendor.value) return;
   if (baseUrl.value && !/^https?:\/\//i.test(baseUrl.value)) { error.value = "API 地址需要以 http:// 或 https:// 开头"; return; }
@@ -61,7 +78,7 @@ async function save() {
   try {
     const result = await saveModelProfile({ name: name.value.trim(), vendor: selectedVendor.value.name, provider: provider.value, api_format: apiFormat.value, model: model.value.trim(), base_url: baseUrl.value.trim(), api_key: apiKey.value.trim(), max_output_tokens: maxOutputTokens.value, temperature: temperature.value, top_p: topP.value, reasoning_effort: reasoningEffort.value, timeout_s: timeoutS.value, max_retries: maxRetries.value, context_window: contextWindow.value, cache_control: cacheControl.value });
     if (requestVersion !== modelRequestVersion) return;
-    models.value = result.models; emit("updated", result.settings, await getProviderStatus()); editorOpen.value = false;
+    models.value = result.models; emit("updated", result.settings, await getProviderStatus()); closeEditor();
   } catch (reason) {
     if (requestVersion !== modelRequestVersion) return;
     error.value = reason instanceof Error ? reason.message : String(reason);
@@ -135,14 +152,17 @@ async function selectModel(item: ModelProfile) {
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 }
-onMounted(() => { void refresh(); });
+onMounted(() => {
+  void refresh();
+  void setInitialFocus(managerDialog);
+});
 </script>
 
 <template>
-  <section class="model-manager" aria-label="模型管理">
+  <section ref="managerDialog" class="model-manager" role="dialog" aria-modal="true" aria-label="模型管理" tabindex="-1" @keydown.esc="emit('close')">
     <header><div><h1>模型</h1><p>配置 API Key，添加并管理本机可用模型。</p></div><button type="button" :disabled="Boolean(deleteTarget || deletingId)" aria-label="关闭模型管理" @click="emit('close')"><X :size="18" /></button></header>
     <div ref="modelManagerBody" class="model-manager-body" tabindex="-1" :inert="Boolean(deleteTarget || deletingId)">
-      <button type="button" class="model-add-button" :disabled="Boolean(deleteTarget || deletingId)" @click="beginAdd"><Plus :size="15" />添加模型</button>
+      <button ref="editorTrigger" type="button" class="model-add-button" :disabled="Boolean(deleteTarget || deletingId)" @click="beginAdd($event)"><Plus :size="15" />添加模型</button>
       <div class="model-table">
         <header><span>模型</span><span>服务商</span><span>接口</span><span>操作</span></header>
         <div v-for="item in models" :key="item.id" class="model-table-row">
@@ -155,15 +175,15 @@ onMounted(() => { void refresh(); });
     </div>
 
     <div v-if="deleteTarget" class="model-delete-backdrop" @mousedown.self="cancelRemove">
-      <section class="model-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="model-delete-title" aria-describedby="model-delete-description" @keydown.esc.stop="cancelRemove">
+      <section ref="deleteDialog" class="model-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="model-delete-title" aria-describedby="model-delete-description" @keydown.esc.stop="cancelRemove" @keydown.tab="trapTab($event, deleteDialog)">
         <header><span><Trash2 :size="18" /></span><div><h2 id="model-delete-title">删除模型</h2><p id="model-delete-description">确定要删除“{{ deleteTarget.name }}”吗？此操作无法撤销。</p></div></header>
         <footer><button ref="deleteCancelButton" type="button" autofocus :disabled="Boolean(deletingId)" @click="cancelRemove">取消</button><button type="button" class="danger" :disabled="Boolean(deletingId)" @click="confirmRemove"><LoaderCircle v-if="deletingId" class="spin" :size="13" />{{ deletingId ? "删除中" : "确认删除" }}</button></footer>
       </section>
     </div>
 
-    <div v-if="editorOpen" class="model-editor-backdrop" @mousedown.self="editorOpen = false">
-      <section class="model-editor" role="dialog" aria-modal="true" aria-label="添加模型">
-        <header><h2>添加模型</h2><button type="button" aria-label="关闭" @click="editorOpen = false"><X :size="18" /></button></header>
+    <div v-if="editorOpen" class="model-editor-backdrop" @mousedown.self="closeEditor">
+      <section ref="editorDialog" class="model-editor" role="dialog" aria-modal="true" aria-label="添加模型" @keydown.esc.stop="closeEditor" @keydown.tab="trapTab($event, editorDialog)">
+        <header><h2>添加模型</h2><button type="button" aria-label="关闭" @click="closeEditor"><X :size="18" /></button></header>
         <div class="model-vendor-grid">
           <button v-for="item in vendors" :key="item.name" type="button" :class="{ active: selectedVendor?.name === item.name }" @click="chooseVendor(item)"><i><img v-if="item.logo" :src="item.logo" alt="" /><span v-else>{{ item.mark }}</span></i><span>{{ item.name }}</span><Check v-if="selectedVendor?.name === item.name" :size="14" /><ChevronDown v-else :size="14" /></button>
         </div>
@@ -186,7 +206,7 @@ onMounted(() => { void refresh(); });
           </div>
         </div>
         <p v-if="error" class="model-editor-error">{{ error }}</p><p v-else-if="testResult" class="model-editor-success">{{ testResult }}</p>
-        <footer><button type="button" @click="editorOpen = false">取消</button><button type="button" :disabled="!canSave || testing" @click="testConnection"><LoaderCircle v-if="testing" class="spin" :size="13" /><Play v-else :size="13" />{{ testing ? '测试中…' : '测试连接' }}</button><button type="button" class="primary" :disabled="!canSave || saving" @click="save">{{ saving ? '保存中' : '提交' }}</button></footer>
+        <footer><button type="button" @click="closeEditor">取消</button><button type="button" :disabled="!canSave || testing" @click="testConnection"><LoaderCircle v-if="testing" class="spin" :size="13" /><Play v-else :size="13" />{{ testing ? '测试中…' : '测试连接' }}</button><button type="button" class="primary" :disabled="!canSave || saving" @click="save">{{ saving ? '保存中' : '提交' }}</button></footer>
       </section>
     </div>
   </section>
