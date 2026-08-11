@@ -113,7 +113,11 @@ class WorkspaceManager:
         root = Path(workspace.path)
         branch = self._git(root, ["branch", "--show-current"]).strip()
         changes = self._git(root, ["status", "--short"])
-        changed_files = [line for line in changes.splitlines() if line and not self._is_ignored_status_line(line)]
+        changed_files = [
+            line
+            for line in changes.splitlines()
+            if line and not self._is_ignored_status_line(line)
+        ]
         return {
             "workspace": workspace,
             "branch": branch or None,

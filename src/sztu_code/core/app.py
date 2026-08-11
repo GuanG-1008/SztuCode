@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ import sztu_code
 from sztu_code.core.bus.commands import (
     AgentRunCommand,
     AgentRunResult,
+    ApiFormat,
     CcswitchProviderSummary,
     ChangeDiffCommand,
     ChangeDiffResult,
@@ -83,6 +84,7 @@ from sztu_code.core.bus.commands import (
     ProviderCcswitchListResult,
     ProviderStatusCommand,
     ProviderStatusResult,
+    ReasoningEffort,
     RunCancelCommand,
     RunCancelResult,
     RunGetCommand,
@@ -734,7 +736,10 @@ class CoreApp:
                 name=str(item.get("name", "")),
                 vendor=str(item.get("vendor", "")),
                 provider=item.get("provider", "anthropic"),
-                api_format=normalize_api_format(item.get("api_format"), item.get("provider")),
+                api_format=cast(
+                    ApiFormat,
+                    normalize_api_format(item.get("api_format"), item.get("provider")),
+                ),
                 model=str(item.get("model", "")),
                 base_url=str(item.get("base_url", "")),
                 has_api_key=bool(
@@ -748,7 +753,7 @@ class CoreApp:
                 max_output_tokens=int(item.get("max_output_tokens", 8192) or 8192),
                 temperature=item.get("temperature"),
                 top_p=item.get("top_p"),
-                reasoning_effort=str(item.get("reasoning_effort", "")),
+                reasoning_effort=cast(ReasoningEffort, str(item.get("reasoning_effort", ""))),
                 timeout_s=float(item.get("timeout_s", 120) or 120),
                 max_retries=int(item.get("max_retries", 2) or 0),
                 cache_control=bool(item.get("cache_control", True)),
@@ -783,19 +788,34 @@ class CoreApp:
     def _activate_model_profile(self, profile: dict[str, Any]) -> None:
         assert self._config is not None
         self._config.llm.provider = str(profile["provider"])
-        self._config.llm.api_format = normalize_api_format(profile.get("api_format"), profile.get("provider"))
+        self._config.llm.api_format = normalize_api_format(
+            profile.get("api_format"), profile.get("provider")
+        )
         self._config.llm.provider = provider_for_api_format(self._config.llm.api_format)
         self._config.llm.default_model = str(profile["model"])
         self._config.llm.base_url = str(profile.get("base_url", ""))
         self._config.llm.api_key = str(profile.get("api_key", ""))
         self._config.llm.api_key_env = str(profile.get("api_key_env", ""))
         self._config.llm.keyless = bool(profile.get("keyless"))
-        for name, default in (("context_window", 0), ("max_output_tokens", 8192), ("max_retries", 2)):
-            value = profile.get(name, default)
-            setattr(self._config.llm, name, int(default if value is None else value))
-        for name, default in (("temperature", None), ("top_p", None), ("timeout_s", 120.0)):
-            value = profile.get(name, default)
-            setattr(self._config.llm, name, None if value is None and name != "timeout_s" else float(value or default))
+        for name, default in (
+            ("context_window", 0),
+            ("max_output_tokens", 8192),
+            ("max_retries", 2),
+        ):
+            raw_value = profile.get(name, default)
+            setattr(self._config.llm, name, int(default if raw_value is None else raw_value))
+        for float_name, float_default in (
+            ("temperature", None),
+            ("top_p", None),
+            ("timeout_s", 120.0),
+        ):
+            float_value = profile.get(float_name, float_default)
+            resolved = float(float_value) if float_value is not None else float_default
+            setattr(
+                self._config.llm,
+                float_name,
+                None if resolved is None else float(resolved),
+            )
         self._config.llm.reasoning_effort = str(profile.get("reasoning_effort", ""))
         self._config.llm.cache_control = bool(profile.get("cache_control", True))
         if self._sessions is not None:
@@ -831,32 +851,71 @@ class CoreApp:
                 headers["authorization"] = f"Bearer {cmd.api_key}"
         if cmd.api_format == "anthropic_messages":
             url = f"{base_url}/messages"
-            body: dict[str, Any] = {"model": cmd.model, "max_tokens": 1, "messages": [{"role": "user", "content": "Reply OK."}]}
+            body: dict[str, Any] = {
+                "model": cmd.model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "Reply OK."}],
+            }
         elif cmd.api_format == "openai_responses":
             url = f"{base_url}/responses"
             body = {"model": cmd.model, "input": "Reply OK.", "max_output_tokens": 1}
         else:
             url = f"{base_url}/chat/completions"
-            body = {"model": cmd.model, "messages": [{"role": "user", "content": "Reply OK."}], "max_completion_tokens": 1}
+            body = {
+                "model": cmd.model,
+                "messages": [{"role": "user", "content": "Reply OK."}],
+                "max_completion_tokens": 1,
+            }
         try:
             async with httpx.AsyncClient(timeout=cmd.timeout_s, trust_env=False) as client:
                 response = await client.post(url, headers=headers, json=body)
                 response.raise_for_status()
                 usage = response.json().get("usage") or {}
             elapsed = (time.perf_counter() - started) * 1000
-            return ModelTestResult(success=True, api_format=cmd.api_format, model=cmd.model, elapsed_ms=elapsed, input_tokens=int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0), output_tokens=int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0))
+            return ModelTestResult(
+                success=True,
+                api_format=cmd.api_format,
+                model=cmd.model,
+                elapsed_ms=elapsed,
+                input_tokens=int(
+                    usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
+                ),
+                output_tokens=int(
+                    usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
+                ),
+            )
         except (httpx.HTTPError, ValueError) as error:
-            return ModelTestResult(success=False, api_format=cmd.api_format, model=cmd.model, elapsed_ms=(time.perf_counter() - started) * 1000, error=str(error))
+            return ModelTestResult(
+                success=False,
+                api_format=cmd.api_format,
+                model=cmd.model,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                error=str(error),
+            )
 
     # 重复运行端点探测并汇总延迟，供模型管理页比较可用性与稳定性
     # 接收单次连通性测试请求并返回可展示的耗时、用量或错误信息
     async def _model_benchmark_handler(self, params: dict[str, Any]) -> ModelBenchmarkResult:
         cmd = ModelBenchmarkCommand.model_validate(params)
-        results = [await self._probe_model(ModelTestCommand.model_validate(cmd.model_dump())) for _ in range(cmd.samples)]
+        results = [
+            await self._probe_model(ModelTestCommand.model_validate(cmd.model_dump()))
+            for _ in range(cmd.samples)
+        ]
         latencies = sorted(result.elapsed_ms for result in results if result.success)
         errors = [result.error for result in results if result.error]
         index = min(len(latencies) - 1, round((len(latencies) - 1) * .95)) if latencies else 0
-        return ModelBenchmarkResult(api_format=cmd.api_format, model=cmd.model, samples=cmd.samples, successful=len(latencies), failed=cmd.samples - len(latencies), min_ms=min(latencies) if latencies else None, median_ms=statistics.median(latencies) if latencies else None, p95_ms=latencies[index] if latencies else None, max_ms=max(latencies) if latencies else None, errors=errors)
+        return ModelBenchmarkResult(
+            api_format=cmd.api_format,
+            model=cmd.model,
+            samples=cmd.samples,
+            successful=len(latencies),
+            failed=cmd.samples - len(latencies),
+            min_ms=min(latencies) if latencies else None,
+            median_ms=statistics.median(latencies) if latencies else None,
+            p95_ms=latencies[index] if latencies else None,
+            max_ms=max(latencies) if latencies else None,
+            errors=errors,
+        )
 
     async def _model_test_handler(self, params: dict[str, Any]) -> ModelTestResult:
         return await self._probe_model(ModelTestCommand.model_validate(params))
@@ -890,7 +949,16 @@ class CoreApp:
             self._config.llm.api_key = cmd.api_key
             self._config.llm.api_key_env = ""
             updated.append("api_key")
-        for name in ("max_output_tokens", "temperature", "top_p", "reasoning_effort", "timeout_s", "max_retries", "context_window", "cache_control"):
+        for name in (
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "reasoning_effort",
+            "timeout_s",
+            "max_retries",
+            "context_window",
+            "cache_control",
+        ):
             value = getattr(cmd, name)
             if value is not None and value != getattr(self._config.llm, name):
                 setattr(self._config.llm, name, value)
@@ -912,7 +980,22 @@ class CoreApp:
         if updated:
             profiles, active_id = self._stored_model_profiles()
             if any(
-                field in updated for field in ("provider", "api_format", "model", "base_url", "api_key", "max_output_tokens", "temperature", "top_p", "reasoning_effort", "timeout_s", "max_retries", "context_window", "cache_control")
+                field in updated
+                for field in (
+                    "provider",
+                    "api_format",
+                    "model",
+                    "base_url",
+                    "api_key",
+                    "max_output_tokens",
+                    "temperature",
+                    "top_p",
+                    "reasoning_effort",
+                    "timeout_s",
+                    "max_retries",
+                    "context_window",
+                    "cache_control",
+                )
             ):
                 current = next(
                     (item for item in profiles if item.get("id") == active_id), None
@@ -941,10 +1024,27 @@ class CoreApp:
                     }
                 )
             save_client_settings(
-                self._config, models=profiles, active_model_id=active_id
+                self._config,
+                models=profiles,
+                active_model_id=active_id,
             )
         if self._sessions is not None and any(
-            field in updated for field in ("provider", "api_format", "model", "base_url", "api_key", "max_output_tokens", "temperature", "top_p", "reasoning_effort", "timeout_s", "max_retries", "context_window", "cache_control")
+            field in updated
+            for field in (
+                "provider",
+                "api_format",
+                "model",
+                "base_url",
+                "api_key",
+                "max_output_tokens",
+                "temperature",
+                "top_p",
+                "reasoning_effort",
+                "timeout_s",
+                "max_retries",
+                "context_window",
+                "cache_control",
+            )
         ):
             key_name = (
                 "OPENAI_API_KEY"

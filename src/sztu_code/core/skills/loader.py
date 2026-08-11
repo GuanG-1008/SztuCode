@@ -275,7 +275,7 @@ class SkillLoader:
                 skills_by_plugin.setdefault((skill.scope, skill.plugin), []).append(skill.name)
         result: list[Plugin] = []
         enabled_overrides = self._plugin_enabled_overrides()
-        locations = [
+        locations: list[tuple[Path, Literal["personal", "workspace"]]] = [
             (self._config_root / "plugins", "personal"),
             (self._project_root / ".sztu" / "plugins", "workspace"),
         ]

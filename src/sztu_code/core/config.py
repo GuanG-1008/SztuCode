@@ -683,15 +683,15 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         for i, srv in enumerate(servers_raw):
             if not isinstance(srv, dict):
                 raise SystemExit(f"Config error: mcp.servers[{i}] must be a table")
-            name = srv.get("name")
-            if not isinstance(name, str) or not name:
+            srv_name = srv.get("name")
+            if not isinstance(srv_name, str) or not srv_name:
                 raise SystemExit(f"Config error: mcp.servers[{i}].name must be a non-empty string")
             transport = srv.get("transport", "stdio")
             if transport not in ("stdio", "tcp"):
                 raise SystemExit(
                     f"Config error: mcp.servers[{i}].transport must be 'stdio' or 'tcp'"
                 )
-            s = McpServerConfig(name=name, transport=transport)
+            s = McpServerConfig(name=srv_name, transport=transport)
             if "command" in srv:
                 val = srv["command"]
                 if not isinstance(val, str):
@@ -893,7 +893,7 @@ def _apply_env(config: SztuConfig) -> None:
         if raw is None:
             continue
         try:
-            value = int(raw)
+            value: int | float = int(raw)
         except ValueError:
             raise SystemExit(f"Config error: {env_name} must be an integer, got: {raw!r}")
         if value < minimum:
