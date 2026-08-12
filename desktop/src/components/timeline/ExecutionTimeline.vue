@@ -88,7 +88,7 @@ function aggregateStep(steps: TimelineStep[]): TimelineStep {
 
 function hasAssistantContent(step: TimelineStep): boolean {
   return Boolean(
-    step.finalText || step.tokens.length || step.thinking || step.toolCalls.length ||
+    step.finalText || step.streamText || step.tokens.length || step.thinking || step.toolCalls.length ||
     step.plan?.length || step.tests?.length || step.changes?.length ||
     step.logs?.length || step.subagents?.length || step.skills?.length ||
     step.runStartedAt || step.runStats || step.workflowTasks?.length ||
@@ -185,7 +185,7 @@ async function copyTurnSummary(turn: TurnView) {
 }
 
 function stepText(step: TimelineStep): string {
-  return step.finalText || step.tokens.join("");
+  return step.finalText || step.streamText || step.tokens.join("");
 }
 
 function stepHasDetails(step: TimelineStep): boolean {
@@ -232,7 +232,7 @@ function stateOf(steps: TimelineStep[], pending: PermissionState | undefined, ca
   const last = steps[steps.length - 1];
   if (last && last.status !== "done") {
     if (last.status === "observing") return { state: "running" as const, label: "正在检查" };
-    if (last.tokens.length && !last.finalText) return { state: "running" as const, label: "整理中" };
+    if ((last.streamText || last.tokens.length) && !last.finalText) return { state: "running" as const, label: "整理中" };
     return { state: "running" as const, label: calls.length ? "规划中" : "正在思考" };
   }
   const tests = steps.flatMap((step) => step.tests ?? []);
@@ -258,7 +258,7 @@ const turns = computed<TurnView[]>(() => {
     const model = steps.find((step) => step.usage?.model)?.usage?.model ?? "";
     const runStats = [...steps].reverse().find((step) => step.runStats)?.runStats;
     const runStartedAt = steps.find((step) => step.runStartedAt)?.runStartedAt ?? group.userMessageTime;
-    const text = steps.map((step) => step.finalText || step.tokens.join("")).filter(Boolean).join("\n\n");
+    const text = steps.map((step) => step.finalText || step.streamText || step.tokens.join("")).filter(Boolean).join("\n\n");
     const allToolCalls = toolCallsOf(steps);
     const thinkingText = thinkingTextOf(steps);
     const aggregatedStep = aggregateStep(steps);

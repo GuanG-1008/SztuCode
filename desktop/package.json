@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "tauri": "tauri",
-    "test:unit": "tsx --test tests/playwright-chromium.test.ts tests/platform.test.ts",
+    "test:unit": "tsx --test tests/playwright-chromium.test.ts tests/platform.test.ts tests/timeline-stream.test.ts",
     "test:visual": "playwright test"
   },
   "dependencies": {

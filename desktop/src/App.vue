@@ -22,6 +22,7 @@ import SkillCenter from "./components/Skills/SkillCenter.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
+import { appendTokenBatch, createTokenFrameBatcher } from "./utils/timelineStream";
 import {
   applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
@@ -65,6 +66,11 @@ const workspace = ref<Workspace | null>(null);
 const sessions = ref<Session[]>([]);
 const activeId = ref<string | null>(null);
 const timeline = ref<Map<number, TimelineStep>>(new Map());
+const tokenBatcher = createTokenFrameBatcher(
+  ({ runId, step, tokens }) => setStep(step, (current) => appendTokenBatch({ ...current, runId }, tokens)),
+  (callback) => window.requestAnimationFrame(callback),
+  (handle) => window.cancelAnimationFrame(handle),
+);
 const activeRunId = ref<string | null>(null);
 // 当前会话是否正在执行 run（区别于 activeRunId：加载历史任务时 activeRunId 可能是已结束的 run）
 const runActive = ref(false);
@@ -433,6 +439,7 @@ function addUserMessage(content: string) {
   return step;
 }
 function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {}) {
+  tokenBatcher.clear();
   const next = new Map<number, TimelineStep>();
   let step = 0;
   for (const message of messages) {
@@ -508,11 +515,13 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     });
   }
   timeline.value = next;
-}function applyRuntimeEvent(event: RuntimeEvent) {
+}
+function applyRuntimeEvent(event: RuntimeEvent) {
   const type = String(event.type ?? "");
   const runId = String(event.run_id ?? "");
   const relatedRunId = String(event.parent_run_id ?? runId);
   const timelineEvent = event.parent_run_id ? { ...event, run_id: relatedRunId } : event;
+  if (type !== "llm.token" && relatedRunId) tokenBatcher.flushRun(relatedRunId);
   if (type === "run.started" && !activeRunId.value && sending.value) activeRunId.value = runId;
   if (type === "session.created" || type === "session.closed" || type === "session.waiting_for_input") {
     void refreshIndex();
@@ -558,14 +567,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   }
   if (type === "llm.token") {
     const step = stepFor(timelineEvent);
-    setStep(step, (current) => {
-      const token = String(event.token ?? "");
-      const events = [...(current.events ?? [])];
-      const last = events[events.length - 1];
-      if (last?.kind === "text") last.text = `${last.text ?? ""}${token}`;
-      else events.push({ id: `text-live-${runId}-${Date.now()}`, kind: "text", text: token });
-      return { ...current, status: "thinking", tokens: [...current.tokens, token], events };
-    });
+    tokenBatcher.enqueue(relatedRunId, step, String(event.token ?? ""));
     return;
   }
   if (type === "llm.thinking") {
@@ -742,7 +744,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
   }
   if (type === "step.finished") {
     const step = Number(event.step ?? stepFor(timelineEvent));
-    setStep(step, (current) => ({ ...current, status: current.status === "acting" ? "observing" : "done", finalText: current.finalText || current.tokens.join("") }));
+    setStep(step, (current) => ({ ...current, status: current.status === "acting" ? "observing" : "done", finalText: current.finalText || current.streamText || current.tokens.join("") }));
     return;
   }
   if (type === "run.finished") {
@@ -751,7 +753,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       setStep(step, (current) => current.runId === relatedRunId ? {
         ...current,
         status: runStatus === "success" ? "done" : "failed",
-        finalText: current.finalText || current.tokens.join(""),
+        finalText: current.finalText || current.streamText || current.tokens.join(""),
         outcome: {
           status: runStatus === "interrupted" ? "interrupted" : (runStatus === "success" ? "success" : "failed"),
           reason: String(event.reason ?? "") || undefined,
@@ -1141,7 +1143,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { historyLoadSeq += 1; activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
+function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function loadNativeSettings() {
   try {
     const settings = await getNativeSettings();
@@ -1415,6 +1417,7 @@ onMounted(() => {
   void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
 });
 onBeforeUnmount(() => {
+  tokenBatcher.clear();
   stopSidebarDragListeners?.();
   stopMacTitlebandDragArm?.();
   window.clearTimeout(sidebarAnimTimer);

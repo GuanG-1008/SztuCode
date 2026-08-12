@@ -180,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
                 location: Path = link.doc.relative_to(root)
             except ValueError:
                 location = link.doc
-            print(f"{location}:{link.line} -> {link.target}", file=sys.stderr)
+            print(f"{location.as_posix()}:{link.line} -> {link.target}", file=sys.stderr)
         print(
             f"ERROR: 共检查 {len(documents)} 个文件，发现 {len(broken)} 条坏链。",
             file=sys.stderr,

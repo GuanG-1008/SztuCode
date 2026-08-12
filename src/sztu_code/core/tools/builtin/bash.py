@@ -194,7 +194,7 @@ class BashTool(BaseTool):
         try:
             if bash:
                 proc = await asyncio.create_subprocess_exec(
-                    bash, "-c", command,
+                    bash, "--login", "-c", command,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     cwd=str(self._workspace_root) if self._workspace_root is not None else None,
