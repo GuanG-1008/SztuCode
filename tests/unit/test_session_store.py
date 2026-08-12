@@ -254,7 +254,7 @@ def test_notes_read_and_append(tmp_path: Path) -> None:
 
 
 # 功能：验证 SessionStore 使用构造时传入的 tool_result 截断参数
-# 设计：配置很小的 limit/keep，读取 thread 时应按配置截断而非固定 8000/4000
+# 设计：配置小于完整标记的 limit/keep，读取结果仍应严格受限并显式呈现截断提示
 def test_read_messages_uses_configured_tool_result_budget(tmp_path: Path) -> None:
     store = SessionStore(tmp_path, tool_result_limit=20, tool_result_keep=5)
     store.append_message("sess-1", "assistant", [
@@ -266,5 +266,5 @@ def test_read_messages_uses_configured_tool_result_budget(tmp_path: Path) -> Non
 
     messages = store.read_messages("sess-1")
     result_block = messages[-1]["content"][0]
-    assert result_block["content"].startswith("a" * 5)
-    assert "chars omitted" in result_block["content"]
+    assert len(result_block["content"]) <= 5
+    assert result_block["content"].startswith("[")
