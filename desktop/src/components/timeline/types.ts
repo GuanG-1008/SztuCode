@@ -100,6 +100,7 @@ export interface TimelineStep {
   status: TimelineStatus;
   thinking?: string;
   tokens: string[];
+  streamText?: string;
   toolCalls: ToolCallEntry[];
   events?: TimelineEvent[];
   permission?: PermissionState;
