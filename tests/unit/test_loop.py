@@ -186,6 +186,13 @@ class _StringReadOnlyPermissionTool(_TimedTool):
         return cast(ToolPermission, "read_only")
 
 
+class _StringAllowPermissionManager(PermissionManager):
+    """Simulates a malformed third-party policy decision result."""
+
+    def evaluate(self, tool_name: str, params: dict[str, object]) -> PermissionDecision:
+        return cast(PermissionDecision, "allow")
+
+
 class _RaisingReadTool(_TimedTool):
     # 模拟工具层异常，验证并发调度会隔离单项异常并继续收集其他结果
     async def invoke(self, params: dict[str, object]) -> ToolResult:
@@ -450,6 +457,29 @@ async def test_unknown_tool_or_permission_keeps_batch_serial(unknown_kind: str) 
         *([] if unknown_kind == "tool" else ["middle"]),
         "last",
     ]
+
+
+# 功能：验证裸字符串 allow 不会被视为明确的权限允许，从而错误开启并发
+# 设计：模拟不符合 PermissionDecision 合约的权限管理器，断言只读邻居仍被保守串行调度
+async def test_non_enum_permission_allow_keeps_batch_serial() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": label, "delay": 0.01}, uid=f"allow-{label}")
+        for label in ("first", "second", "last")
+    ]
+
+    await _run_tool_batch(
+        calls,
+        [tool],
+        max_concurrency=3,
+        permission_manager=_StringAllowPermissionManager(
+            {"timed_read": ToolPolicy(default=PermissionDecision.ALLOW)}
+        ),
+    )
+
+    assert probe.max_active == 1
+    assert probe.started == ["first", "second", "last"]
 
 
 # 功能：验证可能进入审批的只读批次按原顺序串行执行

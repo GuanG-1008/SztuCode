@@ -80,7 +80,10 @@ def _can_run_read_only_batch_concurrently(
                 decision = permission_manager.evaluate(tool_call.name, runtime_params)
             except Exception:
                 return None
-            if decision != PermissionDecision.ALLOW:
+            if (
+                not isinstance(decision, PermissionDecision)
+                or decision is not PermissionDecision.ALLOW
+            ):
                 return None
         permissions.append(permission)
     return permissions
