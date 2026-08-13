@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
+import pytest
 from pydantic import BaseModel
 
 from sztu_code.core.config import SztuConfig
@@ -245,6 +247,26 @@ async def test_config_max_steps_passed_to_loop(tmp_path: Path) -> None:
     provider = _LoopingProvider()
     await _run(provider=provider, config=_config(max_steps=3), tmp_path=tmp_path)
     assert provider._call == 3
+
+
+# 功能：验证配置中的工具并发上限会传递给 AgentLoop
+# 设计：替换 loop.run 捕获已构造实例，直接断言 runner 不会丢失 agent 配置值
+async def test_config_tool_concurrency_passed_to_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[int] = []
+
+    async def fake_run(self: Any, context: Any) -> None:
+        captured.append(self._tool_max_concurrency)
+        context.mark_success()
+
+    monkeypatch.setattr("sztu_code.core.runner.AgentLoop.run", fake_run)
+    config = _config()
+    config.agent.tool_max_concurrency = 2
+
+    await _run(config=config, tmp_path=tmp_path)
+
+    assert captured == [2]
 
 
 # 功能：验证 run.started 和 run.finished 事件使用相同且非空的 run_id

@@ -10,12 +10,20 @@ from sztu_code.core.bus.events import (
     StepFinishedEvent,
     StepStartedEvent,
     StuckLoopEvent,
+    ToolSchedulerMode,
 )
 from sztu_code.core.compact.budget import truncate_tool_results
 from sztu_code.core.context import ContinueReason, ExecutionContext, TerminationReason
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.base import LLMProvider
+from sztu_code.core.llm.types import ToolCallBlock
+from sztu_code.core.permissions.policy import PermissionDecision
 from sztu_code.core.stuck_tracker import stuck_signature
+from sztu_code.core.tools.base import (
+    _PERMISSION_GRANT_KEY,
+    ToolPermission,
+    ToolResult,
+)
 from sztu_code.core.tools.invocation import invoke_tool
 from sztu_code.core.tools.registry import ToolRegistry
 
@@ -42,6 +50,80 @@ _DEFAULT_SYSTEM_PROMPT = (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# 检查一批调用是否均为无需审批的显式只读工具，未知或分类异常一律保守降级
+def _can_run_read_only_batch_concurrently(
+    registry: ToolRegistry,
+    tool_calls: list[ToolCallBlock],
+    permission_manager: PermissionManager | None,
+) -> list[ToolPermission] | None:
+    permissions: list[ToolPermission] = []
+    for tool_call in tool_calls:
+        tool = registry.get(tool_call.name)
+        if tool is None:
+            return None
+        runtime_params = dict(tool_call.input)
+        runtime_params.pop("description", None)
+        runtime_params.pop(_PERMISSION_GRANT_KEY, None)
+        try:
+            permission = tool.classify_permission(runtime_params)
+        except Exception:
+            return None
+        if (
+            not isinstance(permission, ToolPermission)
+            or permission is not ToolPermission.READ_ONLY
+        ):
+            return None
+        if permission_manager is not None:
+            try:
+                decision = permission_manager.evaluate(tool_call.name, runtime_params)
+            except Exception:
+                return None
+            if (
+                not isinstance(decision, PermissionDecision)
+                or decision is not PermissionDecision.ALLOW
+            ):
+                return None
+        permissions.append(permission)
+    return permissions
+
+
+# 在有界信号量内执行单个工具调用并附加统一调度 Trace 元数据
+async def _invoke_scheduled_tool(
+    registry: ToolRegistry,
+    tool_call: ToolCallBlock,
+    bus: EventBus,
+    run_id: str,
+    permission_manager: PermissionManager | None,
+    session_id: str,
+    semaphore: asyncio.Semaphore,
+    batch_id: str,
+    scheduler_mode: ToolSchedulerMode,
+    queued_at: str,
+    queued_monotonic: float,
+    classified_permission: ToolPermission | None = None,
+) -> ToolResult:
+    try:
+        async with semaphore:
+            return await invoke_tool(
+                registry,
+                tool_call,
+                bus,
+                run_id,
+                permission_manager=permission_manager,
+                session_id=session_id,
+                batch_id=batch_id,
+                scheduler_mode=scheduler_mode,
+                queued_at=queued_at,
+                queued_monotonic=queued_monotonic,
+                classified_permission=classified_permission,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Isolate an unexpected call-level failure from the rest of the batch.
+        return ToolResult(content=str(exc), is_error=True, error_type="runtime_error")
 
 
 class AgentLoop:
@@ -71,7 +153,10 @@ class AgentLoop:
         sliding_window_size: int = 5,
         compact_cooldown_steps: int = 3,
         circuit_breaker_max_failures: int = 3,
+        tool_max_concurrency: int = 4,
     ) -> None:
+        if tool_max_concurrency < 1:
+            raise ValueError("tool_max_concurrency must be at least 1")
         self._provider = provider
         self._registry = registry
         self._bus = bus
@@ -93,6 +178,7 @@ class AgentLoop:
         self._sliding_window_size = sliding_window_size
         self._compact_cooldown_steps = compact_cooldown_steps
         self._circuit_breaker_max_failures = circuit_breaker_max_failures
+        self._tool_max_concurrency = tool_max_concurrency
         # 压缩冷却期：两次压缩之间至少间隔 N 步；冷启动即可触发
         self._last_compact_step: int = -15
         # 熔断器日志去重：避免每步都刷屏
@@ -237,13 +323,74 @@ class AgentLoop:
                         tool_names=[tc.name for tc in response.tool_calls],
                         status="running",
                     )
-                for tc in response.tool_calls:
-                    canvas_tool_names.append(tc.name)
-                    result = await invoke_tool(
-                        self._registry, tc, self._bus, context.run_id,
-                        permission_manager=self._permission_manager,
-                        session_id=self._session_id,
+                batch_id = f"{context.run_id}:{context.step}"
+                queued_at = _now()
+                queued_monotonic = time.monotonic()
+                batch_permissions: list[ToolPermission] | None = None
+                if self._tool_max_concurrency > 1 and len(response.tool_calls) > 1:
+                    batch_permissions = _can_run_read_only_batch_concurrently(
+                        self._registry,
+                        response.tool_calls,
+                        self._permission_manager,
                     )
+                use_concurrent_scheduler = (
+                    self._tool_max_concurrency > 1
+                    and len(response.tool_calls) > 1
+                    and batch_permissions is not None
+                )
+                if use_concurrent_scheduler:
+                    assert batch_permissions is not None
+                    semaphore = asyncio.Semaphore(self._tool_max_concurrency)
+                    concurrent_results = await asyncio.gather(
+                        *(
+                            _invoke_scheduled_tool(
+                                self._registry,
+                                tool_call,
+                                self._bus,
+                                context.run_id,
+                                self._permission_manager,
+                                self._session_id,
+                                semaphore,
+                                batch_id,
+                                "concurrent",
+                                queued_at,
+                                queued_monotonic,
+                                batch_permissions[index],
+                            )
+                            for index, tool_call in enumerate(response.tool_calls)
+                        ),
+                        return_exceptions=True,
+                    )
+                else:
+                    concurrent_results = None
+
+                for index, tc in enumerate(response.tool_calls):
+                    if concurrent_results is None:
+                        result = await invoke_tool(
+                            self._registry,
+                            tc,
+                            self._bus,
+                            context.run_id,
+                            permission_manager=self._permission_manager,
+                            session_id=self._session_id,
+                            batch_id=batch_id,
+                            scheduler_mode="serial",
+                            queued_at=queued_at,
+                            queued_monotonic=queued_monotonic,
+                        )
+                    else:
+                        scheduled_result = concurrent_results[index]
+                        if isinstance(scheduled_result, asyncio.CancelledError):
+                            raise scheduled_result
+                        if not isinstance(scheduled_result, ToolResult):
+                            result = ToolResult(
+                                content=str(scheduled_result),
+                                is_error=True,
+                                error_type="runtime_error",
+                            )
+                        else:
+                            result = scheduled_result
+                    canvas_tool_names.append(tc.name)
                     if result.is_error:
                         has_errors = True
                         # Claude Code 风格错误累积：非权限类错误 ≥3 次触发熔断

@@ -21,6 +21,7 @@ _DEFAULT_WRAP_UP_ON_MAX_STEPS = True
 _DEFAULT_GRACE_STEP_ON_MAX_STEPS = True
 _DEFAULT_STUCK_MAX_FAILURES = 3
 _DEFAULT_STUCK_MAX_TOTAL = 0
+_DEFAULT_TOOL_MAX_CONCURRENCY = 4
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
 
 API_FORMATS = {
@@ -63,6 +64,8 @@ class AgentConfig:
     stuck_max_failures: int = _DEFAULT_STUCK_MAX_FAILURES
     # 累计干预达到该次数硬停；0=永不硬停
     stuck_max_total: int = _DEFAULT_STUCK_MAX_TOTAL
+    # 同轮全只读工具批次的最大并发数；1 保持完全串行
+    tool_max_concurrency: int = _DEFAULT_TOOL_MAX_CONCURRENCY
 
 
 @dataclass
@@ -389,7 +392,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             raise SystemExit("Config error: [agent] must be a table")
         unknown_agent: set[str] = set(agent.keys()) - {
             "max_steps", "wrap_up_on_max_steps", "grace_step_on_max_steps",
-            "stuck_max_failures", "stuck_max_total",
+            "stuck_max_failures", "stuck_max_total", "tool_max_concurrency",
         }
         if unknown_agent:
             raise SystemExit(f"Unknown [agent] keys: {', '.join(sorted(unknown_agent))}")
@@ -417,6 +420,13 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                 if not isinstance(val, int) or val < 0:
                     raise SystemExit(f"Config error: agent.{_key} must be a non-negative integer")
                 setattr(config.agent, _key, val)
+        if "tool_max_concurrency" in agent:
+            val = agent["tool_max_concurrency"]
+            if not isinstance(val, int) or isinstance(val, bool) or val < 1:
+                raise SystemExit(
+                    "Config error: agent.tool_max_concurrency must be an integer >= 1"
+                )
+            config.agent.tool_max_concurrency = val
 
     if "budget" in data:
         budget = data["budget"]
@@ -784,6 +794,22 @@ def _apply_env(config: SztuConfig) -> None:
                 raise SystemExit(
                     f"Config error: {_env} must be an integer, got: {_str!r}"
                 )
+
+    tool_concurrency_str = os.environ.get("SZTU_TOOL_MAX_CONCURRENCY")
+    if tool_concurrency_str is not None:
+        try:
+            tool_concurrency = int(tool_concurrency_str)
+        except ValueError:
+            raise SystemExit(
+                "Config error: SZTU_TOOL_MAX_CONCURRENCY must be an integer, "
+                f"got: {tool_concurrency_str!r}"
+            )
+        if tool_concurrency < 1:
+            raise SystemExit(
+                "Config error: SZTU_TOOL_MAX_CONCURRENCY must be >= 1, "
+                f"got: {tool_concurrency_str!r}"
+            )
+        config.agent.tool_max_concurrency = tool_concurrency
 
     # --- 多智能体工作流环境变量 ---
     for _env, _attr, _minimum in (

@@ -4897,6 +4897,11 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `tool_use_id` | `string` | yes |
 | `tool_name` | `string` | yes |
 | `params` | `object` | yes |
+| `batch_id` | `string` | no |
+| `scheduler_mode` | `string` | no |
+| `queue_ms` | `integer` | no |
+| `queued_at` | `string` | no |
+| `started_at` | `string` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -4924,6 +4929,35 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "additionalProperties": true,
       "title": "Params",
       "type": "object"
+    },
+    "batch_id": {
+      "default": "",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "scheduler_mode": {
+      "default": "serial",
+      "enum": [
+        "serial",
+        "concurrent"
+      ],
+      "title": "Scheduler Mode",
+      "type": "string"
+    },
+    "queue_ms": {
+      "default": 0,
+      "title": "Queue Ms",
+      "type": "integer"
+    },
+    "queued_at": {
+      "default": "",
+      "title": "Queued At",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
     },
     "ts": {
       "title": "Ts",
@@ -4968,6 +5002,12 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `tool_name` | `string` | yes |
 | `elapsed_ms` | `integer` | yes |
 | `output` | `string` | no |
+| `batch_id` | `string` | no |
+| `scheduler_mode` | `string` | no |
+| `queue_ms` | `integer` | no |
+| `queued_at` | `string` | no |
+| `started_at` | `string` | no |
+| `finished_at` | `string` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -4998,6 +5038,40 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "output": {
       "default": "",
       "title": "Output",
+      "type": "string"
+    },
+    "batch_id": {
+      "default": "",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "scheduler_mode": {
+      "default": "serial",
+      "enum": [
+        "serial",
+        "concurrent"
+      ],
+      "title": "Scheduler Mode",
+      "type": "string"
+    },
+    "queue_ms": {
+      "default": 0,
+      "title": "Queue Ms",
+      "type": "integer"
+    },
+    "queued_at": {
+      "default": "",
+      "title": "Queued At",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "default": "",
+      "title": "Finished At",
       "type": "string"
     },
     "ts": {
@@ -5042,6 +5116,12 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `error_message` | `string` | yes |
 | `elapsed_ms` | `integer` | yes |
 | `attempt` | `integer` | no |
+| `batch_id` | `string` | no |
+| `scheduler_mode` | `string` | no |
+| `queue_ms` | `integer` | no |
+| `queued_at` | `string` | no |
+| `started_at` | `string` | no |
+| `finished_at` | `string` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -5081,6 +5161,40 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "default": 1,
       "title": "Attempt",
       "type": "integer"
+    },
+    "batch_id": {
+      "default": "",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "scheduler_mode": {
+      "default": "serial",
+      "enum": [
+        "serial",
+        "concurrent"
+      ],
+      "title": "Scheduler Mode",
+      "type": "string"
+    },
+    "queue_ms": {
+      "default": 0,
+      "title": "Queue Ms",
+      "type": "integer"
+    },
+    "queued_at": {
+      "default": "",
+      "title": "Queued At",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "default": "",
+      "title": "Finished At",
+      "type": "string"
     },
     "ts": {
       "title": "Ts",

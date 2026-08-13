@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
@@ -13,8 +15,10 @@ from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import LlmResponse, ToolCallBlock, UsageStats
 from sztu_code.core.loop import AgentLoop
 from sztu_code.core.permissions.denial_tracker import DenialTracker
+from sztu_code.core.permissions.manager import PermissionManager
+from sztu_code.core.permissions.policy import PermissionDecision, ToolPolicy
 from sztu_code.core.subagent.registry import BackgroundTaskRegistry
-from sztu_code.core.tools.base import BaseTool, ToolResult
+from sztu_code.core.tools.base import BaseTool, ToolPermission, ToolResult
 from sztu_code.core.tools.registry import ToolRegistry
 
 # --- stubs -------------------------------------------------------------------
@@ -118,6 +122,86 @@ class _FailTool(BaseTool):
         raise RuntimeError("tool error")
 
 
+@dataclass
+class _ConcurrencyProbe:
+    active: int = 0
+    max_active: int = 0
+    started: list[str] = field(default_factory=list)
+    finished: list[str] = field(default_factory=list)
+
+
+class _TimedTool(BaseTool):
+    description = "Waits for a configured delay"
+    input_schema: dict[str, object] = {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string"},
+            "delay": {"type": "number"},
+            "fail": {"type": "boolean"},
+        },
+        "required": ["label", "delay"],
+    }
+
+    # 初始化可声明权限并记录并发行为的测试工具
+    def __init__(
+        self,
+        name: str,
+        permission: ToolPermission,
+        probe: _ConcurrencyProbe,
+    ) -> None:
+        self.name = name
+        self.required_permission = permission
+        self._probe = probe
+
+    # 等待指定时长并返回标签，可按参数产生不可重试失败
+    async def invoke(self, params: dict[str, object]) -> ToolResult:
+        label = str(params["label"])
+        self._probe.active += 1
+        self._probe.max_active = max(self._probe.max_active, self._probe.active)
+        self._probe.started.append(label)
+        try:
+            await asyncio.sleep(float(params["delay"]))
+            self._probe.finished.append(label)
+            if bool(params.get("fail", False)):
+                return ToolResult(
+                    content=f"failed:{label}",
+                    is_error=True,
+                    error_type="schema_error",
+                )
+            return ToolResult(content=f"done:{label}")
+        finally:
+            self._probe.active -= 1
+
+
+class _UnknownPermissionTool(_TimedTool):
+    # 模拟第三方工具返回框架无法识别的权限能力值
+    def classify_permission(self, params: dict[str, object]) -> ToolPermission:
+        return cast(ToolPermission, "unknown")
+
+
+class _StringReadOnlyPermissionTool(_TimedTool):
+    """Simulates a malformed third-party permission classifier result."""
+
+    def classify_permission(self, params: dict[str, object]) -> ToolPermission:
+        return cast(ToolPermission, "read_only")
+
+
+class _StringAllowPermissionManager(PermissionManager):
+    """Simulates a malformed third-party policy decision result."""
+
+    def evaluate(self, tool_name: str, params: dict[str, object]) -> PermissionDecision:
+        return cast(PermissionDecision, "allow")
+
+
+class _RaisingReadTool(_TimedTool):
+    # 模拟工具层异常，验证并发调度会隔离单项异常并继续收集其他结果
+    async def invoke(self, params: dict[str, object]) -> ToolResult:
+        label = str(params["label"])
+        self._probe.started.append(label)
+        await asyncio.sleep(float(params.get("delay", 0)))
+        raise RuntimeError(f"raised:{label}")
+
+
 # --- helpers -----------------------------------------------------------------
 
 
@@ -164,7 +248,333 @@ async def _events(bus: EventBus) -> list[BaseModel]:
     return collected
 
 
+# 用一轮工具调用和结束响应构造并执行调度测试场景
+async def _run_tool_batch(
+    calls: list[ToolCallBlock],
+    tools: list[BaseTool],
+    *,
+    max_concurrency: int,
+    permission_manager: PermissionManager | None = None,
+) -> tuple[ExecutionContext, list[BaseModel], float]:
+    provider = _MockProvider(
+        [
+            LlmResponse(stop_reason="tool_use", tool_calls=calls),
+            LlmResponse(stop_reason="end_turn", text="done"),
+        ]
+    )
+    registry = ToolRegistry()
+    for tool in tools:
+        registry.register(tool)
+    bus = EventBus()
+    events = await _events(bus)
+    loop = AgentLoop(
+        provider,
+        registry,
+        bus,
+        permission_manager=permission_manager,
+        tool_max_concurrency=max_concurrency,
+    )
+    context = _ctx()
+    started = time.monotonic()
+    await loop.run(context)
+    return context, events, time.monotonic() - started
+
+
 # --- tests -------------------------------------------------------------------
+
+
+# 功能：验证三个只读工具在并发上限不小于三时于 220ms 内完成
+# 设计：每个工具独立等待 100ms，并同时断言探针峰值并发度，避免仅靠宽松耗时阈值产生假阳性
+async def test_read_only_batch_runs_concurrently_under_bounded_limit() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": label, "delay": 0.1}, uid=f"read-{label}")
+        for label in ("a", "b", "c")
+    ]
+
+    _context, _events_seen, elapsed = await _run_tool_batch(
+        calls, [tool], max_concurrency=3
+    )
+
+    assert elapsed < 0.22
+    assert probe.max_active == 3
+
+
+# 功能：验证并发上限会限制同批只读工具的实际活跃数
+# 设计：三个等长调用配置为两个执行槽，断言探针峰值而非仅检查总耗时
+async def test_read_only_batch_respects_intermediate_concurrency_limit() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": label, "delay": 0.03}, uid=f"limit-{label}")
+        for label in ("a", "b", "c")
+    ]
+
+    await _run_tool_batch(calls, [tool], max_concurrency=2)
+
+    assert probe.max_active == 2
+
+
+# 功能：验证包含写工具的混合批次保持串行且执行顺序与请求顺序一致
+# 设计：交替使用只读和写权限元数据并记录开始顺序，锁定整批降级规则而非只隔离单个写调用
+async def test_mixed_read_write_batch_stays_serial_in_request_order() -> None:
+    probe = _ConcurrencyProbe()
+    read_tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    write_tool = _TimedTool("timed_write", ToolPermission.WORKSPACE_WRITE, probe)
+    calls = [
+        _tc("timed_read", {"label": "read-a", "delay": 0.02}, uid="mixed-1"),
+        _tc("timed_write", {"label": "write", "delay": 0.02}, uid="mixed-2"),
+        _tc("timed_read", {"label": "read-b", "delay": 0.02}, uid="mixed-3"),
+    ]
+
+    await _run_tool_batch(calls, [read_tool, write_tool], max_concurrency=3)
+
+    assert probe.max_active == 1
+    assert probe.started == ["read-a", "write", "read-b"]
+
+
+# 功能：验证只读批次中间调用失败时其他调用仍完成且结果按请求顺序写回上下文
+# 设计：让第二项最快失败、第三项次快、第一项最慢，故意打乱完成顺序后检查三项完整性及 tool_use_id 顺序
+async def test_read_only_failure_is_isolated_and_context_order_is_stable() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": "first", "delay": 0.06}, uid="ordered-1"),
+        _tc(
+            "timed_read",
+            {"label": "second", "delay": 0.01, "fail": True},
+            uid="ordered-2",
+        ),
+        _tc("timed_read", {"label": "third", "delay": 0.03}, uid="ordered-3"),
+    ]
+
+    context, events, _elapsed = await _run_tool_batch(
+        calls, [tool], max_concurrency=3
+    )
+
+    assert probe.max_active == 3
+    assert set(probe.finished) == {"first", "second", "third"}
+    assert probe.finished != ["first", "second", "third"]
+    result_blocks = context.messages[2]["content"]
+    assert [block["tool_use_id"] for block in result_blocks] == [
+        "ordered-1",
+        "ordered-2",
+        "ordered-3",
+    ]
+    assert [block["content"] for block in result_blocks] == [
+        "done:first",
+        "failed:second",
+        "done:third",
+    ]
+    terminal_ids = [
+        event.tool_use_id  # type: ignore[attr-defined]
+        for event in events
+        if event.type in {"tool.call_finished", "tool.call_failed"}  # type: ignore[attr-defined]
+    ]
+    assert set(terminal_ids) == {"ordered-1", "ordered-2", "ordered-3"}
+
+
+# 功能：验证只读工具抛出未捕获异常时不会取消同批其他调用
+# 设计：中间工具直接抛异常，前后工具仍应完成，并按请求顺序生成完整 tool_result
+async def test_read_only_raised_exception_is_isolated() -> None:
+    probe = _ConcurrencyProbe()
+    read_tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    raising_tool = _RaisingReadTool("raising_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": "first", "delay": 0.02}, uid="raise-1"),
+        _tc("raising_read", {"label": "middle", "delay": 0.01}, uid="raise-2"),
+        _tc("timed_read", {"label": "last", "delay": 0.02}, uid="raise-3"),
+    ]
+
+    context, events, _elapsed = await _run_tool_batch(
+        calls, [read_tool, raising_tool], max_concurrency=3
+    )
+
+    result_blocks = context.messages[2]["content"]
+    assert [block["tool_use_id"] for block in result_blocks] == [
+        "raise-1", "raise-2", "raise-3"
+    ]
+    assert result_blocks[0].get("is_error") is None
+    assert result_blocks[1].get("is_error") is True
+    assert result_blocks[2].get("is_error") is None
+    failed_ids = {
+        event.tool_use_id
+        for event in events
+        if event.type == "tool.call_failed"  # type: ignore[attr-defined]
+    }
+    assert "raise-2" in failed_ids
+
+
+# 功能：验证最大并发数为一时全只读批次保持现有串行行为
+# 设计：三个声明只读的工具仍只允许一个活跃调用，并核对开始顺序以覆盖兼容性边界
+async def test_read_only_batch_with_limit_one_is_serial() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": label, "delay": 0.01}, uid=f"serial-{label}")
+        for label in ("a", "b", "c")
+    ]
+
+    await _run_tool_batch(calls, [tool], max_concurrency=1)
+
+    assert probe.max_active == 1
+    assert probe.started == ["a", "b", "c"]
+
+
+# 功能：验证未知工具和未知权限能力都不会让批次被错误并发
+# 设计：分别混入未注册工具及返回未知权限值的第三方工具，用只读邻居的峰值并发度证明保守降级
+@pytest.mark.parametrize("unknown_kind", ["tool", "permission", "string_permission"])
+async def test_unknown_tool_or_permission_keeps_batch_serial(unknown_kind: str) -> None:
+    probe = _ConcurrencyProbe()
+    read_tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    unknown_tool = _UnknownPermissionTool(
+        "unknown_permission", ToolPermission.READ_ONLY, probe
+    )
+    string_permission_tool = _StringReadOnlyPermissionTool(
+        "string_read_only_permission", ToolPermission.READ_ONLY, probe
+    )
+    middle_name = {
+        "tool": "missing",
+        "permission": "unknown_permission",
+        "string_permission": "string_read_only_permission",
+    }[unknown_kind]
+    calls = [
+        _tc("timed_read", {"label": "first", "delay": 0.01}, uid="unknown-1"),
+        _tc(middle_name, {"label": "middle", "delay": 0.01}, uid="unknown-2"),
+        _tc("timed_read", {"label": "last", "delay": 0.01}, uid="unknown-3"),
+    ]
+
+    await _run_tool_batch(
+        calls,
+        [read_tool, unknown_tool, string_permission_tool],
+        max_concurrency=3,
+    )
+
+    assert probe.max_active == 1
+    assert probe.started == [
+        "first",
+        *([] if unknown_kind == "tool" else ["middle"]),
+        "last",
+    ]
+
+
+# 功能：验证裸字符串 allow 不会被视为明确的权限允许，从而错误开启并发
+# 设计：模拟不符合 PermissionDecision 合约的权限管理器，断言只读邻居仍被保守串行调度
+async def test_non_enum_permission_allow_keeps_batch_serial() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": label, "delay": 0.01}, uid=f"allow-{label}")
+        for label in ("first", "second", "last")
+    ]
+
+    await _run_tool_batch(
+        calls,
+        [tool],
+        max_concurrency=3,
+        permission_manager=_StringAllowPermissionManager(
+            {"timed_read": ToolPolicy(default=PermissionDecision.ALLOW)}
+        ),
+    )
+
+    assert probe.max_active == 1
+    assert probe.started == ["first", "second", "last"]
+
+
+# 功能：验证可能进入审批的只读批次按原顺序串行执行
+# 设计：为只读工具配置 ASK 策略并在请求事件中逐一批准，断言不会同时出现多个待审批调用
+async def test_read_only_batch_requiring_approval_stays_serial() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("approval_read", ToolPermission.READ_ONLY, probe)
+    manager = PermissionManager(
+        {"approval_read": ToolPolicy(default=PermissionDecision.ASK)},
+        timeout_s=1,
+    )
+    pending = 0
+    max_pending = 0
+    bus = EventBus()
+
+    # 收到权限请求后在下一事件循环拍批准，测量同时待批的调用数
+    async def approve(event: BaseModel) -> None:
+        nonlocal pending, max_pending
+        if event.type != "permission.requested":  # type: ignore[attr-defined]
+            return
+        pending += 1
+        max_pending = max(max_pending, pending)
+        await asyncio.sleep(0)
+        manager.respond(event.tool_use_id, "allow_once")  # type: ignore[attr-defined]
+        pending -= 1
+
+    bus.subscribe(approve)
+    provider = _MockProvider(
+        [
+            LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[
+                    _tc(
+                        "approval_read",
+                        {"label": label, "delay": 0.01},
+                        uid=f"approval-{label}",
+                    )
+                    for label in ("a", "b")
+                ],
+            ),
+            LlmResponse(stop_reason="end_turn", text="done"),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register(tool)
+    loop = AgentLoop(
+        provider,
+        registry,
+        bus,
+        permission_manager=manager,
+        tool_max_concurrency=2,
+    )
+
+    await loop.run(_ctx())
+
+    assert max_pending == 1
+    assert probe.max_active == 1
+
+
+# 功能：验证工具事件携带批次标识、排队与起止时间及调度模式并保持正确 tool_use_id
+# 设计：收集统一 EventBus 事件并按 tool_use_id 配对，直接覆盖 Trace 订阅者会持久化的最小事件元数据
+async def test_tool_events_include_batch_scheduling_trace_metadata() -> None:
+    probe = _ConcurrencyProbe()
+    tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
+    calls = [
+        _tc("timed_read", {"label": label, "delay": 0.01}, uid=f"trace-{label}")
+        for label in ("a", "b")
+    ]
+
+    _context, events, _elapsed = await _run_tool_batch(
+        calls, [tool], max_concurrency=2
+    )
+
+    started = {
+        event.tool_use_id: event  # type: ignore[attr-defined]
+        for event in events
+        if event.type == "tool.call_started"  # type: ignore[attr-defined]
+    }
+    terminal = {
+        event.tool_use_id: event  # type: ignore[attr-defined]
+        for event in events
+        if event.type in {"tool.call_finished", "tool.call_failed"}  # type: ignore[attr-defined]
+    }
+    assert set(started) == {"trace-a", "trace-b"}
+    assert set(terminal) == set(started)
+    assert len({event.batch_id for event in started.values()}) == 1  # type: ignore[attr-defined]
+    for tool_use_id, start_event in started.items():
+        finish_event = terminal[tool_use_id]
+        assert start_event.scheduler_mode == "concurrent"  # type: ignore[attr-defined]
+        assert start_event.queued_at <= start_event.started_at  # type: ignore[attr-defined]
+        assert start_event.queue_ms >= 0  # type: ignore[attr-defined]
+        assert finish_event.batch_id == start_event.batch_id  # type: ignore[attr-defined]
+        assert finish_event.scheduler_mode == "concurrent"  # type: ignore[attr-defined]
+        assert finish_event.started_at == start_event.started_at  # type: ignore[attr-defined]
+        assert finish_event.finished_at >= finish_event.started_at  # type: ignore[attr-defined]
 
 
 # 功能：验证 LLM 返回 end_turn 时 loop 将 context 标记为 success

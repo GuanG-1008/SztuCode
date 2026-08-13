@@ -162,6 +162,39 @@ def test_agent_budget_keys_toml_parsed(tmp_path: Path, monkeypatch: pytest.Monke
     assert cfg.agent.stuck_max_total == 2
 
 
+# 功能：验证 Agent 工具并发上限支持 TOML 与环境变量配置并由环境变量覆盖
+# 设计：先加载 agent.tool_max_concurrency，再设置同名 SZTU 环境变量，覆盖配置传播的两条入口
+def test_agent_tool_concurrency_config_parsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    toml_path = tmp_path / "sztu.toml"
+    toml_path.write_bytes(b"[agent]\ntool_max_concurrency = 3\n")
+    monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
+    cfg = get_config()
+    assert cfg.agent.tool_max_concurrency == 3
+
+    monkeypatch.setenv("SZTU_TOOL_MAX_CONCURRENCY", "5")
+    cfg = get_config()
+    assert cfg.agent.tool_max_concurrency == 5
+
+
+# 功能：验证 Agent 工具并发上限拒绝零值和非整数
+# 设计：分别覆盖 TOML 与环境变量的无效边界，防止配置为零导致调度器永远无法取得执行槽
+@pytest.mark.parametrize("source", ["toml", "env"])
+def test_agent_tool_concurrency_rejects_invalid_values(
+    source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if source == "toml":
+        toml_path = tmp_path / "sztu.toml"
+        toml_path.write_bytes(b"[agent]\ntool_max_concurrency = 0\n")
+        monkeypatch.setenv("SZTU_CONFIG", str(toml_path))
+    else:
+        monkeypatch.setenv("SZTU_TOOL_MAX_CONCURRENCY", "not-an-int")
+
+    with pytest.raises(SystemExit):
+        get_config()
+
+
 # 功能：验证 SZTU_GRACE_STEP_ON_MAX_STEPS 环境变量可关闭结语宽限步
 # 设计：设 env=false，断言 get_config 读到 False；未设置时保持默认 True
 def test_grace_step_env_var_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
