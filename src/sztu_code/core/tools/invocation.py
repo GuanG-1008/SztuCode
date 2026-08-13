@@ -15,6 +15,7 @@ from sztu_code.core.bus.events import (
     ToolCallFailedEvent,
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
+    ToolSchedulerMode,
 )
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import ToolCallBlock
@@ -90,7 +91,13 @@ async def _fail(
     elapsed_ms: int,
     *,
     attempt: int = 1,
+    batch_id: str = "",
+    scheduler_mode: ToolSchedulerMode = "serial",
+    queue_ms: int = 0,
+    queued_at: str = "",
+    started_at: str = "",
 ) -> ToolResult:
+    finished_at = _now()
     await bus.publish(
         ToolCallFailedEvent(
             run_id=run_id,
@@ -100,7 +107,13 @@ async def _fail(
             error_message=error_message,
             elapsed_ms=elapsed_ms,
             attempt=attempt,
-            ts=_now(),
+            batch_id=batch_id,
+            scheduler_mode=scheduler_mode,
+            queue_ms=queue_ms,
+            queued_at=queued_at,
+            started_at=started_at,
+            finished_at=finished_at,
+            ts=finished_at,
         )
     )
     await _publish_test_result(bus, run_id, tool_call, "failed", error_message)
@@ -117,31 +130,57 @@ async def invoke_tool(
     *,
     permission_manager: PermissionManager | None = None,
     session_id: str = "",
+    batch_id: str = "",
+    scheduler_mode: ToolSchedulerMode = "serial",
+    queued_at: str = "",
+    queued_monotonic: float | None = None,
+    classified_permission: ToolPermission | None = None,
 ) -> ToolResult:
     t0 = time.monotonic()
+    started_at = _now()
+    queue_ms = (
+        max(0, int((t0 - queued_monotonic) * 1000))
+        if queued_monotonic is not None
+        else 0
+    )
     tool_call.input = registry.enrich_tool_input(tool_call.name, tool_call.input)
     runtime_params = dict(tool_call.input)
     runtime_params.pop("description", None)
     runtime_params.pop(_PERMISSION_GRANT_KEY, None)
 
-    await bus.publish(
-        ToolCallStartedEvent(
-            run_id=run_id,
-            tool_use_id=tool_call.id,
-            tool_name=tool_call.name,
-            params=dict(tool_call.input),
-            ts=_now(),
-        )
-    )
-
     def elapsed() -> int:
         return int((time.monotonic() - t0) * 1000)
+
+    try:
+        await bus.publish(
+            ToolCallStartedEvent(
+                run_id=run_id,
+                tool_use_id=tool_call.id,
+                tool_name=tool_call.name,
+                params=dict(tool_call.input),
+                batch_id=batch_id,
+                scheduler_mode=scheduler_mode,
+                queue_ms=queue_ms,
+                queued_at=queued_at,
+                started_at=started_at,
+                ts=started_at,
+            )
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        return ToolResult(content=str(exc), is_error=True, error_type="runtime_error")
 
     tool = registry.get(tool_call.name)
     if tool is None:
         return await _fail(
             bus, run_id, tool_call,
             "runtime_error", f"unknown tool: {tool_call.name}", elapsed(),
+            batch_id=batch_id,
+            scheduler_mode=scheduler_mode,
+            queue_ms=queue_ms,
+            queued_at=queued_at,
+            started_at=started_at,
         )
 
     if tool.params_model is not None:
@@ -151,23 +190,43 @@ async def invoke_tool(
             return await _fail(
                 bus, run_id, tool_call,
                 "schema_error", str(exc), elapsed(),
+                batch_id=batch_id,
+                scheduler_mode=scheduler_mode,
+                queue_ms=queue_ms,
+                queued_at=queued_at,
+                started_at=started_at,
             )
 
     if permission_manager is not None:
         async def _emit_permission(raw: dict[str, Any]) -> None:
             await bus.publish(PermissionRequestedEvent(**raw, run_id=run_id))
 
-        # 获取工具的动态权限级别（bash 根据命令内容分级）
-        tool_permission = tool.classify_permission(runtime_params)
+        try:
+            # 并发预检已确认的权限直接复用，避免同一调用被动态分类两次
+            tool_permission = classified_permission
+            if tool_permission is None:
+                tool_permission = tool.classify_permission(runtime_params)
 
-        allowed, decision = await permission_manager.check_and_wait(
-            tool_use_id=tool_call.id,
-            tool_name=tool_call.name,
-            params=dict(tool_call.input),
-            session_id=session_id,
-            event_emitter=_emit_permission,
-            tool_permission=tool_permission,
-        )
+            allowed, decision = await permission_manager.check_and_wait(
+                tool_use_id=tool_call.id,
+                tool_name=tool_call.name,
+                params=dict(tool_call.input),
+                session_id=session_id,
+                event_emitter=_emit_permission,
+                tool_permission=tool_permission,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return await _fail(
+                bus, run_id, tool_call,
+                "runtime_error", str(exc), elapsed(),
+                batch_id=batch_id,
+                scheduler_mode=scheduler_mode,
+                queue_ms=queue_ms,
+                queued_at=queued_at,
+                started_at=started_at,
+            )
         if allowed:
             if tool_permission == ToolPermission.DANGER_FULL_ACCESS:
                 # 不可序列化的身份令牌只在权限系统放行后注入，防止模型伪造越权
@@ -197,6 +256,11 @@ async def invoke_tool(
                 "Permission denied by user. You may not execute this command. "
                 "Try an alternative approach or ask the user what to do.",
                 elapsed(),
+                batch_id=batch_id,
+                scheduler_mode=scheduler_mode,
+                queue_ms=queue_ms,
+                queued_at=queued_at,
+                started_at=started_at,
             )
 
     for attempt in range(1, _MAX_RETRIES + 2):
@@ -213,6 +277,7 @@ async def invoke_tool(
                 error_class = result.error_type or "runtime_error"
                 error_message = result.content
             else:
+                finished_at = _now()
                 await bus.publish(
                     ToolCallFinishedEvent(
                         run_id=run_id,
@@ -220,7 +285,13 @@ async def invoke_tool(
                         tool_name=tool_call.name,
                         elapsed_ms=ms,
                         output=result.content,
-                        ts=_now(),
+                        batch_id=batch_id,
+                        scheduler_mode=scheduler_mode,
+                        queue_ms=queue_ms,
+                        queued_at=queued_at,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        ts=finished_at,
                     )
                 )
                 await _publish_test_result(bus, run_id, tool_call, "passed", result.content)
@@ -243,6 +314,7 @@ async def invoke_tool(
         ms = elapsed()
 
         if error_class in _RETRYABLE and attempt <= _MAX_RETRIES:
+            failed_at = _now()
             await bus.publish(
                 ToolCallFailedEvent(
                     run_id=run_id,
@@ -252,7 +324,13 @@ async def invoke_tool(
                     error_message=error_message,
                     elapsed_ms=ms,
                     attempt=attempt,
-                    ts=_now(),
+                    batch_id=batch_id,
+                    scheduler_mode=scheduler_mode,
+                    queue_ms=queue_ms,
+                    queued_at=queued_at,
+                    started_at=started_at,
+                    finished_at=failed_at,
+                    ts=failed_at,
                 )
             )
             await asyncio.sleep(_RETRY_BASE_S * (2 ** (attempt - 1)))
@@ -262,6 +340,11 @@ async def invoke_tool(
             bus, run_id, tool_call,
             error_class, error_message, ms,
             attempt=attempt,
+            batch_id=batch_id,
+            scheduler_mode=scheduler_mode,
+            queue_ms=queue_ms,
+            queued_at=queued_at,
+            started_at=started_at,
         )
 
     # unreachable, but keeps mypy happy

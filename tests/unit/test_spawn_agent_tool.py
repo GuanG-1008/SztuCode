@@ -417,6 +417,26 @@ async def test_budget_fields_propagate_to_child(tmp_path: Path, monkeypatch: pyt
     assert captured[0].max_wall_clock_s == 30
 
 
+# 功能：验证父代理的工具并发上限会继承给子 AgentLoop
+# 设计：替换 child loop 的 run 捕获实例私有配置，覆盖多代理传播链而不依赖实际工具执行
+async def test_tool_concurrency_propagates_to_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[int] = []
+
+    async def fake_run(self: Any, context: ExecutionContext) -> None:
+        captured.append(self._tool_max_concurrency)
+        context.mark_success()
+
+    monkeypatch.setattr("sztu_code.core.subagent.tool.AgentLoop.run", fake_run)
+    tool, _, _ = _make_tool(tmp_path)
+    tool._tool_max_concurrency = 2
+
+    await tool.invoke({"description": "任务", "prompt": "干活"})
+
+    assert captured == [2]
+
+
 # 功能：嵌套 spawn 继承解析后的 child_max_steps，而非父传入的固定值
 # 设计：profile max_steps=2、父 max_steps=5，spy SpawnAgentTool.__init__ 断言嵌套传 2
 async def test_nested_spawn_inherits_resolved_max_steps(

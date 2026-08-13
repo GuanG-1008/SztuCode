@@ -65,6 +65,7 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | `SZTU_LLM_CONTEXT_WINDOW` | Provider 默认 | 正整数上下文窗口 |
 | `SZTU_LLM_CACHE_CONTROL` | `true` | OpenAI 兼容端点是否发送 cache_control 断点（system + 最后一个 tool）；端点拒收未知字段时设 `false` |
 | `SZTU_MAX_STEPS` | `20` | 单次运行最大 Agent 步数 |
+| `SZTU_TOOL_MAX_CONCURRENCY` | `4` | 同轮全部明确只读时的最大工具并发数；`1` 表示串行 |
 | `SZTU_PERMISSION_MODE` | `normal` | `normal`、`plan`、`accept_edits`、`auto` |
 | `SZTU_PERMISSION_TIMEOUT_S` | `60` | 审批超时秒数；`0` 表示不超时 |
 | `SZTU_COMPACT_THRESHOLD` | `0` | 自动压缩阈值，范围 0–1；`0` 关闭 |
@@ -97,6 +98,7 @@ wrap_up_on_max_steps = true
 grace_step_on_max_steps = true
 stuck_max_failures = 3
 stuck_max_total = 0
+tool_max_concurrency = 4  # 仅当整批工具均明确为 read_only 且无需审批时生效
 
 [budget]
 max_tokens = 0

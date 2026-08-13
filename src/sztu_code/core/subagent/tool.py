@@ -125,6 +125,7 @@ class SpawnAgentTool(BaseTool):
         grace_step_on_max_steps: bool = True,
         stuck_max_failures: int = 3,
         stuck_max_total: int = 0,
+        tool_max_concurrency: int = 4,
         max_depth: int = 2,
     ) -> None:
         self._provider = provider
@@ -145,6 +146,7 @@ class SpawnAgentTool(BaseTool):
         self._grace_step_on_max_steps = grace_step_on_max_steps
         self._stuck_max_failures = stuck_max_failures
         self._stuck_max_total = stuck_max_total
+        self._tool_max_concurrency = tool_max_concurrency
         self._max_depth = max_depth
 
     # 派生子 agent，前台时阻塞直到完成并返回结果，后台时立即返回 run_id
@@ -261,6 +263,7 @@ class SpawnAgentTool(BaseTool):
                 max_failures=self._stuck_max_failures,
                 max_total=self._stuck_max_total,
             ),
+            tool_max_concurrency=self._tool_max_concurrency,
         )
 
         await self._parent_bus.publish(
@@ -422,6 +425,7 @@ class SpawnAgentTool(BaseTool):
                 grace_step_on_max_steps=self._grace_step_on_max_steps,
                 stuck_max_failures=self._stuck_max_failures,
                 stuck_max_total=self._stuck_max_total,
+                tool_max_concurrency=self._tool_max_concurrency,
                 max_depth=self._max_depth,
             )
             if _allowed("spawn_agent"):

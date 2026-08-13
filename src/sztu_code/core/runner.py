@@ -162,6 +162,7 @@ class AgentRunner:
                 grace_step_on_max_steps=self._config.agent.grace_step_on_max_steps,
                 stuck_max_failures=self._config.agent.stuck_max_failures,
                 stuck_max_total=self._config.agent.stuck_max_total,
+                tool_max_concurrency=self._config.agent.tool_max_concurrency,
                 max_depth=self._config.workflow.max_depth,
             )
             if _ok("spawn_agent"):
@@ -325,6 +326,7 @@ class AgentRunner:
                     sliding_window_size=self._config.compaction.sliding_window_size,
                     compact_cooldown_steps=self._config.compaction.compact_cooldown_steps,
                     circuit_breaker_max_failures=self._config.compaction.circuit_breaker_max_failures,
+                    tool_max_concurrency=self._config.agent.tool_max_concurrency,
                 )
                 await loop.run(context)
             except asyncio.CancelledError:
