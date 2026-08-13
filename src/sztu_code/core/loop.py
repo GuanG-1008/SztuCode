@@ -70,7 +70,10 @@ def _can_run_read_only_batch_concurrently(
             permission = tool.classify_permission(runtime_params)
         except Exception:
             return None
-        if permission != ToolPermission.READ_ONLY:
+        if (
+            not isinstance(permission, ToolPermission)
+            or permission is not ToolPermission.READ_ONLY
+        ):
             return None
         if permission_manager is not None:
             try:

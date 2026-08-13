@@ -179,6 +179,13 @@ class _UnknownPermissionTool(_TimedTool):
         return cast(ToolPermission, "unknown")
 
 
+class _StringReadOnlyPermissionTool(_TimedTool):
+    """Simulates a malformed third-party permission classifier result."""
+
+    def classify_permission(self, params: dict[str, object]) -> ToolPermission:
+        return cast(ToolPermission, "read_only")
+
+
 class _RaisingReadTool(_TimedTool):
     # 模拟工具层异常，验证并发调度会隔离单项异常并继续收集其他结果
     async def invoke(self, params: dict[str, object]) -> ToolResult:
@@ -410,24 +417,39 @@ async def test_read_only_batch_with_limit_one_is_serial() -> None:
 
 # 功能：验证未知工具和未知权限能力都不会让批次被错误并发
 # 设计：分别混入未注册工具及返回未知权限值的第三方工具，用只读邻居的峰值并发度证明保守降级
-@pytest.mark.parametrize("unknown_kind", ["tool", "permission"])
+@pytest.mark.parametrize("unknown_kind", ["tool", "permission", "string_permission"])
 async def test_unknown_tool_or_permission_keeps_batch_serial(unknown_kind: str) -> None:
     probe = _ConcurrencyProbe()
     read_tool = _TimedTool("timed_read", ToolPermission.READ_ONLY, probe)
     unknown_tool = _UnknownPermissionTool(
         "unknown_permission", ToolPermission.READ_ONLY, probe
     )
-    middle_name = "missing" if unknown_kind == "tool" else "unknown_permission"
+    string_permission_tool = _StringReadOnlyPermissionTool(
+        "string_read_only_permission", ToolPermission.READ_ONLY, probe
+    )
+    middle_name = {
+        "tool": "missing",
+        "permission": "unknown_permission",
+        "string_permission": "string_read_only_permission",
+    }[unknown_kind]
     calls = [
         _tc("timed_read", {"label": "first", "delay": 0.01}, uid="unknown-1"),
         _tc(middle_name, {"label": "middle", "delay": 0.01}, uid="unknown-2"),
         _tc("timed_read", {"label": "last", "delay": 0.01}, uid="unknown-3"),
     ]
 
-    await _run_tool_batch(calls, [read_tool, unknown_tool], max_concurrency=3)
+    await _run_tool_batch(
+        calls,
+        [read_tool, unknown_tool, string_permission_tool],
+        max_concurrency=3,
+    )
 
     assert probe.max_active == 1
-    assert probe.started == ["first", *( ["middle"] if unknown_kind == "permission" else []), "last"]
+    assert probe.started == [
+        "first",
+        *([] if unknown_kind == "tool" else ["middle"]),
+        "last",
+    ]
 
 
 # 功能：验证可能进入审批的只读批次按原顺序串行执行
