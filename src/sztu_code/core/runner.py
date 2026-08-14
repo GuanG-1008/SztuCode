@@ -47,6 +47,10 @@ from sztu_code.core.tools.registry import ToolRegistry
 from sztu_code.core.trace.provider import TracingProvider
 from sztu_code.core.trace.writer import TraceWriter
 from sztu_code.core.workflow.tool import WorkflowRunTool
+from sztu_code.core.workspace.project_profile import (
+    detect_project_profile,
+    render_project_profile_context,
+)
 
 
 def _now() -> str:
@@ -206,8 +210,19 @@ class AgentRunner:
             notes = ""
         run_path.mkdir(parents=True, exist_ok=True)
 
+        project_root = workspace_root or Path.cwd()
+        project_profile_context = ""
+        try:
+            project_root = project_root.resolve()
+            profile = detect_project_profile(project_root)
+            project_profile_context = render_project_profile_context(profile)
+        except (OSError, ValueError) as error:
+            logging.getLogger(__name__).warning(
+                "project profile detection failed root=%s: %s", project_root, error
+            )
+
         global_ctx = load_context_file(Path("~/.sztu/context.md").expanduser())
-        project_ctx = load_context_file((workspace_root or Path.cwd()) / ".sztu/context.md")
+        project_ctx = load_context_file(project_root / ".sztu/context.md")
         memory_catalog = MemoryCatalog(
             [
                 MemoryDocument("global", global_ctx, "~/.sztu/context.md"),
@@ -242,6 +257,7 @@ class AgentRunner:
             session_notes=memory_catalog.prompt_content("session"),
             global_context=memory_catalog.prompt_content("global"),
             project_context=memory_catalog.prompt_content("project"),
+            project_profile_context=project_profile_context,
             base_system_prompt=base_prompt,
             system_prompt_override=system_prompt_override,
             max_tokens=self._config.budget.max_tokens,

@@ -340,8 +340,73 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
     assert not (tmp_path / "runs" / "run-new").exists()
 
 
-# 功能：验证有工作区的 Agent run 会获得自动生成的项目画像和仅建议的验证策略。
-# 设计：用捕获型 provider 观察真正传给模型的 system prompt，避免只测试渲染函数而漏掉 Runner 接入。
+# 功能：验证每次 run 都会在工作区根目录检测画像并把渲染结果注入 system prompt
+# 设计：替换检测与渲染函数并用捕获型 provider 观察最终 system，避免依赖真实文件结构或模型调用
+async def test_project_profile_is_injected_into_system_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    detected_roots: list[Path] = []
+
+    # 记录检测根目录并返回最小画像替身
+    def fake_detect_project_profile(root: Path) -> object:
+        detected_roots.append(root)
+        return object()
+
+    monkeypatch.setattr(
+        "sztu_code.core.runner.detect_project_profile", fake_detect_project_profile
+    )
+    monkeypatch.setattr(
+        "sztu_code.core.runner.render_project_profile_context",
+        lambda profile: "Language: Python\nRecommended unit test: uv run pytest",
+    )
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    outcome = await runner.run_and_capture("inspect project", workspace_root=workspace_root)
+
+    assert outcome.status == "success"
+    assert detected_roots == [workspace_root.resolve()]
+    assert provider.system is not None
+    assert "## Project Profile" in provider.system
+    assert "Recommended unit test: uv run pytest" in provider.system
+
+
+# 功能：验证项目画像检测遇到文件系统或数据错误时不会阻断 agent run
+# 设计：依次注入 OSError 和 ValueError，确认两种允许捕获的失败均保留正常 run 且不产生画像段
+async def test_project_profile_detection_errors_do_not_block_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    for error_type in (OSError, ValueError):
+        # 模拟检测阶段抛出可恢复的文件系统或数据异常
+        def raise_detection_error(
+            root: Path, error_type: type[OSError | ValueError] = error_type
+        ) -> object:
+            raise error_type("unreadable project metadata")
+
+        monkeypatch.setattr(
+            "sztu_code.core.runner.detect_project_profile", raise_detection_error
+        )
+        provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+        runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / error_type.__name__)
+
+        outcome = await runner.run_and_capture(
+            "inspect project",
+            run_id=f"profile-error-{error_type.__name__}",
+            workspace_root=workspace_root,
+        )
+
+        assert outcome.status == "success"
+        assert provider.system is not None
+        assert "## Project Profile" not in provider.system
+
+
+# 功能：验证真实工作区画像会进入 Agent prompt，且 package script 正文不会被注入。
+# 设计：用捕获型 provider 观察真实检测和渲染后的 system prompt，锁定推荐命令与不执行脚本正文的边界。
 async def test_workspace_project_profile_is_injected_into_agent_context(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
