@@ -1002,18 +1002,24 @@ def _add_node_package_manager(
         _add_finding(signals.package_managers, name, item_evidence)
         signals.evidence.extend(item_evidence)
         return name
-    if (name := _declared_node_package_manager(package_data)) is not None:
+    declared_manager = _declared_node_package_manager(package_data)
+    if declared_manager is not None:
         item_evidence = [
             _evidence(
                 workspace_root,
                 package_json,
-                f"packageManager field declares {name}",
+                f"packageManager field declares {declared_manager}",
                 strength=EvidenceStrength.SUPPORTING,
             )
         ]
-        _add_finding(signals.package_managers, name, item_evidence, confidence="likely")
+        _add_finding(
+            signals.package_managers,
+            declared_manager,
+            item_evidence,
+            confidence="likely",
+        )
         signals.evidence.extend(item_evidence)
-        return name
+        return declared_manager
     workspace_source = _node_workspace_source(workspace_root, component_root)
     if workspace_source is not None:
         workspace_data, workspace_files = workspace_source
@@ -1031,20 +1037,26 @@ def _add_node_package_manager(
             _add_finding(signals.package_managers, name, item_evidence)
             signals.evidence.extend(item_evidence)
             return name
-        if (name := _declared_node_package_manager(workspace_data)) is not None:
+        workspace_declared_manager = _declared_node_package_manager(workspace_data)
+        if workspace_declared_manager is not None:
             workspace_package_json = workspace_files.get("package.json")
             if workspace_package_json is not None:
                 item_evidence = [
                     _evidence(
                         workspace_root,
                         workspace_package_json,
-                        f"workspace packageManager field declares {name}",
+                        f"workspace packageManager field declares {workspace_declared_manager}",
                         strength=EvidenceStrength.SUPPORTING,
                     )
                 ]
-                _add_finding(signals.package_managers, name, item_evidence, confidence="likely")
+                _add_finding(
+                    signals.package_managers,
+                    workspace_declared_manager,
+                    item_evidence,
+                    confidence="likely",
+                )
                 signals.evidence.extend(item_evidence)
-                return name
+                return workspace_declared_manager
     _add_finding(signals.package_managers, "npm", fallback_evidence, confidence="likely")
     return "npm"
 
