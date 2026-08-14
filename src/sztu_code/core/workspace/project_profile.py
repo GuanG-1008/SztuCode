@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
+from itertools import islice
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,6 +20,7 @@ _MAX_CONTEXT_COMMANDS = 8
 _MAX_CONTEXT_CHARS = 4_000
 _IGNORED_DIRECTORY_NAMES = {
     ".git",
+    ".gradle",
     ".hg",
     ".idea",
     ".mypy_cache",
@@ -200,6 +203,11 @@ def detect_project_profile(root: Path) -> ProjectProfile:
     )
 
 
+# 将路径和命令中的控制字符清理为单行文本，避免工程文件名破坏上下文格式。
+def _context_value(value: str) -> str:
+    return "".join("'" if char == "`" else char if char.isprintable() else " " for char in value)
+
+
 # 把结构化画像压缩成适合 Agent system prompt 的说明，不复制原始清单内容。
 def render_project_profile_context(profile: ProjectProfile) -> str:
     if not profile.projects:
@@ -212,25 +220,26 @@ def render_project_profile_context(profile: ProjectProfile) -> str:
         f"Workspace layout: {'monorepo' if profile.monorepo else 'single project'}.",
     ]
     for project in profile.projects[:_MAX_CONTEXT_PROJECTS]:
-        languages = _finding_names(project.languages) or "unknown"
-        frameworks = _finding_names(project.frameworks)
-        package_managers = _finding_names(project.package_managers)
-        build_tools = _finding_names(project.build_tools)
-        summary = f"- {project.path}: languages={languages}"
+        languages = _context_value(_finding_names(project.languages) or "unknown")
+        frameworks = _context_value(_finding_names(project.frameworks))
+        package_managers = _context_value(_finding_names(project.package_managers))
+        build_tools = _context_value(_finding_names(project.build_tools))
+        project_path = _context_value(project.path)
+        summary = f"- {project_path}: languages={languages}"
         if frameworks:
             summary += f"; frameworks={frameworks}"
         if package_managers:
             summary += f"; package managers={package_managers}"
         if build_tools:
             summary += f"; build tools={build_tools}"
-        evidence_paths = ", ".join(item.path for item in project.evidence[:4])
+        evidence_paths = ", ".join(_context_value(item.path) for item in project.evidence[:4])
         if evidence_paths:
             summary += f"; evidence={evidence_paths}"
         lines.append(summary)
         for command in project.validation_plan[:_MAX_CONTEXT_COMMANDS]:
             lines.append(
-                f"  - {command.category.value}: `{command.command}` "
-                f"(run from `{command.working_directory}`; advisory)"
+                f"  - {command.category.value}: `{_context_value(command.command)}` "
+                f"(run from `{_context_value(command.working_directory)}`; advisory)"
             )
     remaining = len(profile.projects) - _MAX_CONTEXT_PROJECTS
     if remaining > 0:
@@ -249,15 +258,18 @@ def _scan_workspace(root: Path) -> _WorkspaceScan:
     scan_limited = False
     while pending:
         current, depth = pending.pop()
+        remaining_entries = _MAX_SCAN_ENTRIES - entry_count
         try:
-            entries = sorted(current.iterdir(), key=lambda item: item.name.lower())
+            with os.scandir(current) as iterator:
+                entries = list(islice(iterator, remaining_entries + 1))
         except OSError:
             continue
-        for entry in entries:
-            if entry_count >= _MAX_SCAN_ENTRIES:
-                scan_limited = True
-                pending.clear()
-                break
+        if len(entries) > remaining_entries:
+            entries.pop()
+            scan_limited = True
+            pending.clear()
+        for scanned_entry in sorted(entries, key=lambda item: item.name.lower()):
+            entry = Path(scanned_entry.path)
             entry_count += 1
             if entry.is_symlink():
                 continue
@@ -952,16 +964,46 @@ def _declared_node_package_manager(package_data: dict[str, Any]) -> str | None:
     )
 
 
-# 读取目录直属普通文件，为 Monorepo 根的锁文件和 package.json 提供受限信号。
+# 仅探测已知 Node.js 清单和锁文件，避免为继承工作区信号遍历大型父目录。
 def _directory_direct_files(directory: Path) -> dict[str, Path]:
-    try:
-        return {
-            entry.name.lower(): entry
-            for entry in directory.iterdir()
-            if entry.is_file() and not entry.is_symlink()
-        }
-    except OSError:
-        return {}
+    names = {
+        "package.json",
+        *_NODE_WORKSPACE_MARKERS,
+        *(filename for _, filename, _ in _NODE_PACKAGE_MANAGER_CANDIDATES),
+    }
+    direct_files: dict[str, Path] = {}
+    for name in names:
+        candidate = directory / name
+        try:
+            if not candidate.is_symlink() and candidate.is_file():
+                direct_files[name.lower()] = candidate
+        except OSError:
+            continue
+    return direct_files
+
+
+# 查找组件自身或祖先项目中的 Maven/Gradle wrapper，并生成相对组件目录可执行的路径。
+def _java_wrapper_executable(
+    workspace_root: Path,
+    component_root: Path,
+    wrapper_names: tuple[str, ...],
+    fallback: str,
+) -> tuple[str, Path | None]:
+    current = component_root
+    while _is_within(current, workspace_root):
+        for wrapper_name in wrapper_names:
+            candidate = current / wrapper_name
+            try:
+                if not candidate.is_symlink() and candidate.is_file():
+                    relative = os.path.relpath(candidate, component_root).replace(os.sep, "/")
+                    executable = relative if relative.startswith(".") else f"./{relative}"
+                    return executable, candidate
+            except OSError:
+                continue
+        if current == workspace_root:
+            break
+        current = current.parent
+    return fallback, None
 
 
 # 查找最近的显式 Node.js 工作区根，避免把任意父项目的包管理器错误继承给子项目。
@@ -1219,7 +1261,6 @@ def _detect_java(
                 )
             )
     _add_finding(signals.languages, "Java", evidence)
-    signals.evidence.extend(evidence)
     framework_evidence = evidence[:1]
     for marker, name in (
         ("spring-boot", "Spring Boot"),
@@ -1231,13 +1272,52 @@ def _detect_java(
     if has_maven:
         _add_finding(signals.package_managers, "Maven", evidence)
         _add_finding(signals.build_tools, "Maven", evidence)
-        executable = "./mvnw" if "mvnw" in direct_files else "mvn"
+        executable, wrapper = _java_wrapper_executable(
+            workspace_root,
+            component_root,
+            ("mvnw.cmd", "mvnw") if os.name == "nt" else ("mvnw", "mvnw.cmd"),
+            "mvn",
+        )
+        if wrapper is not None:
+            wrapper_rule = (
+                "Maven wrapper"
+                if wrapper.parent == component_root
+                else "Inherited Maven wrapper"
+            )
+            evidence.append(
+                _evidence(
+                    workspace_root,
+                    wrapper,
+                    wrapper_rule,
+                    strength=EvidenceStrength.SUPPORTING,
+                )
+            )
         _add_java_commands(executable, "maven", combined_text, relative_path, signals, evidence)
     if has_gradle:
         _add_finding(signals.package_managers, "Gradle", evidence)
         _add_finding(signals.build_tools, "Gradle", evidence)
-        executable = "./gradlew" if "gradlew" in direct_files else "gradle"
+        executable, wrapper = _java_wrapper_executable(
+            workspace_root,
+            component_root,
+            ("gradlew.bat", "gradlew") if os.name == "nt" else ("gradlew", "gradlew.bat"),
+            "gradle",
+        )
+        if wrapper is not None:
+            wrapper_rule = (
+                "Gradle wrapper"
+                if wrapper.parent == component_root
+                else "Inherited Gradle wrapper"
+            )
+            evidence.append(
+                _evidence(
+                    workspace_root,
+                    wrapper,
+                    wrapper_rule,
+                    strength=EvidenceStrength.SUPPORTING,
+                )
+            )
         _add_java_commands(executable, "gradle", combined_text, relative_path, signals, evidence)
+    signals.evidence.extend(evidence)
 
 
 # 按 Maven 或 Gradle 的已声明插件与目录生成 Java 验证建议。

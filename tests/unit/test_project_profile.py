@@ -6,8 +6,14 @@ from pathlib import Path
 
 import pytest
 
+import sztu_code.core.workspace.project_profile as project_profile
 from sztu_code.core.workspace.project_profile import (
+    DetectionEvidence,
+    ProjectComponent,
+    ProjectProfile,
+    TechnologyFinding,
     ValidationCategory,
+    ValidationCommand,
     detect_project_profile,
     render_project_profile_context,
 )
@@ -155,10 +161,11 @@ def test_detects_java_maven_profile_and_validation_layers(tmp_path: Path) -> Non
     assert "./mvnw package" in _commands(project, ValidationCategory.BUILD)
 
 
-# 功能：识别 Gradle 多模块项目，并将单个子模块标注为 Monorepo 内的独立 Java 项目。
-# 设计：使用 settings.gradle、Java 插件和真实 .java 源码组成组合信号，断言父聚合配置不会让子模块命令丢失路径归属。
+# 功能：识别 Gradle 多模块项目，并让子模块安全继承根目录 wrapper。
+# 设计：使用 settings.gradle、根 gradlew、Java 插件和真实 .java 源码组成组合信号，断言命令既保留子项目路径归属又不回退到全局 Gradle。
 def test_detects_gradle_multi_module_java_project(tmp_path: Path) -> None:
     (tmp_path / "settings.gradle").write_text("include 'service'\n", encoding="utf-8")
+    (tmp_path / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
     (tmp_path / "service" / "src" / "main" / "java").mkdir(parents=True)
     (tmp_path / "service" / "build.gradle").write_text(
         "plugins { id 'java' }\n",
@@ -175,8 +182,27 @@ def test_detects_gradle_multi_module_java_project(tmp_path: Path) -> None:
     assert profile.monorepo is True
     assert _names(project.languages) == {"Java"}
     assert "Gradle" in _names(project.build_tools)
-    assert "gradle test" in _commands(project, ValidationCategory.UNIT_TEST)
+    assert "../gradlew test" in _commands(project, ValidationCategory.UNIT_TEST)
     assert all(command.working_directory == "service" for command in project.validation_plan)
+    assert any(item.path == "gradlew" for item in project.evidence)
+
+
+# 功能：为 Maven 子项目继承最近父项目 wrapper，同时保留子项目命令归属。
+# 设计：在根目录只放置 wrapper、在模块放置 pom 和 Java 源码，覆盖未复制 wrapper 时的真实 Reactor 项目布局。
+def test_inherits_parent_maven_wrapper_for_java_subproject(tmp_path: Path) -> None:
+    (tmp_path / "mvnw.cmd").write_text("@echo off\n", encoding="utf-8")
+    (tmp_path / "modules" / "api" / "src" / "main" / "java").mkdir(parents=True)
+    (tmp_path / "modules" / "api" / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
+    (tmp_path / "modules" / "api" / "src" / "main" / "java" / "App.java").write_text(
+        "class App {}\n", encoding="utf-8"
+    )
+
+    profile = detect_project_profile(tmp_path)
+    project = _project_at(profile, "modules/api")
+
+    assert "../../mvnw.cmd test" in _commands(project, ValidationCategory.UNIT_TEST)
+    assert all(command.working_directory == "modules/api" for command in project.validation_plan)
+    assert any(item.path == "mvnw.cmd" for item in project.evidence)
 
 
 # 功能：识别 C 与 C++ 的 CMake 项目、依赖管理器和分层验证策略。
@@ -281,6 +307,46 @@ build-backend = "setuptools.build_meta"
     assert {project.path for project in profile.projects} >= {"apps/web", "services/api"}
 
 
+# 功能：在超大目录中于全局扫描额度耗尽后停止读取目录项。
+# 设计：用追踪 scandir 迭代器统计实际拉取次数，并把额度设得很小，直接防止先完整枚举再检查上限的回归。
+def test_bounds_directory_enumeration_before_sorting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for index in range(12):
+        (tmp_path / f"unrelated-{index:02d}.txt").write_text("x\n", encoding="utf-8")
+    original_scandir = project_profile.os.scandir
+    entry_reads = 0
+
+    class TrackingScandir:
+        def __init__(self, path: Path) -> None:
+            self.iterator = original_scandir(path)
+
+        def __enter__(self) -> TrackingScandir:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self.iterator.close()
+
+        def __iter__(self) -> TrackingScandir:
+            return self
+
+        def __next__(self) -> object:
+            nonlocal entry_reads
+            entry_reads += 1
+            return next(self.iterator)
+
+    def tracking_scandir(path: Path) -> TrackingScandir:
+        return TrackingScandir(path)
+
+    monkeypatch.setattr(project_profile, "_MAX_SCAN_ENTRIES", 3)
+    monkeypatch.setattr(project_profile.os, "scandir", tracking_scandir)
+
+    profile = detect_project_profile(tmp_path)
+
+    assert profile.scan_limited is True
+    assert entry_reads == 4
+
+
 # 功能：忽略构建产物和依赖目录中的伪清单，并确保检测不会执行推荐命令。
 # 设计：将 subprocess.run 替换为立即失败的桩，同时放置真实 Node 清单与被忽略目录，检测成功即证明只做离线读取。
 def test_ignores_generated_directories_and_never_executes_commands(
@@ -296,6 +362,8 @@ def test_ignores_generated_directories_and_never_executes_commands(
     )
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "CMakeLists.txt").write_text("project(ignored)\n", encoding="utf-8")
+    (tmp_path / ".gradle").mkdir()
+    (tmp_path / ".gradle" / "pom.xml").write_text("<project/>\n", encoding="utf-8")
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "pom.xml").write_text("<project/>\n", encoding="utf-8")
 
@@ -325,3 +393,31 @@ def test_renders_compact_advisory_project_context(tmp_path: Path) -> None:
     assert "advisory only" in context
     assert "dangerous-command --all" not in context
     assert len(context) < 4_000
+
+
+# 功能：清理工程路径和命令中的换行与反引号，保持画像上下文的单行安全格式。
+# 设计：直接构造带控制字符的结构化画像，断言渲染结果不携带原始分隔符而仍保留可读文本。
+def test_context_sanitizes_untrusted_project_values() -> None:
+    profile = ProjectProfile(
+        projects=[
+            ProjectComponent(
+                path="apps/bad`path\nnext",
+                languages=[TechnologyFinding(name="Node\n.js")],
+                evidence=[DetectionEvidence(path="package`\njson", rule="manifest")],
+                validation_plan=[
+                    ValidationCommand(
+                        category=ValidationCategory.BUILD,
+                        command="npm run build`\n--unsafe",
+                        working_directory="apps/bad\npath",
+                        reason="script",
+                    )
+                ],
+            )
+        ]
+    )
+
+    context = render_project_profile_context(profile)
+
+    assert "bad`path" not in context
+    assert "bad'path next" in context
+    assert "build' --unsafe" in context
