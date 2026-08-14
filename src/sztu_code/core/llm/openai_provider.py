@@ -72,13 +72,17 @@ def _anth_to_openai_messages(
     system: str | None = None,
     *,
     text_tool_history: bool = False,
+    cache_control: bool = False,
 ) -> list[dict[str, object]]:
     openai_msgs: list[dict[str, object]] = []
     tool_names: dict[str, str] = {}
 
-    # system prompt 作为第一条消息
+    # system prompt 作为第一条消息；启用时打 cache 断点标记稳定前缀
     effective_system = system or _SYSTEM_PROMPT
-    openai_msgs.append({"role": "system", "content": effective_system})
+    system_msg: dict[str, object] = {"role": "system", "content": effective_system}
+    if cache_control:
+        system_msg["cache_control"] = {"type": "ephemeral"}
+    openai_msgs.append(system_msg)
 
     for msg in messages:
         role = msg.get("role", "")
@@ -89,11 +93,27 @@ def _anth_to_openai_messages(
                 openai_msgs.append({"role": "user", "content": content})
             elif isinstance(content, list):
                 text_parts: list[str] = []
+                image_parts: list[dict[str, object]] = []
                 tool_msgs: list[dict[str, object]] = []
                 for block in content:
                     btype = block.get("type", "")
                     if btype == "text":
                         text_parts.append(str(block.get("text", "")))
+                    elif btype == "image":
+                        # Anthropic image block → OpenAI image_url（data URL）
+                        source = block.get("source", {})
+                        if isinstance(source, dict):
+                            media_type = str(source.get("media_type", ""))
+                            data = str(source.get("data", ""))
+                            if media_type and data:
+                                image_parts.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{media_type};base64,{data}"
+                                        },
+                                    }
+                                )
                     elif btype == "tool_result":
                         tc_id = str(block.get("tool_use_id", ""))
                         tc_content = str(block.get("content", ""))
@@ -110,7 +130,16 @@ def _anth_to_openai_messages(
                                     "content": tc_content,
                                 }
                             )
-                if text_parts:
+                if image_parts:
+                    # OpenAI 多模态要求 content 为数组：text + image_url
+                    user_content: list[dict[str, object]] = []
+                    if text_parts:
+                        user_content.append(
+                            {"type": "text", "text": "\n".join(text_parts)}
+                        )
+                    user_content.extend(image_parts)
+                    openai_msgs.append({"role": "user", "content": user_content})
+                elif text_parts:
                     openai_msgs.append({"role": "user", "content": "\n".join(text_parts)})
                 openai_msgs.extend(tool_msgs)
 
@@ -167,6 +196,8 @@ def _anth_to_openai_messages(
 # 将 Anthropic 格式的 tool_schemas 转换为 OpenAI tools 格式
 def _anth_to_openai_tools(
     tool_schemas: list[dict[str, object]],
+    *,
+    cache_control: bool = False,
 ) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = []
     for ts in tool_schemas:
@@ -180,6 +211,11 @@ def _anth_to_openai_tools(
                 },
             }
         )
+    # 在最后一个 tool 上打 cache 断点，使工具定义作为稳定前缀被缓存
+    if cache_control and tools:
+        last = dict(tools[-1])
+        last["cache_control"] = {"type": "ephemeral"}
+        tools = tools[:-1] + [last]
     return tools
 
 
@@ -214,7 +250,20 @@ def _keyless_http_client() -> httpx.AsyncClient:
 
 class OpenAIProvider:
     # 初始化 OpenAI 客户端；client 可在测试时注入以跳过 API key 检查
-    def __init__(self, model: str, client: Any = None, *, context_window: int = 0) -> None:
+    def __init__(
+        self,
+        model: str,
+        client: Any = None,
+        *,
+        context_window: int = 0,
+        max_output_tokens: int = 8192,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        reasoning_effort: str = "",
+        timeout_s: float = 120.0,
+        max_retries: int = 2,
+        cache_control: bool = True,
+    ) -> None:
         base_url = os.environ.get("OPENAI_BASE_URL")
         is_campus_deepseek = bool(
             model == "deepseek-v4-pro"
@@ -225,11 +274,14 @@ class OpenAIProvider:
             api_key = os.environ.get("OPENAI_API_KEY") or ""
             if not api_key and not base_url:
                 raise SystemExit("OPENAI_API_KEY not set (或设置 OPENAI_BASE_URL 使用免 key 端点)")
-            client_kwargs: dict[str, Any] = {"api_key": api_key or "keyless-placeholder"}
+            client_kwargs: dict[str, Any] = {
+                "api_key": api_key or "keyless-placeholder",
+                "timeout": timeout_s,
+                "max_retries": max_retries,
+            }
             if base_url:
                 client_kwargs["base_url"] = base_url
-            if is_campus_deepseek:
-                client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
+            client_kwargs["http_client"] = httpx.AsyncClient(trust_env=False)
             if not api_key:
                 # 免 key 端点：SDK 需要非空 key，但用自定义 transport 剥掉 Authorization 头
                 client_kwargs["http_client"] = _keyless_http_client()
@@ -239,6 +291,11 @@ class OpenAIProvider:
         self._model = model
         self._text_tool_history = is_campus_deepseek
         self._context_window_override = context_window
+        self._max_output_tokens = max_output_tokens
+        self._temperature = temperature
+        self._top_p = top_p
+        self._reasoning_effort = reasoning_effort
+        self._cache_control = cache_control
 
     # 流式调用 OpenAI 兼容 API，逐 token 发布事件并返回 LlmResponse；网络中断时自动重试
     async def chat(
@@ -259,8 +316,12 @@ class OpenAIProvider:
             messages,
             system=system,
             text_tool_history=self._text_tool_history,
+            cache_control=self._cache_control,
         )
-        tools = _anth_to_openai_tools(tool_schemas) if tool_schemas else None
+        tools = (
+            _anth_to_openai_tools(tool_schemas, cache_control=self._cache_control)
+            if tool_schemas else None
+        )
 
         text_parts: list[str] = []
         thinking_parts: list[str] = []
@@ -280,7 +341,15 @@ class OpenAIProvider:
                     "model": self._model,
                     "messages": openai_msgs,
                     "stream": True,
+                    "stream_options": {"include_usage": True},
+                    "max_completion_tokens": self._max_output_tokens,
                 }
+                if self._temperature is not None:
+                    kwargs["temperature"] = self._temperature
+                if self._top_p is not None:
+                    kwargs["top_p"] = self._top_p
+                if self._reasoning_effort:
+                    kwargs["reasoning_effort"] = self._reasoning_effort
                 if tools:
                     kwargs["tools"] = tools
 
@@ -383,10 +452,17 @@ class OpenAIProvider:
             if prompt_details is not None:
                 cache_read = getattr(prompt_details, "cached_tokens", 0) or 0
 
+        context_window = _context_window(self._model, self._context_window_override)
         context_pct = (
-            input_tokens / _context_window(self._model, self._context_window_override)
+            input_tokens / context_window
             if input_tokens > 0
             else 0.0
+        )
+        from sztu_code.core.compact.context_usage import estimate_context_usage
+        breakdown = estimate_context_usage(
+            messages=messages, tool_schemas=tools or [], system=system or _SYSTEM_PROMPT,
+            actual_input_tokens=input_tokens, context_window=context_window,
+            reserved_output_tokens=self._max_output_tokens,
         )
 
         await bus.publish(
@@ -398,6 +474,7 @@ class OpenAIProvider:
                 cache_creation_input_tokens=0,
                 context_pct=context_pct,
                 model=self._model,
+                **breakdown.__dict__,
                 ts=_now(),
             )
         )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,9 @@ class _Runner:
         assert run_id is not None
         assert session is not None
         assert store is not None
+        self.goal = goal
+        self.system_prompt_override = system_prompt_override
+        self.tool_whitelist = tool_whitelist
         self.workspace_root = workspace_root
         store.append_messages(
             session.id,
@@ -69,7 +74,7 @@ manual compact
         )
 
 
-# 功能：验证 create 会创建 active session、写入 meta 并发布 session.created 事件
+# 功能：验证 create 会创建等待输入的 session、写入 meta 并发布 session.created 事件
 # 设计：用真实 SessionStore + EventBus 收集事件，覆盖 manager 与 store/bus 的协作边界
 async def test_create_session_writes_meta_and_event(tmp_path: Path) -> None:
     events: list[object] = []
@@ -84,7 +89,7 @@ async def test_create_session_writes_meta_and_event(tmp_path: Path) -> None:
 
     session = await manager.create("chat", "title")
 
-    assert session.status == "active"
+    assert session.status == "waiting_for_input"
     assert store.read_meta(session.id).title == "title"
     assert [e.type for e in events] == ["session.created"]  # type: ignore[attr-defined]
 
@@ -107,6 +112,76 @@ async def test_send_message_chat_enters_waiting_and_writes_thread(tmp_path: Path
     assert messages[1]["role"] == "assistant"
     history = await manager.get_history(session.id)
     assert history[0]["run_id"] == run_id
+
+
+# 功能：验证 run 执行期间 session 状态为 active，结束后回落为 waiting_for_input
+# 设计：用带信号量的 runner 把 run 暂停在中途，在暂停点断言内存与磁盘状态均为 active，放行后断言回落
+async def test_send_message_sets_active_during_run_then_waiting(tmp_path: Path) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class _PausingRunner:
+        async def run_and_capture(self, goal: str, **kwargs: object) -> RunOutcome:
+            entered.set()
+            await release.wait()
+            return RunOutcome(status="success", result="done", reason=None)
+
+    store = SessionStore(tmp_path)
+    manager = SessionManager(store, lambda: _PausingRunner(), EventBus())  # type: ignore[arg-type]
+    session = await manager.create("chat")
+
+    task = asyncio.create_task(manager.send_message(session.id, "hello"))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    assert session.status == "active"
+    assert store.read_meta(session.id).status == "active"
+
+    release.set()
+    await asyncio.wait_for(task, timeout=5)
+    assert session.status == "waiting_for_input"
+
+
+# 功能：验证重启后把磁盘遗留的 active 状态归一化为 waiting_for_input
+# 设计：手工把 meta 改为 active 模拟运行中崩溃，重启 manager 后断言状态回落且已持久化
+async def test_restore_normalizes_stale_active(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    first_manager = SessionManager(store, lambda: _Runner(), EventBus())  # type: ignore[arg-type]
+    session = await first_manager.create("chat", "crash")
+
+    meta_path = store.session_dir(session.id) / "meta.json"
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    data["status"] = "active"
+    meta_path.write_text(json.dumps(data), encoding="utf-8")
+
+    restarted = SessionManager(store, lambda: _Runner(), EventBus())  # type: ignore[arg-type]
+    listed, _ = await restarted.list_sessions(include_archived=True)
+    restored = next(item for item in listed if item.id == session.id)
+    assert restored.status == "waiting_for_input"
+    assert store.read_meta(session.id).status == "waiting_for_input"
+
+
+# 功能：验证 send_message 带 images 时把用户消息存为多模态内容块（文本 + 图片 base64）
+# 设计：传一条图片内容块断言 thread 首条消息为 [text, image] 结构，确保回放/重连时模型仍能看到图片
+async def test_send_message_stores_image_content_blocks(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    manager = SessionManager(store, lambda: _Runner(), EventBus())  # type: ignore[arg-type]
+    session = await manager.create("chat")
+
+    run_id = await manager.send_message(
+        session.id,
+        "describe this image",
+        images=[{"media_type": "image/png", "data": "aGVsbG8="}],
+    )
+
+    assert run_id
+    messages = store.read_messages(session.id)
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == [
+        {"type": "text", "text": "describe this image"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="},
+        },
+    ]
 
 
 # 功能：验证切换会话读取历史时会从完成事件恢复尚未写入 meta 的运行统计
@@ -271,3 +346,34 @@ async def test_session_workspace_is_persisted_and_passed_to_runner(tmp_path: Pat
 
     assert runner.workspace_root == workspace
     assert store.read_meta(session.id).workspace_id == "ws-project"
+
+
+# 功能：显式技能调用应保留基础系统提示，并且不把完整技能正文再次拼成用户目标
+# 设计：工作区放置带参数的技能，以可观察 runner 分别断言 goal、system prompt 与工具白名单。
+async def test_skill_invocation_keeps_base_prompt_without_goal_duplication(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    skill_dir = workspace / ".sztu" / "skills" / "inspect"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: inspect\ndescription: Inspect a path\nallowed_tools:\n  - read_file\n"
+        "---\nInspect $ARGUMENTS carefully.\n",
+        encoding="utf-8",
+    )
+    runner = _Runner()
+    store = SessionStore(tmp_path / "sessions")
+    manager = SessionManager(
+        store,
+        lambda: runner,  # type: ignore[arg-type]
+        EventBus(),
+        workspace_resolver=lambda workspace_id: workspace,
+    )
+    session = await manager.create("chat", workspace_id="ws-project")
+
+    await manager.send_message(session.id, "/inspect src/app.py")
+
+    assert runner.goal == "src/app.py"
+    assert runner.system_prompt_override is not None
+    assert "## Active skill: inspect" in runner.system_prompt_override
+    assert "Inspect src/app.py carefully." in runner.system_prompt_override
+    assert "# Environment" in runner.system_prompt_override
+    assert runner.tool_whitelist == ["read_file"]

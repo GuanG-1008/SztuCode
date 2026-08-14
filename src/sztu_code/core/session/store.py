@@ -14,10 +14,61 @@ logger = logging.getLogger(__name__)
 
 MessageContent = str | list[dict[str, Any]]
 
+_CONTINUATION_PREFIX = (
+    "This session is being continued from a previous conversation that ran out of "
+    "context. The summary below covers the earlier portion of the conversation."
+)
+_CONTINUATION_ACK = "Understood, I'll continue from this summary."
+
 
 # 返回当前 UTC 时间的 ISO 8601 字符串
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(block.get("text", ""))
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ).strip()
+
+
+def _is_internal_compaction_message(message: dict[str, Any]) -> bool:
+    text = _message_text(message.get("content"))
+    if message.get("role") == "user":
+        return text.startswith(_CONTINUATION_PREFIX) and "\n\nSummary:\n" in text
+    if message.get("role") == "assistant":
+        return text == _CONTINUATION_ACK
+    return False
+
+
+def _history_signature(message: dict[str, Any]) -> str:
+    return json.dumps(
+        {"role": message.get("role"), "content": message.get("content")},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _merge_history(
+    existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    if not existing:
+        return list(incoming)
+    if not incoming:
+        return existing
+    existing_signatures = [_history_signature(message) for message in existing]
+    incoming_signatures = [_history_signature(message) for message in incoming]
+    for size in range(min(len(existing), len(incoming)), 0, -1):
+        if existing_signatures[-size:] == incoming_signatures[:size]:
+            return [*existing, *incoming[size:]]
+    return [*existing, *incoming]
 
 
 class SessionStore:
@@ -78,6 +129,7 @@ class SessionStore:
                 session.run_stats[run_id] = RunStats(
                     input_tokens=max(0, int(event.get("total_input_tokens", 0))),
                     output_tokens=max(0, int(event.get("total_output_tokens", 0))),
+                    cache_read_input_tokens=max(0, int(event.get("cache_read_input_tokens", 0))),
                     elapsed_s=max(0.0, float(event.get("elapsed_s", 0.0))),
                 )
                 changed = True
@@ -143,9 +195,9 @@ class SessionStore:
                 run_id=run_id,
             )
 
-    # 读取完整 thread 并返回可直接传给 Anthropic 的 messages
-    def read_messages(self, sid: str, *, include_run_id: bool = False) -> list[dict[str, Any]]:
-        path = self.session_dir(sid) / "thread.jsonl"
+    def _read_thread_file(
+        self, sid: str, path: Path, *, include_run_id: bool
+    ) -> list[dict[str, Any]]:
         if not path.exists():
             return []
 
@@ -175,6 +227,12 @@ class SessionStore:
             if include_run_id and row.get("run_id") is not None:
                 message["run_id"] = str(row["run_id"])
             messages.append(message)
+        return messages
+
+    # 读取当前模型上下文，并返回可直接传给 Anthropic 的 messages。
+    def read_messages(self, sid: str, *, include_run_id: bool = False) -> list[dict[str, Any]]:
+        path = self.session_dir(sid) / "thread.jsonl"
+        messages = self._read_thread_file(sid, path, include_run_id=include_run_id)
 
         messages = self._trim_orphan_tool_use(messages)
         from sztu_code.core.compact.budget import truncate_tool_results
@@ -185,7 +243,29 @@ class SessionStore:
         )
 
     def read_history(self, sid: str) -> list[dict[str, Any]]:
-        return self.read_messages(sid, include_run_id=True)
+        session_dir = self.session_dir(sid)
+        current = session_dir / "thread.jsonl"
+        archives = sorted(
+            session_dir.glob("thread_*.jsonl.bak"),
+            key=lambda path: (path.stat().st_mtime_ns, path.name),
+        )
+        sources = [*archives, *([current] if current.exists() else [])]
+        history: list[dict[str, Any]] = []
+        for source in sources:
+            chunk = self._read_thread_file(sid, source, include_run_id=True)
+            visible = [
+                message for message in chunk
+                if not _is_internal_compaction_message(message)
+            ]
+            history = _merge_history(history, visible)
+
+        history = self._trim_orphan_tool_use(history)
+        from sztu_code.core.compact.budget import truncate_tool_results
+        return truncate_tool_results(
+            history,
+            limit=self._tool_result_limit,
+            keep=self._tool_result_keep,
+        )
 
     # 裁掉尾部未配对 tool_use 以及其后的消息，避免 Anthropic messages.invalid
     def _trim_orphan_tool_use(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

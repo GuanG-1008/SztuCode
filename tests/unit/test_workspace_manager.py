@@ -175,6 +175,47 @@ def test_workspace_diff_reads_staged_and_untracked_files(tmp_path: Path) -> None
     assert "print('new')" in untracked_diff
 
 
+def test_workspace_changes_and_diff_ignore_cache_files(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    manager = WorkspaceManager(tmp_path / "workspaces.json")
+    workspace = manager.open(str(root))
+    import subprocess
+
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+    source = root / "src" / "cache.py"
+    cached = root / ".pytest_cache" / "state.json"
+    bytecode = root / "src" / "__pycache__" / "cache.cpython-313.pyc"
+    source.parent.mkdir()
+    cached.parent.mkdir()
+    bytecode.parent.mkdir()
+    source.write_text("VALUE = 'before'\n", encoding="utf-8")
+    cached.write_text('{"state": "before"}\n', encoding="utf-8")
+    bytecode.write_bytes(b"before")
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+        check=True,
+        capture_output=True,
+    )
+
+    source.write_text("VALUE = 'after'\n", encoding="utf-8")
+    cached.write_text('{"state": "after"}\n', encoding="utf-8")
+    bytecode.write_bytes(b"after")
+    (root / ".mypy_cache").mkdir()
+    (root / ".mypy_cache" / "new.json").write_text("{}\n", encoding="utf-8")
+
+    assert [change["path"] for change in manager.list_changes(workspace.id)] == ["src/cache.py"]
+    assert manager.status(workspace.id)["changed_file_count"] == 1
+    assert "VALUE = 'after'" in manager.diff(workspace.id)
+    assert "pytest_cache" not in manager.diff(workspace.id)
+    assert manager.diff(workspace.id, ".pytest_cache/state.json") == ""
+    assert manager.diff_numstat(
+        workspace.id,
+        ["src/cache.py", ".pytest_cache/state.json", "src/__pycache__/cache.cpython-313.pyc"],
+    ) == {"src/cache.py": (1, 1)}
+
+
 def test_git_output_uses_replacement_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 

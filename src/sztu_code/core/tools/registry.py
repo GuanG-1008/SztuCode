@@ -28,10 +28,12 @@ class ToolRegistry:
         self._tools: dict[str, BaseTool] = {}
         # 动态别名索引: alias → canonical_name
         self._aliases: dict[str, str] = {}
+        self._schema_cache: list[dict[str, object]] | None = None
 
     # 注册工具；同名覆盖，同时注册别名
     def register(self, tool: BaseTool) -> None:
         self._tools[tool.name] = tool
+        self._schema_cache = None
         # 注册工具类声明的别名
         for alias in tool.aliases:
             self._aliases[alias] = tool.name
@@ -83,33 +85,35 @@ class ToolRegistry:
         enriched["description"] = title
         return enriched
 
-    # 返回所有工具的 Anthropic 格式 schema，并要求模型提供时间线标题
+    # 返回工具 schema 的独立深拷贝，内部缓存仅由注册表持有
     def tool_schemas(self) -> list[dict[str, object]]:
-        schemas: list[dict[str, object]] = []
-        for tool in self._tools.values():
-            input_schema = deepcopy(tool.input_schema)
-            raw_properties = input_schema.get("properties", {})
-            properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
-            properties["description"] = {
-                "type": "string",
-                "description": "用简短中文说明本次调用的具体目的，作为执行时间线标题。",
-            }
-            input_schema["properties"] = properties
-            raw_required = input_schema.get("required", [])
-            required = (
-                [str(item) for item in raw_required]
-                if isinstance(raw_required, list)
-                else []
-            )
-            if "description" not in required:
-                required.append("description")
-            input_schema["required"] = required
-            schemas.append({
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": input_schema,
-            })
-        return schemas
+        if self._schema_cache is None:
+            schemas: list[dict[str, object]] = []
+            for tool in self._tools.values():
+                input_schema = deepcopy(tool.input_schema)
+                raw_properties = input_schema.get("properties", {})
+                properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
+                properties["description"] = {
+                    "type": "string",
+                    "description": "用简短中文说明本次调用的具体目的，作为执行时间线标题。",
+                }
+                input_schema["properties"] = properties
+                raw_required = input_schema.get("required", [])
+                required = (
+                    [str(item) for item in raw_required]
+                    if isinstance(raw_required, list)
+                    else []
+                )
+                if "description" not in required:
+                    required.append("description")
+                input_schema["required"] = required
+                schemas.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": input_schema,
+                })
+            self._schema_cache = schemas
+        return deepcopy(self._schema_cache)
 
     # 返回所有已注册工具的迭代器
     def __iter__(self) -> Iterator[BaseTool]:

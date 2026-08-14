@@ -7,19 +7,22 @@ import json
 import logging
 import os
 import signal
+import statistics
 import time
 import uuid
 from datetime import UTC
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, cast
 
+import httpx
 from pydantic import BaseModel
 
 import sztu_code
 from sztu_code.core.bus.commands import (
     AgentRunCommand,
     AgentRunResult,
+    ApiFormat,
     CcswitchProviderSummary,
     ChangeDiffCommand,
     ChangeDiffResult,
@@ -36,6 +39,10 @@ from sztu_code.core.bus.commands import (
     FileReadResult,
     FileSearchCommand,
     FileSearchResult,
+    MarketplacePluginSummary,
+    MarketplaceSummary,
+    ModelBenchmarkCommand,
+    ModelBenchmarkResult,
     ModelProfileDeleteCommand,
     ModelProfileDeleteResult,
     ModelProfileListCommand,
@@ -45,10 +52,31 @@ from sztu_code.core.bus.commands import (
     ModelProfileSelectCommand,
     ModelProfileSelectResult,
     ModelProfileSummary,
+    ModelTestCommand,
+    ModelTestResult,
     PermissionRespondCommand,
     PermissionRespondResult,
     PermissionSetModeCommand,
     PermissionSetModeResult,
+    PluginCatalogCommand,
+    PluginCatalogInstallCommand,
+    PluginCatalogInstallResult,
+    PluginCatalogResult,
+    PluginInstallCommand,
+    PluginInstallResult,
+    PluginListCommand,
+    PluginListResult,
+    PluginMarketplaceAddCommand,
+    PluginMarketplaceAddResult,
+    PluginMarketplaceRefreshCommand,
+    PluginMarketplaceRefreshResult,
+    PluginMarketplaceRemoveCommand,
+    PluginMarketplaceRemoveResult,
+    PluginSetEnabledCommand,
+    PluginSetEnabledResult,
+    PluginSummary,
+    PluginUninstallCommand,
+    PluginUninstallResult,
     PongResult,
     ProviderCcswitchApplyCommand,
     ProviderCcswitchApplyResult,
@@ -56,6 +84,7 @@ from sztu_code.core.bus.commands import (
     ProviderCcswitchListResult,
     ProviderStatusCommand,
     ProviderStatusResult,
+    ReasoningEffort,
     RunCancelCommand,
     RunCancelResult,
     RunGetCommand,
@@ -90,6 +119,13 @@ from sztu_code.core.bus.commands import (
     SettingsSnapshot,
     SettingsUpdateCommand,
     SettingsUpdateResult,
+    SkillInstallCommand,
+    SkillInstallResult,
+    SkillListCommand,
+    SkillListResult,
+    SkillSetEnabledCommand,
+    SkillSetEnabledResult,
+    SkillSummary,
     WorkspaceArchiveCommand,
     WorkspaceArchiveResult,
     WorkspaceDeleteCommand,
@@ -116,6 +152,8 @@ from sztu_code.core.config import (
     SztuConfig,
     get_config,
     load_model_profiles,
+    normalize_api_format,
+    provider_for_api_format,
     save_client_settings,
 )
 from sztu_code.core.events.bus import EventBus
@@ -126,12 +164,13 @@ from sztu_code.core.mcp.server import McpServerManager
 from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.permissions.policy import PermissionMode
 from sztu_code.core.permissions.storage import load_policy_file
+from sztu_code.core.plugins import Marketplace, MarketplaceManager, MarketplacePlugin
 from sztu_code.core.runner import AgentRunner
 from sztu_code.core.runs import events_file, new_run_id
 from sztu_code.core.session import SessionManager, SessionStore
 from sztu_code.core.session.manager import SESSION_BUSY
 from sztu_code.core.session.model import Session
-from sztu_code.core.skills.loader import SkillLoader
+from sztu_code.core.skills.loader import Plugin, Skill, SkillLoader
 from sztu_code.core.trace.record import TraceRecord
 from sztu_code.core.trace.writer import TraceWriter
 from sztu_code.core.transport.ipc_broadcaster import IpcEventBroadcaster
@@ -193,6 +232,7 @@ class CoreApp:
         self._running_runs: set[asyncio.Task[Any]] = set()
         self._active_run_tasks: dict[str, asyncio.Task[str]] = {}
         self._run_status: dict[str, str] = {}
+        self._client_message_runs: dict[tuple[str, str], str] = {}
         self._active_session_runs: dict[str, asyncio.Task[str]] = {}
         self._sessions: SessionManager | None = None
         self._permission_manager: PermissionManager | None = None
@@ -260,6 +300,7 @@ class CoreApp:
             server_version=sztu_code.__version__,
             uptime_ms=int((time.monotonic() - self._start_time) * 1000),
             received_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            capabilities=["plugin.lifecycle.v1", "plugin.marketplace.v1"],
         )
 
     # 将 EventBus 事件写入 trace（作为 EventBus 订阅者）
@@ -565,14 +606,27 @@ class CoreApp:
     async def _session_send_handler(self, params: dict[str, Any]) -> SessionSendMessageResult:
         assert self._sessions is not None
         cmd = SessionSendMessageCommand.model_validate(params)
+        if cmd.client_message_id:
+            existing_run_id = self._client_message_runs.get(
+                (cmd.session_id, cmd.client_message_id)
+            )
+            if existing_run_id is not None:
+                return SessionSendMessageResult(run_id=existing_run_id)
         active_run = self._active_session_runs.get(cmd.session_id)
         if active_run is not None and not active_run.done():
             raise HandlerError(SESSION_BUSY, "session busy")
         await self._sessions.get_history(cmd.session_id)
 
         run_id = new_run_id()
+        if cmd.client_message_id:
+            self._client_message_runs[(cmd.session_id, cmd.client_message_id)] = run_id
         run_task = asyncio.create_task(
-            self._sessions.send_message(cmd.session_id, cmd.content, run_id=run_id)
+            self._sessions.send_message(
+                cmd.session_id,
+                cmd.content,
+                run_id=run_id,
+                images=[image.model_dump() for image in cmd.images],
+            )
         )
         self._active_session_runs[cmd.session_id] = run_task
         self._track_run(run_id, run_task)
@@ -658,10 +712,19 @@ class CoreApp:
         assert self._permission_manager is not None
         return SettingsSnapshot(
             provider=self._config.llm.provider,  # type: ignore[arg-type]
+            api_format=self._config.llm.api_format,  # type: ignore[arg-type]
             model=self._config.llm.default_model,
             router=self._config.llm.router,
             permission_mode=self._permission_manager.get_mode().value,
             base_url=self._config.llm.base_url,
+            context_window=self._config.llm.context_window,
+            max_output_tokens=self._config.llm.max_output_tokens,
+            temperature=self._config.llm.temperature,
+            top_p=self._config.llm.top_p,
+            reasoning_effort=self._config.llm.reasoning_effort,  # type: ignore[arg-type]
+            timeout_s=self._config.llm.timeout_s,
+            max_retries=self._config.llm.max_retries,
+            cache_control=self._config.llm.cache_control,
         )
 
     def _model_profile_summaries(
@@ -673,6 +736,10 @@ class CoreApp:
                 name=str(item.get("name", "")),
                 vendor=str(item.get("vendor", "")),
                 provider=item.get("provider", "anthropic"),
+                api_format=cast(
+                    ApiFormat,
+                    normalize_api_format(item.get("api_format"), item.get("provider")),
+                ),
                 model=str(item.get("model", "")),
                 base_url=str(item.get("base_url", "")),
                 has_api_key=bool(
@@ -682,6 +749,14 @@ class CoreApp:
                 ),
                 is_current=str(item.get("id", "")) == active_id,
                 builtin=bool(item.get("builtin")),
+                context_window=int(item.get("context_window", 0) or 0),
+                max_output_tokens=int(item.get("max_output_tokens", 8192) or 8192),
+                temperature=item.get("temperature"),
+                top_p=item.get("top_p"),
+                reasoning_effort=cast(ReasoningEffort, str(item.get("reasoning_effort", ""))),
+                timeout_s=float(item.get("timeout_s", 120) or 120),
+                max_retries=int(item.get("max_retries", 2) or 0),
+                cache_control=bool(item.get("cache_control", True)),
             )
             for item in profiles
             if item.get("id") and item.get("name") and item.get("model")
@@ -698,6 +773,7 @@ class CoreApp:
                     "name": self._config.llm.default_model,
                     "vendor": self._config.llm.provider.title(),
                     "provider": self._config.llm.provider,
+                    "api_format": self._config.llm.api_format,
                     "model": self._config.llm.default_model,
                     "base_url": self._config.llm.base_url,
                     "api_key": self._config.llm.api_key,
@@ -712,17 +788,44 @@ class CoreApp:
     def _activate_model_profile(self, profile: dict[str, Any]) -> None:
         assert self._config is not None
         self._config.llm.provider = str(profile["provider"])
+        self._config.llm.api_format = normalize_api_format(
+            profile.get("api_format"), profile.get("provider")
+        )
+        self._config.llm.provider = provider_for_api_format(self._config.llm.api_format)
         self._config.llm.default_model = str(profile["model"])
         self._config.llm.base_url = str(profile.get("base_url", ""))
         self._config.llm.api_key = str(profile.get("api_key", ""))
         self._config.llm.api_key_env = str(profile.get("api_key_env", ""))
         self._config.llm.keyless = bool(profile.get("keyless"))
+        for name, default in (
+            ("context_window", 0),
+            ("max_output_tokens", 8192),
+            ("max_retries", 2),
+        ):
+            raw_value = profile.get(name, default)
+            setattr(self._config.llm, name, int(default if raw_value is None else raw_value))
+        for float_name, float_default in (
+            ("temperature", None),
+            ("top_p", None),
+            ("timeout_s", 120.0),
+        ):
+            float_value = profile.get(float_name, float_default)
+            resolved = float(float_value) if float_value is not None else float_default
+            setattr(
+                self._config.llm,
+                float_name,
+                None if resolved is None else float(resolved),
+            )
+        self._config.llm.reasoning_effort = str(profile.get("reasoning_effort", ""))
+        self._config.llm.cache_control = bool(profile.get("cache_control", True))
         if self._sessions is not None:
             key_name = (
                 "OPENAI_API_KEY"
                 if self._config.llm.provider == "openai"
                 else "ANTHROPIC_API_KEY"
             )
+
+    # 使用极小请求探测配置的端点、凭证和模型是否可用，不写入当前运行配置
             has_key = _llm_api_key_configured(self._config, key_name)
             self._sessions.set_provider(
                 create_provider(self._config)
@@ -730,6 +833,92 @@ class CoreApp:
                 else None
             )
 
+    async def _probe_model(self, cmd: ModelTestCommand) -> ModelTestResult:
+        started = time.perf_counter()
+        base_url = cmd.base_url.rstrip("/")
+        if not base_url:
+            base_url = (
+                "https://api.anthropic.com/v1"
+                if cmd.api_format == "anthropic_messages"
+                else "https://api.openai.com/v1"
+            )
+        headers: dict[str, str] = {"content-type": "application/json"}
+        if not cmd.keyless and cmd.api_key:
+            if cmd.api_format == "anthropic_messages":
+                headers["x-api-key"] = cmd.api_key
+                headers["anthropic-version"] = "2023-06-01"
+            else:
+                headers["authorization"] = f"Bearer {cmd.api_key}"
+        if cmd.api_format == "anthropic_messages":
+            url = f"{base_url}/messages"
+            body: dict[str, Any] = {
+                "model": cmd.model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "Reply OK."}],
+            }
+        elif cmd.api_format == "openai_responses":
+            url = f"{base_url}/responses"
+            body = {"model": cmd.model, "input": "Reply OK.", "max_output_tokens": 1}
+        else:
+            url = f"{base_url}/chat/completions"
+            body = {
+                "model": cmd.model,
+                "messages": [{"role": "user", "content": "Reply OK."}],
+                "max_completion_tokens": 1,
+            }
+        try:
+            async with httpx.AsyncClient(timeout=cmd.timeout_s, trust_env=False) as client:
+                response = await client.post(url, headers=headers, json=body)
+                response.raise_for_status()
+                usage = response.json().get("usage") or {}
+            elapsed = (time.perf_counter() - started) * 1000
+            return ModelTestResult(
+                success=True,
+                api_format=cmd.api_format,
+                model=cmd.model,
+                elapsed_ms=elapsed,
+                input_tokens=int(
+                    usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
+                ),
+                output_tokens=int(
+                    usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
+                ),
+            )
+        except (httpx.HTTPError, ValueError) as error:
+            return ModelTestResult(
+                success=False,
+                api_format=cmd.api_format,
+                model=cmd.model,
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                error=str(error),
+            )
+
+    # 重复运行端点探测并汇总延迟，供模型管理页比较可用性与稳定性
+    # 接收单次连通性测试请求并返回可展示的耗时、用量或错误信息
+    async def _model_benchmark_handler(self, params: dict[str, Any]) -> ModelBenchmarkResult:
+        cmd = ModelBenchmarkCommand.model_validate(params)
+        results = [
+            await self._probe_model(ModelTestCommand.model_validate(cmd.model_dump()))
+            for _ in range(cmd.samples)
+        ]
+        latencies = sorted(result.elapsed_ms for result in results if result.success)
+        errors = [result.error for result in results if result.error]
+        index = min(len(latencies) - 1, round((len(latencies) - 1) * .95)) if latencies else 0
+        return ModelBenchmarkResult(
+            api_format=cmd.api_format,
+            model=cmd.model,
+            samples=cmd.samples,
+            successful=len(latencies),
+            failed=cmd.samples - len(latencies),
+            min_ms=min(latencies) if latencies else None,
+            median_ms=statistics.median(latencies) if latencies else None,
+            p95_ms=latencies[index] if latencies else None,
+            max_ms=max(latencies) if latencies else None,
+            errors=errors,
+        )
+
+    async def _model_test_handler(self, params: dict[str, Any]) -> ModelTestResult:
+        return await self._probe_model(ModelTestCommand.model_validate(params))
     async def _settings_get_handler(self, params: dict[str, Any]) -> SettingsGetResult:
         SettingsGetCommand.model_validate(params)
         return SettingsGetResult(settings=self._settings_snapshot())
@@ -738,12 +927,15 @@ class CoreApp:
         assert self._config is not None
         assert self._permission_manager is not None
         cmd = SettingsUpdateCommand.model_validate(params)
-        updated: list[
-            Literal["provider", "model", "base_url", "api_key", "permission_mode"]
-        ] = []
+        updated: list[str] = []
         if cmd.provider is not None and cmd.provider != self._config.llm.provider:
             self._config.llm.provider = cmd.provider
+            self._config.llm.api_format = normalize_api_format(None, cmd.provider)
             updated.append("provider")
+        if cmd.api_format is not None and cmd.api_format != self._config.llm.api_format:
+            self._config.llm.api_format = cmd.api_format
+            self._config.llm.provider = provider_for_api_format(cmd.api_format)
+            updated.append("api_format")
         if cmd.model is not None and cmd.model != self._config.llm.default_model:
             self._config.llm.default_model = cmd.model
             updated.append("model")
@@ -757,6 +949,20 @@ class CoreApp:
             self._config.llm.api_key = cmd.api_key
             self._config.llm.api_key_env = ""
             updated.append("api_key")
+        for name in (
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "reasoning_effort",
+            "timeout_s",
+            "max_retries",
+            "context_window",
+            "cache_control",
+        ):
+            value = getattr(cmd, name)
+            if value is not None and value != getattr(self._config.llm, name):
+                setattr(self._config.llm, name, value)
+                updated.append(name)
         if cmd.permission_mode is not None:
             current_mode = self._permission_manager.get_mode()
             new_mode = PermissionMode(cmd.permission_mode)
@@ -774,7 +980,22 @@ class CoreApp:
         if updated:
             profiles, active_id = self._stored_model_profiles()
             if any(
-                field in updated for field in ("provider", "model", "base_url", "api_key")
+                field in updated
+                for field in (
+                    "provider",
+                    "api_format",
+                    "model",
+                    "base_url",
+                    "api_key",
+                    "max_output_tokens",
+                    "temperature",
+                    "top_p",
+                    "reasoning_effort",
+                    "timeout_s",
+                    "max_retries",
+                    "context_window",
+                    "cache_control",
+                )
             ):
                 current = next(
                     (item for item in profiles if item.get("id") == active_id), None
@@ -788,16 +1009,42 @@ class CoreApp:
                         "name": self._config.llm.default_model,
                         "vendor": self._config.llm.provider.title(),
                         "provider": self._config.llm.provider,
+                        "api_format": self._config.llm.api_format,
                         "model": self._config.llm.default_model,
                         "base_url": self._config.llm.base_url,
                         "api_key": self._config.llm.api_key,
+                        "max_output_tokens": self._config.llm.max_output_tokens,
+                        "temperature": self._config.llm.temperature,
+                        "top_p": self._config.llm.top_p,
+                        "reasoning_effort": self._config.llm.reasoning_effort,
+                        "timeout_s": self._config.llm.timeout_s,
+                        "max_retries": self._config.llm.max_retries,
+                        "context_window": self._config.llm.context_window,
+                        "cache_control": self._config.llm.cache_control,
                     }
                 )
             save_client_settings(
-                self._config, models=profiles, active_model_id=active_id
+                self._config,
+                models=profiles,
+                active_model_id=active_id,
             )
         if self._sessions is not None and any(
-            field in updated for field in ("provider", "model", "base_url", "api_key")
+            field in updated
+            for field in (
+                "provider",
+                "api_format",
+                "model",
+                "base_url",
+                "api_key",
+                "max_output_tokens",
+                "temperature",
+                "top_p",
+                "reasoning_effort",
+                "timeout_s",
+                "max_retries",
+                "context_window",
+                "cache_control",
+            )
         ):
             key_name = (
                 "OPENAI_API_KEY"
@@ -813,6 +1060,289 @@ class CoreApp:
             self._sessions.set_provider(provider)
         return SettingsUpdateResult(settings=self._settings_snapshot(), updated=updated)
 
+    # 为可选工作区创建技能加载器，确保目录扫描不依赖 daemon 启动目录
+    def _skill_loader_for_workspace(self, workspace_id: str | None) -> SkillLoader:
+        if workspace_id is None:
+            return SkillLoader()
+        if self._workspaces is None:
+            raise ValueError("workspace manager is not initialized")
+        workspace = self._workspaces.get(workspace_id)
+        return SkillLoader(project_root=Path(workspace.path))
+
+    # 将内部技能对象转换为稳定且可校验的目录协议模型
+    @staticmethod
+    def _skill_summary(skill: Skill) -> SkillSummary:
+        return SkillSummary(
+            id=skill.id,
+            name=skill.name,
+            display_name=skill.display_name or skill.name,
+            description=skill.description[:600],
+            short_description=(skill.short_description or skill.description)[:240],
+            source=skill.source,
+            scope=skill.scope,
+            path=str(skill.path or ""),
+            plugin=skill.plugin,
+            enabled=skill.enabled,
+            icon=skill.icon,
+            brand_color=skill.brand_color,
+            allow_implicit_invocation=skill.allow_implicit_invocation,
+        )
+
+    # 将内部插件对象转换为桌面端使用的插件摘要
+    @staticmethod
+    def _plugin_summary(plugin: Plugin) -> PluginSummary:
+        return PluginSummary(
+            id=plugin.id,
+            name=plugin.name,
+            description=plugin.description[:600],
+            version=plugin.version,
+            source=plugin.source,
+            path=str(plugin.path),
+            skills=list(plugin.skills),
+            installed=True,
+            display_name=plugin.display_name or plugin.name,
+            brand_color=plugin.brand_color,
+            enabled=plugin.enabled,
+        )
+
+    # 将官方兼容市场源转换为运行时协议摘要
+    @staticmethod
+    def _marketplace_summary(marketplace: Marketplace) -> MarketplaceSummary:
+        return MarketplaceSummary(
+            id=marketplace.id,
+            name=marketplace.name,
+            display_name=marketplace.display_name,
+            source=marketplace.source,
+            kind=marketplace.kind,
+            root_path=str(marketplace.root_path),
+            ref=marketplace.ref,
+            sparse_paths=list(marketplace.sparse_paths),
+            plugin_count=marketplace.plugin_count,
+            updated_at=marketplace.updated_at,
+            removable=marketplace.removable,
+            updatable=marketplace.updatable,
+        )
+
+    # 将市场插件条目与当前安装状态合并为目录摘要
+    @staticmethod
+    def _marketplace_plugin_summary(
+        plugin: MarketplacePlugin,
+        installed: dict[str, Plugin],
+    ) -> MarketplacePluginSummary:
+        current = installed.get(plugin.name)
+        return MarketplacePluginSummary(
+            id=plugin.id,
+            marketplace_id=plugin.marketplace_id,
+            marketplace_name=plugin.marketplace_name,
+            name=plugin.name,
+            display_name=plugin.display_name,
+            description=plugin.description[:600],
+            version=plugin.version,
+            category=plugin.category,
+            publisher=plugin.publisher,
+            installation=plugin.installation,
+            authentication=plugin.authentication,
+            installed=current is not None,
+            installed_plugin_id=current.id if current is not None else None,
+        )
+
+    # 为可选工作区创建插件市场管理器
+    def _marketplace_manager_for_workspace(
+        self, workspace_id: str | None
+    ) -> MarketplaceManager:
+        if workspace_id is None:
+            return MarketplaceManager()
+        if self._workspaces is None:
+            raise ValueError("workspace manager is not initialized")
+        workspace = self._workspaces.get(workspace_id)
+        return MarketplaceManager(project_root=Path(workspace.path))
+
+    # 返回工作区感知的完整技能目录，包括被禁用但仍已安装的条目
+    async def _skill_list_handler(self, params: dict[str, Any]) -> SkillListResult:
+        cmd = SkillListCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return SkillListResult(
+            skills=[
+                self._skill_summary(skill)
+                for skill in loader.list_all_skills(include_disabled=True)
+            ]
+        )
+
+    # 将用户选择的本地技能复制到个人或当前工作区目录
+    async def _skill_install_handler(self, params: dict[str, Any]) -> SkillInstallResult:
+        cmd = SkillInstallCommand.model_validate(params)
+        if cmd.scope == "workspace" and cmd.workspace_id is None:
+            raise HandlerError(-32602, "workspace scope requires workspace_id")
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            skill = loader.install_skill(Path(cmd.source_path), cmd.scope)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return SkillInstallResult(skill=self._skill_summary(skill))
+
+    # 持久化技能启停状态，禁用不会删除安装内容
+    async def _skill_set_enabled_handler(
+        self, params: dict[str, Any]
+    ) -> SkillSetEnabledResult:
+        cmd = SkillSetEnabledCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            skill = loader.set_enabled(cmd.skill_id, cmd.enabled)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return SkillSetEnabledResult(skill=self._skill_summary(skill))
+
+    # 返回个人和当前工作区已安装的插件及其所含技能
+    async def _plugin_list_handler(self, params: dict[str, Any]) -> PluginListResult:
+        cmd = PluginListCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginListResult(
+            plugins=[self._plugin_summary(plugin) for plugin in loader.list_plugins()]
+        )
+
+    # 将本地 Codex 兼容插件复制到个人或当前工作区插件目录
+    async def _plugin_install_handler(
+        self, params: dict[str, Any]
+    ) -> PluginInstallResult:
+        cmd = PluginInstallCommand.model_validate(params)
+        if cmd.scope == "workspace" and cmd.workspace_id is None:
+            raise HandlerError(-32602, "workspace scope requires workspace_id")
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            plugin = loader.install_plugin(Path(cmd.source_path), cmd.scope)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginInstallResult(plugin=self._plugin_summary(plugin))
+
+    # 返回官方兼容市场源和可安装插件目录
+    async def _plugin_catalog_handler(self, params: dict[str, Any]) -> PluginCatalogResult:
+        cmd = PluginCatalogCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            installed = {plugin.name: plugin for plugin in loader.list_plugins()}
+            return PluginCatalogResult(
+                marketplaces=[
+                    self._marketplace_summary(marketplace)
+                    for marketplace in manager.list_marketplaces()
+                ],
+                plugins=[
+                    self._marketplace_plugin_summary(plugin, installed)
+                    for plugin in manager.list_plugins()
+                ],
+            )
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+
+    # 添加 GitHub、Git URL 或本地目录插件市场
+    async def _plugin_marketplace_add_handler(
+        self, params: dict[str, Any]
+    ) -> PluginMarketplaceAddResult:
+        cmd = PluginMarketplaceAddCommand.model_validate(params)
+        try:
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            marketplace = manager.add(
+                cmd.source,
+                ref=cmd.git_ref,
+                sparse_paths=cmd.sparse_paths,
+            )
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginMarketplaceAddResult(
+            marketplace=self._marketplace_summary(marketplace)
+        )
+
+    # 刷新一个或全部 Git 插件市场快照
+    async def _plugin_marketplace_refresh_handler(
+        self, params: dict[str, Any]
+    ) -> PluginMarketplaceRefreshResult:
+        cmd = PluginMarketplaceRefreshCommand.model_validate(params)
+        try:
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            marketplaces = manager.refresh(cmd.marketplace_id)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginMarketplaceRefreshResult(
+            marketplaces=[self._marketplace_summary(item) for item in marketplaces]
+        )
+
+    # 移除显式配置的市场源，默认市场不可移除
+    async def _plugin_marketplace_remove_handler(
+        self, params: dict[str, Any]
+    ) -> PluginMarketplaceRemoveResult:
+        cmd = PluginMarketplaceRemoveCommand.model_validate(params)
+        try:
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            manager.remove(cmd.marketplace_id)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginMarketplaceRemoveResult(marketplace_id=cmd.marketplace_id)
+
+    # 从市场条目安装插件，并在完成后清理远程临时快照
+    async def _plugin_catalog_install_handler(
+        self, params: dict[str, Any]
+    ) -> PluginCatalogInstallResult:
+        cmd = PluginCatalogInstallCommand.model_validate(params)
+        if cmd.scope == "workspace" and cmd.workspace_id is None:
+            raise HandlerError(-32602, "workspace scope requires workspace_id")
+        materialized = None
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            manager = self._marketplace_manager_for_workspace(cmd.workspace_id)
+            catalog_plugin = next(
+                (
+                    item
+                    for item in manager.list_plugins()
+                    if item.id == cmd.catalog_plugin_id
+                ),
+                None,
+            )
+            if catalog_plugin is None:
+                raise ValueError(f"marketplace plugin not found: {cmd.catalog_plugin_id}")
+            materialized = manager.materialize_plugin(catalog_plugin.id)
+            plugin = loader.install_plugin(
+                materialized.path,
+                cmd.scope,
+                install_name=catalog_plugin.name,
+            )
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        finally:
+            if materialized is not None:
+                manager.cleanup_materialized(materialized)
+        return PluginCatalogInstallResult(plugin=self._plugin_summary(plugin))
+
+    # 启用或禁用已安装插件及其捆绑技能
+    async def _plugin_set_enabled_handler(
+        self, params: dict[str, Any]
+    ) -> PluginSetEnabledResult:
+        cmd = PluginSetEnabledCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            plugin = loader.set_plugin_enabled(cmd.plugin_id, cmd.enabled)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginSetEnabledResult(plugin=self._plugin_summary(plugin))
+
+    # 卸载用户明确选择的个人或工作区插件
+    async def _plugin_uninstall_handler(
+        self, params: dict[str, Any]
+    ) -> PluginUninstallResult:
+        cmd = PluginUninstallCommand.model_validate(params)
+        try:
+            loader = self._skill_loader_for_workspace(cmd.workspace_id)
+            loader.uninstall_plugin(cmd.plugin_id)
+        except (OSError, ValueError) as error:
+            raise HandlerError(-32602, str(error)) from error
+        return PluginUninstallResult(plugin_id=cmd.plugin_id)
+
+    # 返回模型连接状态及兼容旧客户端的默认工作区技能摘要
     async def _provider_status_handler(self, params: dict[str, Any]) -> ProviderStatusResult:
         assert self._config is not None
         ProviderStatusCommand.model_validate(params)
@@ -820,8 +1350,8 @@ class CoreApp:
         api_key_name = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
         endpoint_name = "OPENAI_BASE_URL" if provider == "openai" else "ANTHROPIC_BASE_URL"
         skills = [
-            {"name": skill.name, "description": skill.description[:180]}
-            for skill in SkillLoader().list_all_skills()
+            self._skill_summary(skill)
+            for skill in SkillLoader().list_all_skills(include_disabled=True)
         ]
         mcp_servers = (
             self._mcp_manager.statuses(self._config.mcp.servers)
@@ -834,6 +1364,7 @@ class CoreApp:
         )
         return ProviderStatusResult(
             provider=provider,  # type: ignore[arg-type]
+            api_format=self._config.llm.api_format,  # type: ignore[arg-type]
             model=self._config.llm.default_model,
             api_key_configured=api_key_configured,
             custom_endpoint_configured=custom_endpoint_configured,
@@ -874,6 +1405,7 @@ class CoreApp:
             raise HandlerError(-32602, f"cc-switch provider not found: {cmd.provider_id}")
         profiles, _ = self._stored_model_profiles()
         self._config.llm.provider = "anthropic"
+        self._config.llm.api_format = "anthropic_messages"
         self._config.llm.default_model = provider.model
         self._config.llm.base_url = provider.base_url
         self._config.llm.api_key = provider.api_key
@@ -890,6 +1422,7 @@ class CoreApp:
                 "name": provider.name,
                 "vendor": "cc-switch",
                 "provider": "anthropic",
+                "api_format": "anthropic_messages",
                 "model": provider.model,
                 "base_url": provider.base_url,
                 "api_key": provider.api_key,
@@ -930,11 +1463,21 @@ class CoreApp:
             {
                 "name": cmd.name,
                 "vendor": cmd.vendor,
-                "provider": cmd.provider,
+                "provider": provider_for_api_format(cmd.api_format),
+                "api_format": cmd.api_format,
                 "model": cmd.model,
                 "base_url": cmd.base_url,
+                "keyless": cmd.keyless,
                 "api_key_env": "",
                 "builtin": False,
+                "context_window": cmd.context_window,
+                "max_output_tokens": cmd.max_output_tokens,
+                "temperature": cmd.temperature,
+                "top_p": cmd.top_p,
+                "reasoning_effort": cmd.reasoning_effort,
+                "timeout_s": cmd.timeout_s,
+                "max_retries": cmd.max_retries,
+                "cache_control": cmd.cache_control,
             }
         )
         if cmd.api_key is not None:
@@ -1185,17 +1728,37 @@ class CoreApp:
         server.register("settings.get", self._settings_get_handler)
         server.register("settings.update", self._settings_update_handler)
         server.register("provider.status", self._provider_status_handler)
+        server.register("skill.list", self._skill_list_handler)
+        server.register("skill.install", self._skill_install_handler)
+        server.register("skill.set_enabled", self._skill_set_enabled_handler)
+        server.register("plugin.list", self._plugin_list_handler)
+        server.register("plugin.install", self._plugin_install_handler)
+        server.register("plugin.set_enabled", self._plugin_set_enabled_handler)
+        server.register("plugin.uninstall", self._plugin_uninstall_handler)
+        server.register("plugin.catalog", self._plugin_catalog_handler)
+        server.register("plugin.catalog_install", self._plugin_catalog_install_handler)
+        server.register("plugin.marketplace_add", self._plugin_marketplace_add_handler)
+        server.register("plugin.marketplace_refresh", self._plugin_marketplace_refresh_handler)
+        server.register("plugin.marketplace_remove", self._plugin_marketplace_remove_handler)
         server.register("provider.ccswitch_list", self._provider_ccswitch_list_handler)
         server.register("provider.ccswitch_apply", self._provider_ccswitch_apply_handler)
         server.register("provider.model_list", self._model_profile_list_handler)
         server.register("provider.model_save", self._model_profile_save_handler)
         server.register("provider.model_select", self._model_profile_select_handler)
         server.register("provider.model_delete", self._model_profile_delete_handler)
+        server.register("provider.model_test", self._model_test_handler)
+        server.register("provider.model_benchmark", self._model_benchmark_handler)
         server.register("session.compact", self._session_compact_handler)
 
         addr = await server.start()
         logger.info("sztu-code %s listening addr=%s", sztu_code.__version__, addr)
-        logger.info("config: %s", self._config)
+        logger.info(
+            "config: provider=%s api_format=%s model=%s permission=%s",
+            self._config.llm.provider,
+            self._config.llm.api_format,
+            self._config.llm.default_model,
+            self._config.permission.mode,
+        )
 
         loop = asyncio.get_running_loop()
         shutdown = asyncio.Event()

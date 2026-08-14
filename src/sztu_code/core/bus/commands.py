@@ -6,6 +6,24 @@ from pydantic import BaseModel, Discriminator, Field
 
 from sztu_code.core.session.model import SessionMode, SessionStatus
 
+ApiFormat = Literal[
+    "openai_chat_completions",
+    "anthropic_messages",
+    "openai_responses",
+]
+ReasoningEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+
+
+class ModelRequestSettings(BaseModel):
+    max_output_tokens: int = Field(default=8192, ge=1, le=128000)
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    reasoning_effort: ReasoningEffort = ""
+    timeout_s: float = Field(default=120.0, gt=0, le=600)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    context_window: int = Field(default=0, ge=0, le=10_000_000)
+    cache_control: bool = True
+
 
 class PingCommand(BaseModel):
     type: Literal["core.ping"] = "core.ping"
@@ -16,6 +34,7 @@ class PongResult(BaseModel):
     server_version: str
     uptime_ms: int
     received_at: str  # ISO 8601
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class AgentRunCommand(BaseModel):
@@ -304,10 +323,18 @@ class SessionResumeResult(BaseModel):
     session: SessionSummary
 
 
+class MessageImageBlock(BaseModel):
+    type: Literal["image"] = "image"
+    media_type: str  # 图片 MIME 类型，如 image/png
+    data: str  # base64 编码的图片数据
+
+
 class SessionSendMessageCommand(BaseModel):
     type: Literal["session.send_message"] = "session.send_message"
     session_id: str
     content: str
+    images: list[MessageImageBlock] = Field(default_factory=list)
+    client_message_id: str | None = Field(default=None, max_length=128)
 
 
 class SessionSendMessageResult(BaseModel):
@@ -364,8 +391,9 @@ class PermissionSetModeResult(BaseModel):
     error: str | None = None
 
 
-class SettingsSnapshot(BaseModel):
+class SettingsSnapshot(ModelRequestSettings):
     provider: Literal["anthropic", "openai"]
+    api_format: ApiFormat = "anthropic_messages"
     model: str
     router: str
     permission_mode: Literal["normal", "accept_edits", "plan", "auto"]
@@ -385,29 +413,227 @@ class SettingsGetResult(BaseModel):
 class SettingsUpdateCommand(BaseModel):
     type: Literal["settings.update"] = "settings.update"
     provider: Literal["anthropic", "openai"] | None = None
+    api_format: ApiFormat | None = None
     model: str | None = Field(default=None, min_length=1, max_length=200)
     base_url: str | None = Field(default=None, max_length=2000)
     api_key: str | None = Field(default=None, min_length=1, max_length=4000)
     permission_mode: Literal["normal", "accept_edits", "plan", "auto"] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=128000)
+    temperature: float | None = Field(default=None, ge=0, le=1)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    reasoning_effort: ReasoningEffort | None = None
+    timeout_s: float | None = Field(default=None, gt=0, le=600)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    context_window: int | None = Field(default=None, ge=0, le=10_000_000)
+    cache_control: bool | None = None
 
 
 class SettingsUpdateResult(BaseModel):
     settings: SettingsSnapshot
-    updated: list[Literal["provider", "model", "base_url", "api_key", "permission_mode"]]
+    updated: list[str]
 
 
 class ProviderStatusCommand(BaseModel):
     type: Literal["provider.status"] = "provider.status"
 
 
+class SkillSummary(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    description: str
+    short_description: str
+    source: str
+    scope: Literal["system", "personal", "workspace"]
+    path: str
+    plugin: str | None = None
+    enabled: bool = True
+    icon: str | None = None
+    brand_color: str | None = None
+    allow_implicit_invocation: bool = True
+
+
+class PluginSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+    version: str
+    source: Literal["personal", "workspace"]
+    path: str
+    skills: list[str]
+    installed: bool = True
+    display_name: str
+    brand_color: str | None = None
+    enabled: bool = True
+
+
+class MarketplaceSummary(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    source: str
+    kind: Literal["default", "git", "local"]
+    root_path: str
+    ref: str = ""
+    sparse_paths: list[str]
+    plugin_count: int
+    updated_at: str = ""
+    removable: bool = False
+    updatable: bool = False
+
+
+class MarketplacePluginSummary(BaseModel):
+    id: str
+    marketplace_id: str
+    marketplace_name: str
+    name: str
+    display_name: str
+    description: str
+    version: str
+    category: str
+    publisher: str
+    installation: str
+    authentication: str
+    installed: bool = False
+    installed_plugin_id: str | None = None
+
+
+class SkillListCommand(BaseModel):
+    type: Literal["skill.list"] = "skill.list"
+    workspace_id: str | None = None
+
+
+class SkillListResult(BaseModel):
+    skills: list[SkillSummary]
+
+
+class SkillInstallCommand(BaseModel):
+    type: Literal["skill.install"] = "skill.install"
+    source_path: str = Field(min_length=1, max_length=4000)
+    scope: Literal["personal", "workspace"] = "personal"
+    workspace_id: str | None = None
+
+
+class SkillInstallResult(BaseModel):
+    skill: SkillSummary
+
+
+class SkillSetEnabledCommand(BaseModel):
+    type: Literal["skill.set_enabled"] = "skill.set_enabled"
+    skill_id: str = Field(min_length=1, max_length=500)
+    enabled: bool
+    workspace_id: str | None = None
+
+
+class SkillSetEnabledResult(BaseModel):
+    skill: SkillSummary
+
+
+class PluginListCommand(BaseModel):
+    type: Literal["plugin.list"] = "plugin.list"
+    workspace_id: str | None = None
+
+
+class PluginListResult(BaseModel):
+    plugins: list[PluginSummary]
+
+
+class PluginInstallCommand(BaseModel):
+    type: Literal["plugin.install"] = "plugin.install"
+    source_path: str = Field(min_length=1, max_length=4000)
+    scope: Literal["personal", "workspace"] = "personal"
+    workspace_id: str | None = None
+
+
+class PluginInstallResult(BaseModel):
+    plugin: PluginSummary
+
+
+class PluginSetEnabledCommand(BaseModel):
+    type: Literal["plugin.set_enabled"] = "plugin.set_enabled"
+    plugin_id: str = Field(min_length=1, max_length=500)
+    enabled: bool
+    workspace_id: str | None = None
+
+
+class PluginSetEnabledResult(BaseModel):
+    plugin: PluginSummary
+
+
+class PluginUninstallCommand(BaseModel):
+    type: Literal["plugin.uninstall"] = "plugin.uninstall"
+    plugin_id: str = Field(min_length=1, max_length=500)
+    workspace_id: str | None = None
+    confirm: Literal["uninstall"]
+
+
+class PluginUninstallResult(BaseModel):
+    plugin_id: str
+
+
+class PluginCatalogCommand(BaseModel):
+    type: Literal["plugin.catalog"] = "plugin.catalog"
+    workspace_id: str | None = None
+
+
+class PluginCatalogResult(BaseModel):
+    marketplaces: list[MarketplaceSummary]
+    plugins: list[MarketplacePluginSummary]
+
+
+class PluginMarketplaceAddCommand(BaseModel):
+    type: Literal["plugin.marketplace_add"] = "plugin.marketplace_add"
+    source: str = Field(min_length=1, max_length=4000)
+    git_ref: str = Field(default="", max_length=500)
+    sparse_paths: list[str] = Field(default_factory=list, max_length=32)
+    workspace_id: str | None = None
+
+
+class PluginMarketplaceAddResult(BaseModel):
+    marketplace: MarketplaceSummary
+
+
+class PluginMarketplaceRefreshCommand(BaseModel):
+    type: Literal["plugin.marketplace_refresh"] = "plugin.marketplace_refresh"
+    marketplace_id: str | None = Field(default=None, max_length=500)
+    workspace_id: str | None = None
+
+
+class PluginMarketplaceRefreshResult(BaseModel):
+    marketplaces: list[MarketplaceSummary]
+
+
+class PluginMarketplaceRemoveCommand(BaseModel):
+    type: Literal["plugin.marketplace_remove"] = "plugin.marketplace_remove"
+    marketplace_id: str = Field(min_length=1, max_length=500)
+    workspace_id: str | None = None
+    confirm: Literal["remove"]
+
+
+class PluginMarketplaceRemoveResult(BaseModel):
+    marketplace_id: str
+
+
+class PluginCatalogInstallCommand(BaseModel):
+    type: Literal["plugin.catalog_install"] = "plugin.catalog_install"
+    catalog_plugin_id: str = Field(min_length=1, max_length=1000)
+    scope: Literal["personal", "workspace"] = "personal"
+    workspace_id: str | None = None
+
+
+class PluginCatalogInstallResult(BaseModel):
+    plugin: PluginSummary
+
+
 class ProviderStatusResult(BaseModel):
     provider: Literal["anthropic", "openai"]
+    api_format: ApiFormat = "anthropic_messages"
     model: str
     api_key_configured: bool
     custom_endpoint_configured: bool
     ready_for_next_run: bool
     mcp_servers: list[dict[str, Any]]
-    skills: list[dict[str, str]]
+    skills: list[SkillSummary]
 
 
 class CcswitchProviderSummary(BaseModel):
@@ -437,11 +663,12 @@ class ProviderCcswitchApplyResult(BaseModel):
     updated: list[Literal["provider", "model", "base_url"]]
 
 
-class ModelProfileSummary(BaseModel):
+class ModelProfileSummary(ModelRequestSettings):
     id: str
     name: str
     vendor: str
     provider: Literal["anthropic", "openai"]
+    api_format: ApiFormat = "anthropic_messages"
     model: str
     base_url: str = ""
     has_api_key: bool
@@ -457,15 +684,20 @@ class ModelProfileListResult(BaseModel):
     models: list[ModelProfileSummary]
 
 
-class ModelProfileSaveCommand(BaseModel):
+class ModelProfileProbe(ModelRequestSettings):
+    vendor: str = Field(default="Custom", min_length=1, max_length=100)
+    provider: Literal["anthropic", "openai"] | None = None
+    api_format: ApiFormat = "anthropic_messages"
+    model: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(default="", max_length=2000)
+    api_key: str | None = Field(default=None, max_length=4000)
+    keyless: bool = False
+
+
+class ModelProfileSaveCommand(ModelProfileProbe):
     type: Literal["provider.model_save"] = "provider.model_save"
     id: str | None = Field(default=None, max_length=100)
     name: str = Field(min_length=1, max_length=100)
-    vendor: str = Field(min_length=1, max_length=100)
-    provider: Literal["anthropic", "openai"]
-    model: str = Field(min_length=1, max_length=200)
-    base_url: str = Field(default="", max_length=2000)
-    api_key: str | None = Field(default=None, min_length=1, max_length=4000)
 
 
 class ModelProfileSaveResult(BaseModel):
@@ -490,6 +722,40 @@ class ModelProfileDeleteCommand(BaseModel):
 
 class ModelProfileDeleteResult(BaseModel):
     models: list[ModelProfileSummary]
+
+
+class ModelTestCommand(ModelProfileProbe):
+    type: Literal["provider.model_test"] = "provider.model_test"
+
+
+class ModelTestResult(BaseModel):
+    success: bool
+    api_format: ApiFormat
+    model: str
+    elapsed_ms: float
+    time_to_first_token_ms: float | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    error: str | None = None
+
+
+class ModelBenchmarkCommand(ModelProfileProbe):
+    type: Literal["provider.model_benchmark"] = "provider.model_benchmark"
+    samples: int = Field(default=3, ge=1, le=10)
+
+
+class ModelBenchmarkResult(BaseModel):
+    api_format: ApiFormat
+    model: str
+    samples: int
+    successful: int
+    failed: int
+    min_ms: float | None = None
+    median_ms: float | None = None
+    p95_ms: float | None = None
+    max_ms: float | None = None
+    average_ttft_ms: float | None = None
+    errors: list[str] = Field(default_factory=list)
 
 
 class SessionCompactCommand(BaseModel):
@@ -539,12 +805,26 @@ Command = Annotated[
     | SettingsGetCommand
     | SettingsUpdateCommand
     | ProviderStatusCommand
+    | SkillListCommand
+    | SkillInstallCommand
+    | SkillSetEnabledCommand
+    | PluginListCommand
+    | PluginInstallCommand
+    | PluginSetEnabledCommand
+    | PluginUninstallCommand
+    | PluginCatalogCommand
+    | PluginMarketplaceAddCommand
+    | PluginMarketplaceRefreshCommand
+    | PluginMarketplaceRemoveCommand
+    | PluginCatalogInstallCommand
     | ProviderCcswitchListCommand
     | ProviderCcswitchApplyCommand
     | ModelProfileListCommand
     | ModelProfileSaveCommand
     | ModelProfileSelectCommand
     | ModelProfileDeleteCommand
+    | ModelTestCommand
+    | ModelBenchmarkCommand
     | SessionCompactCommand,
     Discriminator("type"),
 ]

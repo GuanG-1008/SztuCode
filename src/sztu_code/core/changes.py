@@ -8,12 +8,36 @@ from typing import Any
 
 _MAX_FILE_BYTES = 1_000_000
 _MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
-_IGNORED_PARTS = {".git", ".sztu", "__pycache__", "node_modules", ".venv"}
+_IGNORED_PARTS = {
+    ".cache",
+    ".git",
+    ".hypothesis",
+    ".mypy_cache",
+    ".nox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".sztu",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+}
+_IGNORED_SUFFIXES = (".pyc", ".pyo")
 _MANIFEST_NAME = "changes.json"
 
 
 def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _is_ignored_path(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    return any(part in _IGNORED_PARTS for part in parts) or any(
+        normalized.lower().endswith(suffix) for suffix in _IGNORED_SUFFIXES
+    )
 
 
 @dataclass(frozen=True)
@@ -80,7 +104,8 @@ class WorkspaceChangeTracker:
         states: dict[str, _FileState] = {}
         total_bytes = 0
         for path in sorted(self._root.rglob("*"), key=lambda item: item.as_posix().lower()):
-            if not path.is_file() or any(part in _IGNORED_PARTS for part in path.parts):
+            relative = path.relative_to(self._root).as_posix()
+            if not path.is_file() or _is_ignored_path(relative):
                 continue
             try:
                 size = path.stat().st_size
@@ -93,7 +118,6 @@ class WorkspaceChangeTracker:
             except OSError:
                 continue
             total_bytes += len(content)
-            relative = path.relative_to(self._root).as_posix()
             states[relative] = _FileState(content=content, digest=_digest(content))
         return states
 
@@ -117,6 +141,8 @@ def active_manifest_changes(manifest: dict[str, Any], workspace_root: Path) -> l
     active: list[dict[str, Any]] = []
     for change in changes:
         if not isinstance(change, dict) or not isinstance(change.get("path"), str):
+            continue
+        if _is_ignored_path(str(change["path"])):
             continue
         target = (root / change["path"]).resolve()
         try:

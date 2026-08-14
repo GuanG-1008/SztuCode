@@ -26,7 +26,7 @@ def test_meta_roundtrip(tmp_path: Path) -> None:
         created_at="t1",
         updated_at="t2",
         run_ids=["run-1"],
-        run_stats={"run-1": RunStats(input_tokens=120, output_tokens=30, elapsed_s=2.5)},
+        run_stats={"run-1": RunStats(input_tokens=120, output_tokens=30, cache_read_input_tokens=90, elapsed_s=2.5)},
     )
     store.write_meta(session)
     loaded = store.read_meta("sess-1")
@@ -41,6 +41,79 @@ def test_history_preserves_run_id_without_polluting_model_messages(tmp_path: Pat
     assert store.read_history("sess-1")[0]["run_id"] == "run-1"
 
 
+def test_history_restores_messages_hidden_by_compaction(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    store.append_message("sess-1", "user", "original request", run_id="run-1")
+    store.append_message("sess-1", "assistant", "original response", run_id="run-1")
+    continuation = (
+        "This session is being continued from a previous conversation that ran out of "
+        "context. The summary below covers the earlier portion of the conversation.\n\n"
+        "Summary:\n## 1. Original Goal\nKeep working\n\n"
+        "Continue the conversation from where it left off without asking questions."
+    )
+
+    store.write_compacted("sess-1", [
+        {"role": "user", "content": continuation},
+        {"role": "assistant", "content": "Understood, I'll continue from this summary."},
+    ])
+
+    assert store.read_messages("sess-1")[0]["content"] == continuation
+    history = store.read_history("sess-1")
+    assert [(message["role"], message["content"]) for message in history] == [
+        ("user", "original request"),
+        ("assistant", "original response"),
+    ]
+    assert [message["run_id"] for message in history] == ["run-1", "run-1"]
+
+
+def test_history_merges_sliding_compaction_backups_without_duplicates(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    first_turn = [
+        {"role": "user", "content": "first request"},
+        {"role": "assistant", "content": "first response"},
+    ]
+    second_turn = [
+        {"role": "user", "content": "second request"},
+        {"role": "assistant", "content": "second response"},
+    ]
+    third_turn = [
+        {"role": "user", "content": "third request"},
+        {"role": "assistant", "content": "third response"},
+    ]
+    for message in [*first_turn, *second_turn]:
+        store.append_message("sess-1", message["role"], message["content"], run_id="run-old")
+
+    def continuation(summary: str) -> str:
+        return (
+            "This session is being continued from a previous conversation that ran out of "
+            "context. The summary below covers the earlier portion of the conversation.\n\n"
+            f"Summary:\n{summary}\n\nContinue the conversation directly."
+        )
+
+    store.write_compacted("sess-1", [
+        {"role": "user", "content": continuation("first compact")},
+        {"role": "assistant", "content": "Understood, I'll continue from this summary."},
+        *second_turn,
+    ])
+    for message in third_turn:
+        store.append_message("sess-1", message["role"], message["content"], run_id="run-new")
+    store.write_compacted("sess-1", [
+        {"role": "user", "content": continuation("second compact")},
+        {"role": "assistant", "content": [{
+            "type": "text",
+            "text": "Understood, I'll continue from this summary.",
+            "cache_control": {"type": "ephemeral"},
+        }]},
+        *third_turn,
+    ])
+
+    history = store.read_history("sess-1")
+    assert [(message["role"], message["content"]) for message in history] == [
+        (message["role"], message["content"])
+        for message in [*first_turn, *second_turn, *third_turn]
+    ]
+
+
 def test_backfill_run_stats_from_finished_event(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     session = Session(
@@ -51,12 +124,15 @@ def test_backfill_run_stats_from_finished_event(tmp_path: Path) -> None:
     events = store.runs_dir(session.id) / "run-1" / "events.jsonl"
     events.parent.mkdir(parents=True)
     events.write_text(
-        '{"type":"run.finished","total_input_tokens":120,"total_output_tokens":30,"elapsed_s":2.5}\n',
+        '{"type":"run.finished","total_input_tokens":120,"total_output_tokens":30,'
+        '"cache_read_input_tokens":90,"elapsed_s":2.5}\n',
         encoding="utf-8",
     )
 
     assert store.backfill_run_stats(session)
-    assert session.run_stats["run-1"] == RunStats(input_tokens=120, output_tokens=30, elapsed_s=2.5)
+    assert session.run_stats["run-1"] == RunStats(
+        input_tokens=120, output_tokens=30, cache_read_input_tokens=90, elapsed_s=2.5
+    )
     assert store.read_meta(session.id).run_stats == session.run_stats
 
 
@@ -178,7 +254,7 @@ def test_notes_read_and_append(tmp_path: Path) -> None:
 
 
 # 功能：验证 SessionStore 使用构造时传入的 tool_result 截断参数
-# 设计：配置很小的 limit/keep，读取 thread 时应按配置截断而非固定 8000/4000
+# 设计：配置小于完整标记的 limit/keep，读取结果仍应严格受限并显式呈现截断提示
 def test_read_messages_uses_configured_tool_result_budget(tmp_path: Path) -> None:
     store = SessionStore(tmp_path, tool_result_limit=20, tool_result_keep=5)
     store.append_message("sess-1", "assistant", [
@@ -190,5 +266,5 @@ def test_read_messages_uses_configured_tool_result_budget(tmp_path: Path) -> Non
 
     messages = store.read_messages("sess-1")
     result_block = messages[-1]["content"][0]
-    assert result_block["content"].startswith("a" * 5)
-    assert "chars omitted" in result_block["content"]
+    assert len(result_block["content"]) <= 5
+    assert result_block["content"].startswith("[")

@@ -8,12 +8,12 @@ test("agent workbench sidebar prioritizes tasks and project context", async ({ p
   await expect(page.getByRole("searchbox", { name: "搜索任务或项目" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "工作台工具" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "SztuCode", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Work with SztuCode", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "心念为引，一言功毕", exact: true })).toBeVisible();
   await expect(page.locator(".launcher-mark svg")).toBeVisible();
   await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("button", { name: "浏览器连接", exact: true })).toBeHidden();
   await page.getByRole("button", { name: "理解项目", exact: true }).click();
-  const launcherInput = page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能");
+  const launcherInput = page.getByPlaceholder("汝之所想，皆以言成");
   await expect(launcherInput).toHaveValue(/分析当前项目结构/);
   await expect(launcherInput).toBeFocused();
   await expect(page.getByRole("button", { name: "理解项目", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -108,7 +108,7 @@ test("task conversation slash menu opens above the composer without clipping", a
                   <div class="slash-menu__scroll"><section class="slash-menu__group"><h3>命令</h3><button><span class="slash-menu__icon command"></span><b>/plan</b><span>制定执行计划</span></button></section></div>
                   <footer><span>Enter 调用</span></footer>
                 </section>
-                <textarea aria-label="描述要完成的工作，或键入 / 调用技能">/</textarea>
+                <textarea aria-label="汝之所想，皆以言成">/</textarea>
                 <div class="composer-toolbar"><button class="round">+</button><span></span><button class="send">&uarr;</button></div>
               </form>
             </div>
@@ -137,6 +137,180 @@ test("task conversation slash menu opens above the composer without clipping", a
   expect(geometry.menuAboveComposer).toBe(true);
   expect(geometry.menuInsideCanvas).toBe(true);
   expect(geometry.menuHeight).toBeGreaterThan(0);
+});
+
+test("bottom diff preview is restored from the latest run after reopening a session", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(async () => {
+    const modulePath = "/src/lib/ipc.ts";
+    const { IpcClient } = await import(modulePath) as {
+      IpcClient: { prototype: { request: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>> } };
+    };
+    IpcClient.prototype.request = async (method, params = {}) => {
+      if (method === "session.get_history") return { messages: [], run_stats: {} };
+      if (method === "workspace.tree") return { nodes: [] };
+      if (method === "change.list") {
+        if (params.run_id !== "run-history") throw new Error("unexpected run id");
+        return {
+          changes: [{
+            path: "src/App.vue",
+            index_status: " ",
+            worktree_status: "M",
+            run_id: "run-history",
+            agent_owned: true,
+            revertible: true,
+            additions: 12,
+            deletions: 3,
+          }],
+        };
+      }
+      return {};
+    };
+
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const state = root.__vue_app__?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const project = { workspace_id: "workspace-history", name: "History", path: "F:/history", archived: false };
+    state.workspace = project;
+    state.workspaces = [project];
+    state.sessions = [{
+      session_id: "session-history",
+      title: "Historical task",
+      status: "active",
+      updated_at: "",
+      archived: false,
+      pinned: false,
+      workspace_id: "workspace-history",
+      latest_run_id: "run-history",
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_elapsed_s: 0,
+    }];
+    const chooseTask = state.chooseTask as ((id: string) => Promise<void>) | undefined;
+    if (!chooseTask) throw new Error("chooseTask is unavailable");
+    await chooseTask("session-history");
+  });
+
+  const preview = page.locator(".bottom-diff-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("本轮修改 1 个文件");
+  await expect(preview).toContainText("+12");
+  await expect(preview).toContainText("−3");
+});
+
+test("compaction context stays hidden while restored user turns remain separate", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(async () => {
+    const modulePath = "/src/lib/ipc.ts";
+    const { IpcClient } = await import(modulePath) as {
+      IpcClient: { prototype: { request: (method: string) => Promise<Record<string, unknown>> } };
+    };
+    IpcClient.prototype.request = async (method) => {
+      if (method === "workspace.tree") return { nodes: [] };
+      if (method === "session.get_history") {
+        return {
+          messages: [
+            { role: "user", content: "第一条真实请求", run_id: "run-1" },
+            { role: "assistant", content: "第一条历史输出", run_id: "run-1" },
+            {
+              role: "user",
+              content: "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n## 1. Original Goal\nInternal only",
+            },
+            { role: "assistant", content: "Understood, I'll continue from this summary." },
+            { role: "user", content: "第二条真实请求", run_id: "run-2" },
+            { role: "assistant", content: "第二条历史输出", run_id: "run-2" },
+          ],
+          run_stats: {},
+        };
+      }
+      return {};
+    };
+
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const state = root.__vue_app__?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const project = { workspace_id: "workspace-history", name: "History", path: "F:/history", archived: false };
+    state.workspace = project;
+    state.workspaces = [project];
+    state.sessions = [{
+      session_id: "session-history",
+      title: "Historical task",
+      status: "active",
+      updated_at: "",
+      archived: false,
+      pinned: false,
+      workspace_id: "workspace-history",
+      latest_run_id: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_elapsed_s: 0,
+    }];
+    const chooseTask = state.chooseTask as ((id: string) => Promise<void>) | undefined;
+    if (!chooseTask) throw new Error("chooseTask is unavailable");
+    await chooseTask("session-history");
+  });
+
+  await expect(page.locator(".timeline-user-message")).toHaveCount(2);
+  await expect(page.locator(".timeline-user-message").nth(0)).toHaveText("第一条真实请求");
+  await expect(page.locator(".timeline-user-message").nth(1)).toHaveText("第二条真实请求");
+  await expect(page.getByText("第一条历史输出", { exact: true })).toBeVisible();
+  await expect(page.getByText("第二条历史输出", { exact: true })).toBeVisible();
+  await expect(page.getByText(/This session is being continued/)).toHaveCount(0);
+  await expect(page.getByText("Understood, I'll continue from this summary.", { exact: true })).toHaveCount(0);
+});
+
+test("focused long task titles auto-scroll without a horizontal scrollbar", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const longTitle = "这是一个非常长的任务名称用于验证聚焦之后自动横向滚动并且不会出现任何横向滚动条";
+
+  await page.locator("#app").evaluate((root, title) => {
+    const app = (root as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    }).__vue_app__;
+    const state = app?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    state.sessions = [{
+      session_id: "session-long-title",
+      title,
+      status: "waiting_for_input",
+      updated_at: "",
+      archived: false,
+      pinned: false,
+      workspace_id: null,
+      latest_run_id: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_elapsed_s: 0,
+    }];
+  }, longTitle);
+
+  const row = page.getByRole("button", { name: longTitle, exact: true });
+  const title = row.locator("[data-auto-scroll-title]");
+  await expect(row).toBeVisible();
+  await row.focus();
+
+  const geometry = await title.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    scrollbarWidth: getComputedStyle(element).scrollbarWidth,
+    rowOverflowX: getComputedStyle(element.closest("button")!).overflowX,
+  }));
+  expect(geometry.scrollWidth).toBeGreaterThan(geometry.clientWidth);
+  expect(geometry.scrollbarWidth).toBe("none");
+  expect(geometry.rowOverflowX).toBe("hidden");
+  await expect.poll(() => title.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: /新建任务/ }).focus();
+  await expect.poll(() => title.evaluate((element) => element.scrollLeft)).toBe(0);
 });
 
 test("workspace panel collapses smoothly before it is removed", async ({ page }) => {
@@ -174,13 +348,13 @@ test("new task, keyboard shortcut, and more tools remain interactive", async ({ 
   await page.getByRole("button", { name: "全部任务", exact: true }).click();
   await expect(page.getByRole("heading", { name: "全部任务", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /新建任务/ }).click();
-  await expect(page.getByRole("heading", { name: "Work with SztuCode", exact: true })).toBeVisible();
-  await expect(page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能")).toBeFocused();
+  await expect(page.getByRole("heading", { name: "心念为引，一言功毕", exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("汝之所想，皆以言成")).toBeFocused();
 
-  await page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能").fill("临时内容");
+  await page.getByPlaceholder("汝之所想，皆以言成").fill("临时内容");
   await page.keyboard.press("Control+K");
-  await expect(page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能")).toHaveValue("");
-  await expect(page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能")).toBeFocused();
+  await expect(page.getByPlaceholder("汝之所想，皆以言成")).toHaveValue("");
+  await expect(page.getByPlaceholder("汝之所想，皆以言成")).toBeFocused();
 
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-expanded", "true");
@@ -195,7 +369,7 @@ test("new task, keyboard shortcut, and more tools remain interactive", async ({ 
 test("slash menu groups commands and supports keyboard selection", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  const launcherInput = page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能");
+  const launcherInput = page.getByPlaceholder("汝之所想，皆以言成");
 
   await launcherInput.fill("/");
   const slashMenu = page.getByRole("listbox", { name: "斜杠命令与技能" });
@@ -277,13 +451,13 @@ test("sidebar keeps the 952px boundary and auto-collapses below it", async ({ pa
   const expandNavigation = page.getByRole("button", { name: "展开导航" });
   await expect(expandNavigation).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeHidden();
-  await expect(page.getByRole("heading", { name: "Work with SztuCode", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "心念为引，一言功毕", exact: true })).toBeVisible();
 
   await expandNavigation.click();
   await expect(page.getByRole("button", { name: /新建任务/ })).toBeVisible();
   await page.getByRole("button", { name: "更多", exact: true }).click();
   await expect(page.getByRole("button", { name: "浏览器连接" })).toBeVisible();
-  await page.getByPlaceholder("描述你要完成的开发任务，输入 / 调用技能").fill("/");
+  await page.getByPlaceholder("汝之所想，皆以言成").fill("/");
   await expect(page.getByRole("listbox", { name: "斜杠命令与技能" })).toBeVisible();
   await expect(page).toHaveScreenshot("agent-sidebar-v6-951.png", { fullPage: true });
 
@@ -378,3 +552,301 @@ test("settings remains available from the workbench footer", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
   await expect(page.getByText("系统设置")).toBeVisible();
 });
+
+// 功能：验证右侧功能区"全屏"是真正的全屏——其余窗口功能全部隐藏，功能区独占整个视口，而非浮层遮挡
+// 设计：复用 collapse 测试的 Vue 状态注入让会话区/功能区出现，点「全屏」后用 getBoundingClientRect 与 offsetParent
+// 断言面板铺满视口且标题栏/导航/会话区真的 display:none，再按 Esc 验证恢复，避免只验证类名导致语义倒退
+test("workspace panel fullscreen hides all other windows and fills the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("#app").evaluate((root) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    state.workspace = { workspace_id: "workspace-fixture", name: "Fixture", path: "F:/fixture", archived: false };
+    state.sessions = [{ session_id: "session-fixture", title: "Fixture task", status: "active", updated_at: "", archived: false, pinned: false, workspace_id: "workspace-fixture" }];
+    state.activeId = "session-fixture";
+  });
+
+  const inspector = page.locator(".project-inspector");
+  const expandButton = page.getByRole("button", { name: "全屏", exact: true });
+  await expect(expandButton).toBeVisible();
+  await expandButton.click();
+  await expect(inspector).toHaveClass(/is-expanded/);
+
+  const geometry = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>(".project-inspector.is-expanded")!;
+    const rect = panel.getBoundingClientRect();
+    return {
+      panel: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      titlebarGone: !document.querySelector<HTMLElement>(".kimi-titlebar")?.offsetParent,
+      sidebarGone: !document.querySelector<HTMLElement>(".sidebar-viewport")?.offsetParent,
+      canvasGone: !document.querySelector<HTMLElement>(".task-canvas")?.offsetParent,
+      dividerGone: !document.querySelector<HTMLElement>(".layout-divider")?.offsetParent,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    };
+  });
+
+  expect(geometry.panel.x).toBe(0);
+  expect(geometry.panel.y).toBe(0);
+  expect(geometry.panel.width).toBeCloseTo(geometry.viewport.width, 0);
+  expect(geometry.panel.height).toBeCloseTo(geometry.viewport.height, 0);
+  expect(geometry.titlebarGone).toBe(true);
+  expect(geometry.sidebarGone).toBe(true);
+  expect(geometry.canvasGone).toBe(true);
+  expect(geometry.dividerGone).toBe(true);
+
+  // Esc 退出全屏：其余窗口功能恢复
+  await page.keyboard.press("Escape");
+  await expect(inspector).not.toHaveClass(/is-expanded/);
+  await expect(page.locator(".kimi-titlebar")).toBeVisible();
+  await expect(page.locator(".sidebar-viewport")).toBeVisible();
+  await expect(page.locator(".task-canvas")).toBeVisible();
+});
+
+// 功能：模型管理页在窄窗口下不横向溢出、文字不重叠
+// 设计：独立 fixture 挂载 ModelManager（IPC 已 mock），分别以 920px（宽）/620px（窄）两个视口渲染，
+// 断言页面无横向滚动、操作列与按钮不重叠，并对窄视口提交视觉快照
+async function openModelManagerFixture(page: import("@playwright/test").Page, width: number, height = 800) {
+  await page.setViewportSize({ width, height });
+  await page.goto("/tests/visual/fixtures/model-manager.html");
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  // fixture 提供 3 个本地模型（mock 的 query_profile 服务端模型仅用于注入场景，不计入表格行）
+  await expect(page.locator(".model-table-row")).toHaveCount(3);
+}
+
+test("model manager keeps a clear table layout at 920px and never overflows horizontally", async ({ page }) => {
+  await openModelManagerFixture(page, 920);
+
+  const geometry = await page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>(".model-manager-body")!;
+    const table = document.querySelector<HTMLElement>(".model-table")!;
+    const row = document.querySelector<HTMLElement>(".model-table-row")!;
+    const action = row.querySelector<HTMLElement>("span:last-child")!;
+    return {
+      bodyScrollWidth: body.scrollWidth,
+      bodyClientWidth: body.clientWidth,
+      rowRight: row.getBoundingClientRect().right,
+      tableRight: table.getBoundingClientRect().right,
+      actionRight: action.getBoundingClientRect().right,
+      headerVisible: !!Array.from(document.querySelectorAll(".model-table > header span")).find((el) => (el as HTMLElement).offsetParent),
+      nameEllipsized: getComputedStyle(row.querySelector("b")!).textOverflow === "ellipsis",
+    };
+  });
+
+  expect(geometry.bodyScrollWidth).toBeLessThanOrEqual(geometry.bodyClientWidth);
+  expect(geometry.rowRight).toBeLessThanOrEqual(geometry.tableRight);
+  expect(geometry.actionRight).toBeLessThanOrEqual(geometry.tableRight);
+  expect(geometry.headerVisible).toBe(true);
+  expect(geometry.nameEllipsized).toBe(true);
+
+  // 920px 仍是完整表格：四列表头全部可见
+  const headerLabels = await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>(".model-table > header span"))
+      .filter((el) => el.offsetParent)
+      .map((el) => el.textContent?.trim()),
+  );
+  expect(headerLabels).toEqual(["模型", "服务商", "接口", "操作"]);
+  await expect(page).toHaveScreenshot("model-manager-920.png", { fullPage: true });
+});
+
+test("model manager switches to single column at 620px without horizontal overflow", async ({ page }) => {
+  await openModelManagerFixture(page, 620);
+
+  const geometry = await page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>(".model-manager-body")!;
+    const table = document.querySelector<HTMLElement>(".model-table")!;
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(".model-table-row"));
+    const firstRow = rows[0]!;
+    const header = document.querySelector<HTMLElement>(".model-table > header")!;
+    const editorButton = document.querySelector<HTMLElement>(".model-add-button")!;
+    const vendorCell = firstRow.querySelector<HTMLElement>(":scope > span:nth-child(2)")!;
+    const apiCell = firstRow.querySelector<HTMLElement>(":scope > span:nth-child(3)")!;
+    return {
+      bodyScrollWidth: body.scrollWidth,
+      bodyClientWidth: body.clientWidth,
+      tableRight: table.getBoundingClientRect().right,
+      bodyRight: body.getBoundingClientRect().right,
+      firstRowRight: firstRow.getBoundingClientRect().right,
+      editorButtonRight: editorButton.getBoundingClientRect().right,
+      rowCount: rows.length,
+      headerRight: header.getBoundingClientRect().right,
+      vendorCellHidden: getComputedStyle(vendorCell).display === "none",
+      apiCellHidden: getComputedStyle(apiCell).display === "none",
+      nameTitle: firstRow.querySelector("b")!.getAttribute("title"),
+      modelTitle: firstRow.querySelector("small")!.getAttribute("title"),
+    };
+  });
+
+  expect(geometry.bodyScrollWidth).toBeLessThanOrEqual(geometry.bodyClientWidth);
+  expect(geometry.firstRowRight).toBeLessThanOrEqual(geometry.tableRight);
+  expect(geometry.tableRight).toBeLessThanOrEqual(geometry.bodyRight);
+  expect(geometry.editorButtonRight).toBeLessThanOrEqual(geometry.bodyRight);
+  expect(geometry.headerRight).toBeLessThanOrEqual(geometry.bodyRight);
+  expect(geometry.rowCount).toBe(3);
+  // 窄窗口下服务商/接口列让位于名称与操作，完整值保留在 title 中
+  expect(geometry.vendorCellHidden).toBe(true);
+  expect(geometry.apiCellHidden).toBe(true);
+  expect(geometry.nameTitle).toBeTruthy();
+  expect(geometry.modelTitle).toBeTruthy();
+  await expect(page).toHaveScreenshot("model-manager-620.png", { fullPage: true });
+});
+
+test("model editor form becomes single column at 620px and stays inside the dialog", async ({ page }) => {
+  await openModelManagerFixture(page, 620);
+  // 直接注入编辑器打开状态与服务商选择（绕过点击，避免 backdrop 拦截，与 diff-review 注入模式一致）
+  await page.locator(".model-manager").evaluate((el) => {
+    const instance = (el as HTMLElement & { __vueParentComponent?: { setupState?: Record<string, unknown> } }).__vueParentComponent;
+    const setup = instance?.setupState;
+    if (!setup) throw new Error("ModelManager setupState is unavailable");
+    const apply = (key: string, value: unknown) => {
+      const refish = setup[key] as { value?: unknown } | undefined;
+      if (refish && typeof refish === "object" && "value" in refish) refish.value = value;
+      else setup[key] = value;
+    };
+    apply("editorOpen", true);
+    apply("selectedVendor", { name: "DeepSeek", logo: null, mark: "D", provider: "openai", baseUrl: "https://api.deepseek.com/v1", apiKeyUrl: "https://platform.deepseek.com/api_keys" });
+  });
+  await expect(page.locator(".model-editor-fields")).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const editor = document.querySelector<HTMLElement>(".model-editor")!;
+    const fields = document.querySelector<HTMLElement>(".model-editor-fields")!;
+    const grid = document.querySelector<HTMLElement>(".model-vendor-grid")!;
+    const labels = Array.from(fields.querySelectorAll<HTMLElement>("label"));
+    const editorRect = editor.getBoundingClientRect();
+    const columns = getComputedStyle(fields).gridTemplateColumns.split(" ").length;
+    const vendorColumns = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+    return {
+      editorWidth: editorRect.width,
+      editorRight: editorRect.right,
+      viewportWidth: window.innerWidth,
+      fieldsColumns: columns,
+      vendorColumns,
+      fieldsInside: fields.getBoundingClientRect().right <= editorRect.right,
+      labelCount: labels.length,
+      labelsInside: labels.every((label) => label.getBoundingClientRect().right <= editorRect.right + 0.5),
+    };
+  });
+
+  expect(geometry.editorWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.editorRight).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.fieldsColumns).toBe(1);
+  expect(geometry.vendorColumns).toBe(1);
+  expect(geometry.fieldsInside).toBe(true);
+  expect(geometry.labelCount).toBeGreaterThan(0);
+  expect(geometry.labelsInside).toBe(true);
+  await expect(page.locator(".model-editor")).toHaveScreenshot("model-editor-620.png", { fullPage: true });
+});
+
+// 功能：模型管理页模态框的键盘与焦点交互（Issue #28）
+// 设计：独立 fixture 挂载包装组件（触发按钮 + ModelManager），验证
+// 初始焦点、Tab/Shift+Tab 焦点循环、Escape 分层关闭、关闭后焦点恢复。
+async function openModelManagerKeyboard(page: import("@playwright/test").Page, width = 920, height = 800) {
+  await page.setViewportSize({ width, height });
+  await page.goto("/tests/visual/fixtures/model-manager-keyboard.html");
+  await expect(page.locator("#open-model-manager")).toBeVisible();
+  await page.locator("#open-model-manager").click();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+  await expect(page.locator(".model-table-row")).toHaveCount(3);
+}
+
+test("model manager dialog receives initial focus and restores focus to the trigger on close", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 初始焦点应在模型管理面板内，而不是停留在触发按钮或 body
+  const initialFocusInside = await page.locator(".model-manager").evaluate((el) =>
+    el.contains(document.activeElement),
+  );
+  expect(initialFocusInside).toBe(true);
+
+  // 关闭模型管理（点击关闭按钮），焦点应回到触发按钮
+  await page.getByRole("button", { name: "关闭模型管理", exact: true }).click();
+  await expect(page.locator(".model-manager")).not.toBeVisible();
+  await expect(page.locator("#open-model-manager")).toBeFocused();
+});
+
+test("model manager editor dialog traps Tab focus and closes with Escape", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 通过注入打开编辑器（绕过 backdrop 点击拦截，与既有测试一致）
+  await page.locator(".model-manager").evaluate((el) => {
+    const instance = (el as HTMLElement & { __vueParentComponent?: { setupState?: Record<string, unknown> } }).__vueParentComponent;
+    const setup = instance?.setupState;
+    if (!setup) throw new Error("ModelManager setupState is unavailable");
+    const apply = (key: string, value: unknown) => {
+      const refish = setup[key] as { value?: unknown } | undefined;
+      if (refish && typeof refish === "object" && "value" in refish) refish.value = value;
+      else setup[key] = value;
+    };
+    apply("editorOpen", true);
+    apply("selectedVendor", { name: "DeepSeek", logo: null, mark: "D", provider: "openai", baseUrl: "https://api.deepseek.com/v1", apiKeyUrl: "https://platform.deepseek.com/api_keys" });
+  });
+  const editor = page.locator(".model-editor");
+  await expect(editor).toBeVisible();
+
+  // 初始焦点应在编辑器内（首个可聚焦控件）
+  const firstFocusable = editor.locator("button, input, select, textarea").first();
+  await expect(firstFocusable).toBeFocused();
+
+  // Tab 循环：在编辑器内连续 Tab，焦点始终不离开编辑器
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press("Tab");
+    const stillInside = await editor.evaluate((el) => el.contains(document.activeElement));
+    expect(stillInside).toBe(true);
+  }
+
+  // Shift+Tab 反向循环，焦点仍不离开编辑器
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  const insideAfterShiftTab = await editor.evaluate((el) => el.contains(document.activeElement));
+  expect(insideAfterShiftTab).toBe(true);
+
+  // Escape 关闭编辑器，且模型管理面板仍打开
+  await page.keyboard.press("Escape");
+  await expect(editor).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+});
+
+test("model delete dialog closes with Escape and restores focus to the delete button", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 打开删除弹窗（点击自定义模型的删除按钮）
+  const deleteButton = page.locator(".model-table-row").filter({ hasText: "自定义模型" }).getByRole("button", { name: /删除/ });
+  await deleteButton.click();
+  await expect(page.getByRole("alertdialog", { name: "删除模型" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "取消", exact: true })).toBeFocused();
+
+  // Escape 关闭删除弹窗
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("alertdialog", { name: "删除模型" })).not.toBeVisible();
+  // 焦点应回到删除按钮
+  await expect(deleteButton).toBeFocused();
+});
+
+test("Escape closes only the topmost dialog, a second Escape closes the manager", async ({ page }) => {
+  await openModelManagerKeyboard(page);
+  // 打开编辑器（第一层弹窗）
+  await page.locator(".model-manager").evaluate((el) => {
+    const instance = (el as HTMLElement & { __vueParentComponent?: { setupState?: Record<string, unknown> } }).__vueParentComponent;
+    const setup = instance?.setupState;
+    if (!setup) throw new Error("ModelManager setupState is unavailable");
+    const apply = (key: string, value: unknown) => {
+      const refish = setup[key] as { value?: unknown } | undefined;
+      if (refish && typeof refish === "object" && "value" in refish) refish.value = value;
+      else setup[key] = value;
+    };
+    apply("editorOpen", true);
+    apply("selectedVendor", { name: "DeepSeek", logo: null, mark: "D", provider: "openai", baseUrl: "https://api.deepseek.com/v1", apiKeyUrl: "https://platform.deepseek.com/api_keys" });
+  });
+  const editor = page.locator(".model-editor");
+  await expect(editor).toBeVisible();
+
+  // 第一次 Escape：只关闭编辑器，模型管理面板仍打开
+  await page.keyboard.press("Escape");
+  await expect(editor).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "模型", exact: true })).toBeVisible();
+
+  // 第二次 Escape：关闭模型管理面板，焦点回到触发按钮
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".model-manager")).not.toBeVisible();
+  await expect(page.locator("#open-model-manager")).toBeFocused();
+});
+

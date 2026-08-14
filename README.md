@@ -70,7 +70,7 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 | 扩展机制      | Skills、Subagents 与 MCP 外部工具统一接入                     |
 | 可观测性      | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放             |
 | 变更审阅      | 桌面端展示文件变化和 Diff，支持接受、暂存与回退               |
-| Agent 评测    | 轨迹分析和 SWE-bench 适配器，持续建设自动化评测基线           |
+| Agent 评测    | `sztu-eval` 统一任务协议、重复运行、指标报告和 SWE-bench 适配 |
 
 项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和完整多智能体工作流仍在路线图中，不将设计目标描述为已完成能力。
 
@@ -210,6 +210,7 @@ cargo check
 SztuCode/
 ├─ src/sztu_code/
 │  ├─ core/          # daemon、Agent Loop、协议、工具、权限与扩展系统
+│  ├─ evaluation/    # 统一评测协议、runner、任务集与报告
 │  ├─ tui/           # Textual 终端界面
 │  └─ cli/           # 命令行客户端
 ├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
@@ -234,6 +235,15 @@ uv run python scripts/gen_protocol_doc.py --check
 ```
 
 修改协议模型时，先运行 `uv run python scripts/gen_protocol_doc.py` 更新生成文档。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
+
+离线运行 10 个内部 Coding Agent 基准并生成 JSON/Markdown 报告：
+
+```bash
+uv run sztu-eval run --suite internal --runner reference --repeat 3
+```
+
+任务格式、真实 daemon runner、指标定义和 SWE-bench Lite 小样本流程见
+[评测指南](docs/guides/evaluation.md)。
 
 ## 路线图
 
@@ -302,6 +312,29 @@ uv run python scripts/gen_protocol_doc.py --check
       <a href="https://github.com/neutronstar238">
         <img src="https://github.com/neutronstar238.png?size=100" width="80" alt="neutronstar238" /><br />
         <sub><b>neutronstar238</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Shuang-su">
+        <img src="https://github.com/Shuang-su.png?size=100" width="80" alt="Shuang-su" /><br />
+        <sub><b>Shuang-su</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/crazy19-69">
+        <img src="https://github.com/crazy19-69.png?size=100" width="80" alt="crazy19-69" /><br />
+        <sub><b>crazy19-69</b></sub>
+      </a><br />
+      <sub>Contributor</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/electrojay27">
+        <img src="https://github.com/electrojay27.png?size=100" width="80" alt="electrojay27" /><br />
+        <sub><b>electrojay27</b></sub>
       </a><br />
       <sub>Contributor</sub>
     </td>

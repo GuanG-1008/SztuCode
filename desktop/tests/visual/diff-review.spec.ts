@@ -15,8 +15,9 @@ type DiffState = {
 async function openDiffFixture(
   page: import("@playwright/test").Page,
   state: DiffState = {},
+  viewport = { width: 1280, height: 800 },
 ): Promise<() => Record<string, unknown>> {
-  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.setViewportSize(viewport);
   await page.goto("/tests/visual/fixtures/diff-review.html");
 
   await page.locator(".diff-review").evaluate((el, extra) => {
@@ -39,6 +40,95 @@ async function openDiffFixture(
     return instance?.setupState ?? {};
   });
 }
+
+const visualChanges = [
+  {
+    path: "src/features/diff-review/components/very-long-change-path-that-must-not-push-actions-out-of-the-container.ts",
+    index_status: "M",
+    worktree_status: "M",
+    additions: 24,
+    deletions: 9,
+  },
+  { path: "src/services/runtime.ts", index_status: "M", worktree_status: "M", additions: 3, deletions: 1 },
+];
+
+const visualDiff = [
+  "--- a/src/features/diff-review/components/very-long-change-path-that-must-not-push-actions-out-of-the-container.ts",
+  "+++ b/src/features/diff-review/components/very-long-change-path-that-must-not-push-actions-out-of-the-container.ts",
+  "@@ -1,3 +1,4 @@",
+  `+export const responsiveDiffReview = '${"independently-scrollable-diff-line-".repeat(10)}';`,
+].join("\n");
+
+test("1280px keeps a two-column review layout", async ({ page }) => {
+  await openDiffFixture(page, {
+    changes: visualChanges,
+    selected: visualChanges[0].path,
+    diff: visualDiff,
+  });
+
+  await expect(page.locator(".diff-review__pre")).toContainText("independently-scrollable-diff-line-independently-scrollable-diff-line");
+  const layout = await page.evaluate(() => {
+    const files = document.querySelector<HTMLElement>(".diff-review__files")!;
+    const view = document.querySelector<HTMLElement>(".diff-review__view")!;
+    return {
+      filesRight: files.getBoundingClientRect().right,
+      filesWidth: files.getBoundingClientRect().width,
+      viewLeft: view.getBoundingClientRect().left,
+    };
+  });
+
+  expect(layout.filesRight).toBeLessThanOrEqual(layout.viewLeft);
+  expect(layout.filesWidth).toBe(320);
+  await expect(page).toHaveScreenshot("diff-review-1280.png");
+});
+
+test("760px keeps review controls in stacked panels", async ({ page }) => {
+  await openDiffFixture(page, {
+    changes: visualChanges,
+    selected: visualChanges[0].path,
+    diff: visualDiff,
+  }, { width: 760, height: 800 });
+
+  const filePath = page.locator(".diff-review__file-path").first();
+  const acceptFile = page.locator(".diff-review__file-accept").first();
+  const rejectFile = page.locator(".diff-review__file-reject").first();
+  const acceptAll = page.getByRole("button", { name: "全部接受" });
+  const rejectAll = page.getByRole("button", { name: "全部拒绝" });
+  await expect(filePath).toBeVisible();
+  await expect(acceptFile).toBeVisible();
+  await expect(rejectFile).toBeVisible();
+  await expect(acceptAll).toBeVisible();
+  await expect(rejectAll).toBeVisible();
+  await filePath.click({ trial: true });
+  await acceptFile.click({ trial: true });
+  await rejectFile.click({ trial: true });
+  await acceptAll.click({ trial: true });
+  await rejectAll.click({ trial: true });
+  await expect(page.locator(".diff-review__pre")).toContainText("responsiveDiffReview");
+
+  const layout = await page.evaluate(() => {
+    const files = document.querySelector<HTMLElement>(".diff-review__files")!;
+    const view = document.querySelector<HTMLElement>(".diff-review__view")!;
+    const pre = document.querySelector<HTMLElement>(".diff-review__pre")!;
+    return {
+      filesBottom: files.getBoundingClientRect().bottom,
+      viewTop: view.getBoundingClientRect().top,
+      pageWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      viewOverflowX: getComputedStyle(view).overflowX,
+      viewScrollWidth: view.scrollWidth,
+      viewClientWidth: view.clientWidth,
+      preFont: getComputedStyle(pre).fontFamily,
+    };
+  });
+
+  expect(layout.filesBottom).toBeLessThanOrEqual(layout.viewTop);
+  expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(layout.viewOverflowX).toBe("auto");
+  expect(layout.viewScrollWidth).toBeGreaterThan(layout.viewClientWidth);
+  expect(layout.preFont).toContain("Consolas");
+  await expect(page).toHaveScreenshot("diff-review-760.png");
+});
 
 test("列表加载失败时展示内联错误与重试入口", async ({ page }) => {
   await openDiffFixture(page, { changes: [], selected: "", changesError: "本地服务尚未连接" });
@@ -151,14 +241,17 @@ test("窄窗口中空/错误/成功状态不重叠", async ({ page }) => {
     const view = document.querySelector<HTMLElement>(".diff-review__view")!;
     const error = document.querySelector<HTMLElement>(".diff-review__error")!;
     return {
-      // 左列文件列表与右侧视图在窄窗口下仍然分栏（不互相覆盖）
-      filesRight: fileList.getBoundingClientRect().right,
-      viewLeft: view.getBoundingClientRect().left,
+      // 窄窗口中文件列表位于 Diff 视图上方，两个区域不互相覆盖
+      filesBottom: fileList.getBoundingClientRect().bottom,
+      viewTop: view.getBoundingClientRect().top,
       errorInsideView: error.getBoundingClientRect().left >= view.getBoundingClientRect().left,
+      pageWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
     };
   });
-  expect(errorGeometry.filesRight).toBeLessThanOrEqual(errorGeometry.viewLeft);
+  expect(errorGeometry.filesBottom).toBeLessThanOrEqual(errorGeometry.viewTop);
   expect(errorGeometry.errorInsideView).toBe(true);
+  expect(errorGeometry.pageWidth).toBeLessThanOrEqual(errorGeometry.viewportWidth);
 
   // 3) 成功状态：diff 内容与内联错误不重叠
   await injectState({

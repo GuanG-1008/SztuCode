@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator
 
+ToolSchedulerMode = Literal["serial", "concurrent"]
+
 
 class CoreStartedEvent(BaseModel):
     type: Literal["core.started"] = "core.started"
@@ -26,6 +28,7 @@ class RunFinishedEvent(BaseModel):
     steps: int
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    cache_read_input_tokens: int = 0
     elapsed_s: float = 0.0
     ts: str
 
@@ -50,6 +53,15 @@ class ToolCallStartedEvent(BaseModel):
     tool_use_id: str
     tool_name: str
     params: dict[str, Any]
+    # 同一模型回合的工具批次标识；空值代表未经过批次调度的兼容调用
+    batch_id: str = ""
+    # 供 Trace/TUI 区分调度方式
+    scheduler_mode: ToolSchedulerMode = "serial"
+    # 从批次入队到实际开始调用的等待时长
+    queue_ms: int = 0
+    # 工具进入队列与实际开始执行的 UTC 时间戳
+    queued_at: str = ""
+    started_at: str = ""
     ts: str
 
 
@@ -60,6 +72,12 @@ class ToolCallFinishedEvent(BaseModel):
     tool_name: str
     elapsed_ms: int
     output: str = ""  # tool result content, for TUI display
+    batch_id: str = ""
+    scheduler_mode: ToolSchedulerMode = "serial"
+    queue_ms: int = 0
+    queued_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
     ts: str
 
 
@@ -73,6 +91,12 @@ class ToolCallFailedEvent(BaseModel):
     error_message: str
     elapsed_ms: int
     attempt: int = 1  # 1=first attempt, 2=first retry, 3=second retry
+    batch_id: str = ""
+    scheduler_mode: ToolSchedulerMode = "serial"
+    queue_ms: int = 0
+    queued_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
     ts: str
 
 
@@ -100,6 +124,13 @@ class LlmUsageEvent(BaseModel):
     cache_creation_input_tokens: int
     context_pct: float = 0.0
     model: str = ""  # 当前使用的模型名
+    context_window: int = 0
+    available_tokens: int = 0
+    reserved_output_tokens: int = 0
+    system_tokens: int = 0
+    summary_tokens: int = 0
+    conversation_tokens: int = 0
+    tool_tokens: int = 0
     ts: str
 
 

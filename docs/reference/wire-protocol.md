@@ -63,6 +63,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | `server_version` | `string` | yes |
 | `uptime_ms` | `integer` | yes |
 | `received_at` | `string` | yes |
+| `capabilities` | `array` | no |
 
 ```json
 {
@@ -78,6 +79,13 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     "received_at": {
       "title": "Received At",
       "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Capabilities",
+      "type": "array"
     }
   },
   "required": [
@@ -423,12 +431,96 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "$defs": {
     "SettingsSnapshot": {
       "properties": {
+        "max_output_tokens": {
+          "default": 8192,
+          "maximum": 128000,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top P"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "context_window": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "cache_control": {
+          "default": true,
+          "title": "Cache Control",
+          "type": "boolean"
+        },
         "provider": {
           "enum": [
             "anthropic",
             "openai"
           ],
           "title": "Provider",
+          "type": "string"
+        },
+        "api_format": {
+          "default": "anthropic_messages",
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "title": "Api Format",
           "type": "string"
         },
         "model": {
@@ -495,10 +587,19 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 |---|---|---|
 | `type` | `string` | no |
 | `provider` | `string | null` | no |
+| `api_format` | `string | null` | no |
 | `model` | `string | null` | no |
 | `base_url` | `string | null` | no |
 | `api_key` | `string | null` | no |
 | `permission_mode` | `string | null` | no |
+| `max_output_tokens` | `integer | null` | no |
+| `temperature` | `number | null` | no |
+| `top_p` | `number | null` | no |
+| `reasoning_effort` | `string | null` | no |
+| `timeout_s` | `number | null` | no |
+| `max_retries` | `integer | null` | no |
+| `context_window` | `integer | null` | no |
+| `cache_control` | `boolean | null` | no |
 
 ```json
 {
@@ -524,6 +625,23 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       ],
       "default": null,
       "title": "Provider"
+    },
+    "api_format": {
+      "anyOf": [
+        {
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Api Format"
     },
     "model": {
       "anyOf": [
@@ -583,6 +701,122 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       ],
       "default": null,
       "title": "Permission Mode"
+    },
+    "max_output_tokens": {
+      "anyOf": [
+        {
+          "maximum": 128000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Output Tokens"
+    },
+    "temperature": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temperature"
+    },
+    "top_p": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Top P"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reasoning Effort"
+    },
+    "timeout_s": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timeout S"
+    },
+    "max_retries": {
+      "anyOf": [
+        {
+          "maximum": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Retries"
+    },
+    "context_window": {
+      "anyOf": [
+        {
+          "maximum": 10000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Context Window"
+    },
+    "cache_control": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cache Control"
     }
   },
   "title": "SettingsUpdateCommand",
@@ -602,12 +836,96 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "$defs": {
     "SettingsSnapshot": {
       "properties": {
+        "max_output_tokens": {
+          "default": 8192,
+          "maximum": 128000,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top P"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "context_window": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "cache_control": {
+          "default": true,
+          "title": "Cache Control",
+          "type": "boolean"
+        },
         "provider": {
           "enum": [
             "anthropic",
             "openai"
           ],
           "title": "Provider",
+          "type": "string"
+        },
+        "api_format": {
+          "default": "anthropic_messages",
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "title": "Api Format",
           "type": "string"
         },
         "model": {
@@ -661,13 +979,6 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     },
     "updated": {
       "items": {
-        "enum": [
-          "provider",
-          "model",
-          "base_url",
-          "api_key",
-          "permission_mode"
-        ],
         "type": "string"
       },
       "title": "Updated",
@@ -709,6 +1020,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | Field | Type | Required |
 |---|---|---|
 | `provider` | `string` | yes |
+| `api_format` | `string` | no |
 | `model` | `string` | yes |
 | `api_key_configured` | `boolean` | yes |
 | `custom_endpoint_configured` | `boolean` | yes |
@@ -718,6 +1030,107 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 
 ```json
 {
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
   "properties": {
     "provider": {
       "enum": [
@@ -725,6 +1138,16 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
         "openai"
       ],
       "title": "Provider",
+      "type": "string"
+    },
+    "api_format": {
+      "default": "anthropic_messages",
+      "enum": [
+        "openai_chat_completions",
+        "anthropic_messages",
+        "openai_responses"
+      ],
+      "title": "Api Format",
       "type": "string"
     },
     "model": {
@@ -753,10 +1176,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     },
     "skills": {
       "items": {
-        "additionalProperties": {
-          "type": "string"
-        },
-        "type": "object"
+        "$ref": "#/$defs/SkillSummary"
       },
       "title": "Skills",
       "type": "array"
@@ -772,6 +1192,1792 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     "skills"
   ],
   "title": "ProviderStatusResult",
+  "type": "object"
+}
+```
+
+### SkillListCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "skill.list",
+      "default": "skill.list",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "SkillListCommand",
+  "type": "object"
+}
+```
+
+### SkillListResult
+
+| Field | Type | Required |
+|---|---|---|
+| `skills` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "skills": {
+      "items": {
+        "$ref": "#/$defs/SkillSummary"
+      },
+      "title": "Skills",
+      "type": "array"
+    }
+  },
+  "required": [
+    "skills"
+  ],
+  "title": "SkillListResult",
+  "type": "object"
+}
+```
+
+### SkillInstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `source_path` | `string` | yes |
+| `scope` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "skill.install",
+      "default": "skill.install",
+      "title": "Type",
+      "type": "string"
+    },
+    "source_path": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Source Path",
+      "type": "string"
+    },
+    "scope": {
+      "default": "personal",
+      "enum": [
+        "personal",
+        "workspace"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "source_path"
+  ],
+  "title": "SkillInstallCommand",
+  "type": "object"
+}
+```
+
+### SkillInstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `skill` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "skill": {
+      "$ref": "#/$defs/SkillSummary"
+    }
+  },
+  "required": [
+    "skill"
+  ],
+  "title": "SkillInstallResult",
+  "type": "object"
+}
+```
+
+### SkillSetEnabledCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `skill_id` | `string` | yes |
+| `enabled` | `boolean` | yes |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "skill.set_enabled",
+      "default": "skill.set_enabled",
+      "title": "Type",
+      "type": "string"
+    },
+    "skill_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Skill Id",
+      "type": "string"
+    },
+    "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "skill_id",
+    "enabled"
+  ],
+  "title": "SkillSetEnabledCommand",
+  "type": "object"
+}
+```
+
+### SkillSetEnabledResult
+
+| Field | Type | Required |
+|---|---|---|
+| `skill` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "SkillSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "short_description": {
+          "title": "Short Description",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "system",
+            "personal",
+            "workspace"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "allow_implicit_invocation": {
+          "default": true,
+          "title": "Allow Implicit Invocation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "description",
+        "short_description",
+        "source",
+        "scope",
+        "path"
+      ],
+      "title": "SkillSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "skill": {
+      "$ref": "#/$defs/SkillSummary"
+    }
+  },
+  "required": [
+    "skill"
+  ],
+  "title": "SkillSetEnabledResult",
+  "type": "object"
+}
+```
+
+### PluginListCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.list",
+      "default": "plugin.list",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "PluginListCommand",
+  "type": "object"
+}
+```
+
+### PluginListResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugins` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugins": {
+      "items": {
+        "$ref": "#/$defs/PluginSummary"
+      },
+      "title": "Plugins",
+      "type": "array"
+    }
+  },
+  "required": [
+    "plugins"
+  ],
+  "title": "PluginListResult",
+  "type": "object"
+}
+```
+
+### PluginInstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `source_path` | `string` | yes |
+| `scope` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.install",
+      "default": "plugin.install",
+      "title": "Type",
+      "type": "string"
+    },
+    "source_path": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Source Path",
+      "type": "string"
+    },
+    "scope": {
+      "default": "personal",
+      "enum": [
+        "personal",
+        "workspace"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "source_path"
+  ],
+  "title": "PluginInstallCommand",
+  "type": "object"
+}
+```
+
+### PluginInstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugin": {
+      "$ref": "#/$defs/PluginSummary"
+    }
+  },
+  "required": [
+    "plugin"
+  ],
+  "title": "PluginInstallResult",
+  "type": "object"
+}
+```
+
+### PluginSetEnabledCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `plugin_id` | `string` | yes |
+| `enabled` | `boolean` | yes |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.set_enabled",
+      "default": "plugin.set_enabled",
+      "title": "Type",
+      "type": "string"
+    },
+    "plugin_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "enabled": {
+      "title": "Enabled",
+      "type": "boolean"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "plugin_id",
+    "enabled"
+  ],
+  "title": "PluginSetEnabledCommand",
+  "type": "object"
+}
+```
+
+### PluginSetEnabledResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugin": {
+      "$ref": "#/$defs/PluginSummary"
+    }
+  },
+  "required": [
+    "plugin"
+  ],
+  "title": "PluginSetEnabledResult",
+  "type": "object"
+}
+```
+
+### PluginUninstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `plugin_id` | `string` | yes |
+| `workspace_id` | `string | null` | no |
+| `confirm` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.uninstall",
+      "default": "plugin.uninstall",
+      "title": "Type",
+      "type": "string"
+    },
+    "plugin_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    },
+    "confirm": {
+      "const": "uninstall",
+      "title": "Confirm",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plugin_id",
+    "confirm"
+  ],
+  "title": "PluginUninstallCommand",
+  "type": "object"
+}
+```
+
+### PluginUninstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin_id` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "plugin_id": {
+      "title": "Plugin Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "plugin_id"
+  ],
+  "title": "PluginUninstallResult",
+  "type": "object"
+}
+```
+
+### PluginCatalogCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.catalog",
+      "default": "plugin.catalog",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "PluginCatalogCommand",
+  "type": "object"
+}
+```
+
+### PluginCatalogResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplaces` | `array` | yes |
+| `plugins` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "MarketplacePluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "marketplace_id": {
+          "title": "Marketplace Id",
+          "type": "string"
+        },
+        "marketplace_name": {
+          "title": "Marketplace Name",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "publisher": {
+          "title": "Publisher",
+          "type": "string"
+        },
+        "installation": {
+          "title": "Installation",
+          "type": "string"
+        },
+        "authentication": {
+          "title": "Authentication",
+          "type": "string"
+        },
+        "installed": {
+          "default": false,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "installed_plugin_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Installed Plugin Id"
+        }
+      },
+      "required": [
+        "id",
+        "marketplace_id",
+        "marketplace_name",
+        "name",
+        "display_name",
+        "description",
+        "version",
+        "category",
+        "publisher",
+        "installation",
+        "authentication"
+      ],
+      "title": "MarketplacePluginSummary",
+      "type": "object"
+    },
+    "MarketplaceSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "default",
+            "git",
+            "local"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "root_path": {
+          "title": "Root Path",
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sparse_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sparse Paths",
+          "type": "array"
+        },
+        "plugin_count": {
+          "title": "Plugin Count",
+          "type": "integer"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "removable": {
+          "default": false,
+          "title": "Removable",
+          "type": "boolean"
+        },
+        "updatable": {
+          "default": false,
+          "title": "Updatable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "source",
+        "kind",
+        "root_path",
+        "sparse_paths",
+        "plugin_count"
+      ],
+      "title": "MarketplaceSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplaces": {
+      "items": {
+        "$ref": "#/$defs/MarketplaceSummary"
+      },
+      "title": "Marketplaces",
+      "type": "array"
+    },
+    "plugins": {
+      "items": {
+        "$ref": "#/$defs/MarketplacePluginSummary"
+      },
+      "title": "Plugins",
+      "type": "array"
+    }
+  },
+  "required": [
+    "marketplaces",
+    "plugins"
+  ],
+  "title": "PluginCatalogResult",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceAddCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `source` | `string` | yes |
+| `git_ref` | `string` | no |
+| `sparse_paths` | `array` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.marketplace_add",
+      "default": "plugin.marketplace_add",
+      "title": "Type",
+      "type": "string"
+    },
+    "source": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Source",
+      "type": "string"
+    },
+    "git_ref": {
+      "default": "",
+      "maxLength": 500,
+      "title": "Git Ref",
+      "type": "string"
+    },
+    "sparse_paths": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 32,
+      "title": "Sparse Paths",
+      "type": "array"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "source"
+  ],
+  "title": "PluginMarketplaceAddCommand",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceAddResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplace` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "MarketplaceSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "default",
+            "git",
+            "local"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "root_path": {
+          "title": "Root Path",
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sparse_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sparse Paths",
+          "type": "array"
+        },
+        "plugin_count": {
+          "title": "Plugin Count",
+          "type": "integer"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "removable": {
+          "default": false,
+          "title": "Removable",
+          "type": "boolean"
+        },
+        "updatable": {
+          "default": false,
+          "title": "Updatable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "source",
+        "kind",
+        "root_path",
+        "sparse_paths",
+        "plugin_count"
+      ],
+      "title": "MarketplaceSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplace": {
+      "$ref": "#/$defs/MarketplaceSummary"
+    }
+  },
+  "required": [
+    "marketplace"
+  ],
+  "title": "PluginMarketplaceAddResult",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRefreshCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `marketplace_id` | `string | null` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.marketplace_refresh",
+      "default": "plugin.marketplace_refresh",
+      "title": "Type",
+      "type": "string"
+    },
+    "marketplace_id": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Marketplace Id"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "title": "PluginMarketplaceRefreshCommand",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRefreshResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplaces` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "MarketplaceSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "default",
+            "git",
+            "local"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "root_path": {
+          "title": "Root Path",
+          "type": "string"
+        },
+        "ref": {
+          "default": "",
+          "title": "Ref",
+          "type": "string"
+        },
+        "sparse_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sparse Paths",
+          "type": "array"
+        },
+        "plugin_count": {
+          "title": "Plugin Count",
+          "type": "integer"
+        },
+        "updated_at": {
+          "default": "",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "removable": {
+          "default": false,
+          "title": "Removable",
+          "type": "boolean"
+        },
+        "updatable": {
+          "default": false,
+          "title": "Updatable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "display_name",
+        "source",
+        "kind",
+        "root_path",
+        "sparse_paths",
+        "plugin_count"
+      ],
+      "title": "MarketplaceSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "marketplaces": {
+      "items": {
+        "$ref": "#/$defs/MarketplaceSummary"
+      },
+      "title": "Marketplaces",
+      "type": "array"
+    }
+  },
+  "required": [
+    "marketplaces"
+  ],
+  "title": "PluginMarketplaceRefreshResult",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRemoveCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `marketplace_id` | `string` | yes |
+| `workspace_id` | `string | null` | no |
+| `confirm` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.marketplace_remove",
+      "default": "plugin.marketplace_remove",
+      "title": "Type",
+      "type": "string"
+    },
+    "marketplace_id": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Marketplace Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    },
+    "confirm": {
+      "const": "remove",
+      "title": "Confirm",
+      "type": "string"
+    }
+  },
+  "required": [
+    "marketplace_id",
+    "confirm"
+  ],
+  "title": "PluginMarketplaceRemoveCommand",
+  "type": "object"
+}
+```
+
+### PluginMarketplaceRemoveResult
+
+| Field | Type | Required |
+|---|---|---|
+| `marketplace_id` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "marketplace_id": {
+      "title": "Marketplace Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "marketplace_id"
+  ],
+  "title": "PluginMarketplaceRemoveResult",
+  "type": "object"
+}
+```
+
+### PluginCatalogInstallCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `catalog_plugin_id` | `string` | yes |
+| `scope` | `string` | no |
+| `workspace_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "plugin.catalog_install",
+      "default": "plugin.catalog_install",
+      "title": "Type",
+      "type": "string"
+    },
+    "catalog_plugin_id": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Catalog Plugin Id",
+      "type": "string"
+    },
+    "scope": {
+      "default": "personal",
+      "enum": [
+        "personal",
+        "workspace"
+      ],
+      "title": "Scope",
+      "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    }
+  },
+  "required": [
+    "catalog_plugin_id"
+  ],
+  "title": "PluginCatalogInstallCommand",
+  "type": "object"
+}
+```
+
+### PluginCatalogInstallResult
+
+| Field | Type | Required |
+|---|---|---|
+| `plugin` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "PluginSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "personal",
+            "workspace"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "installed": {
+          "default": true,
+          "title": "Installed",
+          "type": "boolean"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "brand_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brand Color"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "version",
+        "source",
+        "path",
+        "skills",
+        "display_name"
+      ],
+      "title": "PluginSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "plugin": {
+      "$ref": "#/$defs/PluginSummary"
+    }
+  },
+  "required": [
+    "plugin"
+  ],
+  "title": "PluginCatalogInstallResult",
   "type": "object"
 }
 ```
@@ -905,12 +3111,96 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "$defs": {
     "SettingsSnapshot": {
       "properties": {
+        "max_output_tokens": {
+          "default": 8192,
+          "maximum": 128000,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "top_p": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Top P"
+        },
+        "reasoning_effort": {
+          "default": "",
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "timeout_s": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "context_window": {
+          "default": 0,
+          "maximum": 10000000,
+          "minimum": 0,
+          "title": "Context Window",
+          "type": "integer"
+        },
+        "cache_control": {
+          "default": true,
+          "title": "Cache Control",
+          "type": "boolean"
+        },
         "provider": {
           "enum": [
             "anthropic",
             "openai"
           ],
           "title": "Provider",
+          "type": "string"
+        },
+        "api_format": {
+          "default": "anthropic_messages",
+          "enum": [
+            "openai_chat_completions",
+            "anthropic_messages",
+            "openai_responses"
+          ],
+          "title": "Api Format",
           "type": "string"
         },
         "model": {
@@ -1201,7 +3491,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
   "id": "u-4",
   "result": {
     "session_id": "sess-abc123def456",
-    "status": "active"
+    "status": "waiting_for_input"
   }
 }
 ```
@@ -2001,9 +4291,37 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 | `type` | `string` | no |
 | `session_id` | `string` | yes |
 | `content` | `string` | yes |
+| `images` | `array` | no |
+| `client_message_id` | `string | null` | no |
 
 ```json
 {
+  "$defs": {
+    "MessageImageBlock": {
+      "properties": {
+        "type": {
+          "const": "image",
+          "default": "image",
+          "title": "Type",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "data": {
+          "title": "Data",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "data"
+      ],
+      "title": "MessageImageBlock",
+      "type": "object"
+    }
+  },
   "properties": {
     "type": {
       "const": "session.send_message",
@@ -2018,6 +4336,26 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
     "content": {
       "title": "Content",
       "type": "string"
+    },
+    "images": {
+      "items": {
+        "$ref": "#/$defs/MessageImageBlock"
+      },
+      "title": "Images",
+      "type": "array"
+    },
+    "client_message_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Client Message Id"
     }
   },
   "required": [
@@ -2360,6 +4698,7 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `steps` | `integer` | yes |
 | `total_input_tokens` | `integer` | no |
 | `total_output_tokens` | `integer` | no |
+| `cache_read_input_tokens` | `integer` | no |
 | `elapsed_s` | `number` | no |
 | `ts` | `string` | yes |
 
@@ -2404,6 +4743,11 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "total_output_tokens": {
       "default": 0,
       "title": "Total Output Tokens",
+      "type": "integer"
+    },
+    "cache_read_input_tokens": {
+      "default": 0,
+      "title": "Cache Read Input Tokens",
       "type": "integer"
     },
     "elapsed_s": {
@@ -2553,6 +4897,11 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `tool_use_id` | `string` | yes |
 | `tool_name` | `string` | yes |
 | `params` | `object` | yes |
+| `batch_id` | `string` | no |
+| `scheduler_mode` | `string` | no |
+| `queue_ms` | `integer` | no |
+| `queued_at` | `string` | no |
+| `started_at` | `string` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -2580,6 +4929,35 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "additionalProperties": true,
       "title": "Params",
       "type": "object"
+    },
+    "batch_id": {
+      "default": "",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "scheduler_mode": {
+      "default": "serial",
+      "enum": [
+        "serial",
+        "concurrent"
+      ],
+      "title": "Scheduler Mode",
+      "type": "string"
+    },
+    "queue_ms": {
+      "default": 0,
+      "title": "Queue Ms",
+      "type": "integer"
+    },
+    "queued_at": {
+      "default": "",
+      "title": "Queued At",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
     },
     "ts": {
       "title": "Ts",
@@ -2624,6 +5002,12 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `tool_name` | `string` | yes |
 | `elapsed_ms` | `integer` | yes |
 | `output` | `string` | no |
+| `batch_id` | `string` | no |
+| `scheduler_mode` | `string` | no |
+| `queue_ms` | `integer` | no |
+| `queued_at` | `string` | no |
+| `started_at` | `string` | no |
+| `finished_at` | `string` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -2654,6 +5038,40 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "output": {
       "default": "",
       "title": "Output",
+      "type": "string"
+    },
+    "batch_id": {
+      "default": "",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "scheduler_mode": {
+      "default": "serial",
+      "enum": [
+        "serial",
+        "concurrent"
+      ],
+      "title": "Scheduler Mode",
+      "type": "string"
+    },
+    "queue_ms": {
+      "default": 0,
+      "title": "Queue Ms",
+      "type": "integer"
+    },
+    "queued_at": {
+      "default": "",
+      "title": "Queued At",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "default": "",
+      "title": "Finished At",
       "type": "string"
     },
     "ts": {
@@ -2698,6 +5116,12 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `error_message` | `string` | yes |
 | `elapsed_ms` | `integer` | yes |
 | `attempt` | `integer` | no |
+| `batch_id` | `string` | no |
+| `scheduler_mode` | `string` | no |
+| `queue_ms` | `integer` | no |
+| `queued_at` | `string` | no |
+| `started_at` | `string` | no |
+| `finished_at` | `string` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -2737,6 +5161,40 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "default": 1,
       "title": "Attempt",
       "type": "integer"
+    },
+    "batch_id": {
+      "default": "",
+      "title": "Batch Id",
+      "type": "string"
+    },
+    "scheduler_mode": {
+      "default": "serial",
+      "enum": [
+        "serial",
+        "concurrent"
+      ],
+      "title": "Scheduler Mode",
+      "type": "string"
+    },
+    "queue_ms": {
+      "default": 0,
+      "title": "Queue Ms",
+      "type": "integer"
+    },
+    "queued_at": {
+      "default": "",
+      "title": "Queued At",
+      "type": "string"
+    },
+    "started_at": {
+      "default": "",
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "default": "",
+      "title": "Finished At",
+      "type": "string"
     },
     "ts": {
       "title": "Ts",
@@ -2955,6 +5413,13 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `cache_creation_input_tokens` | `integer` | yes |
 | `context_pct` | `number` | no |
 | `model` | `string` | no |
+| `context_window` | `integer` | no |
+| `available_tokens` | `integer` | no |
+| `reserved_output_tokens` | `integer` | no |
+| `system_tokens` | `integer` | no |
+| `summary_tokens` | `integer` | no |
+| `conversation_tokens` | `integer` | no |
+| `tool_tokens` | `integer` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -2995,6 +5460,41 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "default": "",
       "title": "Model",
       "type": "string"
+    },
+    "context_window": {
+      "default": 0,
+      "title": "Context Window",
+      "type": "integer"
+    },
+    "available_tokens": {
+      "default": 0,
+      "title": "Available Tokens",
+      "type": "integer"
+    },
+    "reserved_output_tokens": {
+      "default": 0,
+      "title": "Reserved Output Tokens",
+      "type": "integer"
+    },
+    "system_tokens": {
+      "default": 0,
+      "title": "System Tokens",
+      "type": "integer"
+    },
+    "summary_tokens": {
+      "default": 0,
+      "title": "Summary Tokens",
+      "type": "integer"
+    },
+    "conversation_tokens": {
+      "default": 0,
+      "title": "Conversation Tokens",
+      "type": "integer"
+    },
+    "tool_tokens": {
+      "default": 0,
+      "title": "Tool Tokens",
+      "type": "integer"
     },
     "ts": {
       "title": "Ts",

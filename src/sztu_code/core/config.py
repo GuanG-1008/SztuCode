@@ -16,12 +16,31 @@ _DEFAULT_LOG_FILE = "~/.sztu/logs/core.log"
 _DEFAULT_LOG_FORMAT = "text"
 _DEFAULT_CONFIG_PATH = "~/.sztu/config.toml"
 _DEFAULT_CLIENT_SETTINGS_PATH = "~/.sztu/client-settings.json"
-_DEFAULT_MAX_STEPS = 0  # 0 = 不限步数（预算驱动，由 token/墙钟兜底）
+_DEFAULT_MAX_STEPS = 100  # 硬止损；SWE-bench 极少需要 >100 步；显式设为 0 可恢复不限
 _DEFAULT_WRAP_UP_ON_MAX_STEPS = True
 _DEFAULT_GRACE_STEP_ON_MAX_STEPS = True
 _DEFAULT_STUCK_MAX_FAILURES = 3
 _DEFAULT_STUCK_MAX_TOTAL = 0
+_DEFAULT_TOOL_MAX_CONCURRENCY = 4
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
+
+API_FORMATS = {
+    "openai_chat_completions",
+    "anthropic_messages",
+    "openai_responses",
+}
+
+
+# 将 API 格式映射为兼容旧配置的 SDK 供应商族
+def provider_for_api_format(api_format: str) -> str:
+    return "anthropic" if api_format == "anthropic_messages" else "openai"
+
+
+# 将旧 provider 值归一化为明确的 API 格式
+def normalize_api_format(api_format: object, provider: object = None) -> str:
+    if isinstance(api_format, str) and api_format in API_FORMATS:
+        return api_format
+    return "openai_chat_completions" if provider == "openai" else "anthropic_messages"
 
 
 @dataclass
@@ -45,14 +64,17 @@ class AgentConfig:
     stuck_max_failures: int = _DEFAULT_STUCK_MAX_FAILURES
     # 累计干预达到该次数硬停；0=永不硬停
     stuck_max_total: int = _DEFAULT_STUCK_MAX_TOTAL
+    # 同轮全只读工具批次的最大并发数；1 保持完全串行
+    tool_max_concurrency: int = _DEFAULT_TOOL_MAX_CONCURRENCY
 
 
 @dataclass
 class BudgetConfig:
     # 本 run 累计 input+output tokens 上限；0=不限
-    max_tokens: int = 0
+    # 参考 Claude Code task_budget (128K)，但我们的压缩为全量替换，设 500K 更保守
+    max_tokens: int = 500_000
     # 本 run 累计墙钟秒数上限；0=不限
-    max_wall_clock_s: int = 0
+    max_wall_clock_s: int = 1_200  # 20 分钟
 
 
 @dataclass
@@ -69,13 +91,24 @@ class WorkflowConfig:
 class LlmConfig:
     # A model must be supplied by configuration; never silently select a vendor model.
     default_model: str = ""
-    provider: str = "anthropic"  # "anthropic" | "openai"
+    provider: str = "anthropic"  # legacy SDK family derived from api_format
+    api_format: str = "anthropic_messages"
     router: str = "static"  # "static" | "rule_based" (S4) | "cost_budget" (S6)
     context_window: int = 0  # 0 = use provider's model-aware default
+    max_output_tokens: int = 8_192
+    temperature: float | None = None
+    top_p: float | None = None
+    reasoning_effort: str = ""
+    timeout_s: float = 120.0
+    max_retries: int = 2
     base_url: str = ""  # 自定义端点，空表示使用官方默认地址
     api_key: str = ""  # 导入的凭证，优先于 .env 注入 provider 环境
     api_key_env: str = ""  # 内置模型使用的凭证变量名，避免把密钥写入模型配置
     keyless: bool = False  # 免 key 端点（如 opencode Zen 免费模型），跳过凭证校验
+    # OpenAI 兼容端点是否发送 cache_control 标记（system + 最后一个 tool）。
+    # 部分端点（DeepSeek/Zen）是自动前缀缓存、忽略此字段，纯 OpenAI 规范端点也忽略；
+    # 仅对识别该标记的网关有命中收益；端点拒收未知字段时可关掉。
+    cache_control: bool = True
 
 
 @dataclass
@@ -93,9 +126,23 @@ class PermissionConfig:
 
 @dataclass
 class CompactionConfig:
-    auto_threshold: float = 0.0  # 0 disables auto compaction; manual /compact remains available
+    # context_pct 触发压缩的阈值；0 表示禁用百分比触发
+    # 70% × 200K 窗口 = 140K 上下文才触发，避免过早失忆
+    auto_threshold: float = 0.70
+    # 累计 input tokens 超过此值触发压缩（绝对值触发，不受窗口大小影响）；0=禁用
+    # 全量替换压缩架构下设为 300K，仅在上下文真正膨胀时才压缩
+    auto_compact_min_tokens: int = 300_000
+    # 步数触发压缩（全量替换架构下默认关闭，步数触发容易在"刚理解完代码"的时刻失忆）
+    auto_compact_min_steps: int = 0
     tool_result_limit: int = 8_000
     tool_result_keep: int = 4_000
+    # --- 滑动窗口压缩（借鉴 Claude Code keepRecent=5）---
+    # 保留最近 N 个 turn 完整细节，仅摘要更早的 turn；0=回退全量替换
+    sliding_window_size: int = 5
+    # 两次压缩之间的最小步数间隔（滑动窗口下可大幅降低，因为不丢失即时上下文）
+    compact_cooldown_steps: int = 3
+    # 连续压缩失败 N 次后熔断，不再尝试自动压缩（借鉴 Claude Code circuit breaker）
+    circuit_breaker_max_failures: int = 3
 
 
 @dataclass
@@ -191,10 +238,11 @@ def _read_client_settings() -> dict[str, Any]:
 def _apply_client_settings(config: SztuConfig) -> None:
     value = _read_client_settings()
     provider = value.get("provider")
+    api_format = normalize_api_format(value.get("api_format"), provider)
     model = value.get("model")
     permission_mode = value.get("permission_mode")
-    if provider in {"anthropic", "openai"}:
-        config.llm.provider = str(provider)
+    config.llm.api_format = api_format
+    config.llm.provider = provider_for_api_format(api_format)
     if isinstance(model, str) and model:
         config.llm.default_model = model
         # 让客户端显式保存的模型优先于 .env 里的 KAMA_LLM_DEFAULT_MODEL 默认值
@@ -210,17 +258,35 @@ def _apply_client_settings(config: SztuConfig) -> None:
     # 免 key 标志持久化：重启后仍能正确识别 Zen 等免 key 端点，避免泄漏环境里的通用 key
     if isinstance(value.get("keyless"), bool):
         config.llm.keyless = value["keyless"]
+    for name in ("context_window", "max_output_tokens", "max_retries"):
+        field_value = value.get(name)
+        if isinstance(field_value, int):
+            setattr(config.llm, name, field_value)
+    for name in ("temperature", "top_p", "timeout_s"):
+        field_value = value.get(name)
+        if isinstance(field_value, (int, float)) and not isinstance(field_value, bool):
+            setattr(config.llm, name, float(field_value))
+    if isinstance(value.get("reasoning_effort"), str):
+        config.llm.reasoning_effort = value["reasoning_effort"]
+    if isinstance(value.get("cache_control"), bool):
+        config.llm.cache_control = value["cache_control"]
 
 
 def load_model_profiles() -> tuple[list[dict[str, Any]], str]:
     value = _read_client_settings()
     profiles = value.get("models")
-    return (
-        [item for item in profiles if isinstance(item, dict)]
-        if isinstance(profiles, list)
-        else [],
-        str(value.get("active_model_id", "") or ""),
-    )
+    normalized: list[dict[str, Any]] = []
+    if isinstance(profiles, list):
+        for item in profiles:
+            if not isinstance(item, dict):
+                continue
+            profile = dict(item)
+            profile["api_format"] = normalize_api_format(
+                profile.get("api_format"), profile.get("provider")
+            )
+            profile["provider"] = provider_for_api_format(profile["api_format"])
+            normalized.append(profile)
+    return normalized, str(value.get("active_model_id", "") or "")
 
 
 def save_client_settings(
@@ -237,12 +303,21 @@ def save_client_settings(
     value.update(
         {
             "provider": config.llm.provider,
+            "api_format": config.llm.api_format,
             "model": config.llm.default_model,
             "permission_mode": config.permission.mode,
             "base_url": config.llm.base_url,
             "api_key": config.llm.api_key,
             "api_key_env": config.llm.api_key_env,
             "keyless": config.llm.keyless,
+            "context_window": config.llm.context_window,
+            "max_output_tokens": config.llm.max_output_tokens,
+            "temperature": config.llm.temperature,
+            "top_p": config.llm.top_p,
+            "reasoning_effort": config.llm.reasoning_effort,
+            "timeout_s": config.llm.timeout_s,
+            "max_retries": config.llm.max_retries,
+            "cache_control": config.llm.cache_control,
         }
     )
     if models is not None:
@@ -317,7 +392,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             raise SystemExit("Config error: [agent] must be a table")
         unknown_agent: set[str] = set(agent.keys()) - {
             "max_steps", "wrap_up_on_max_steps", "grace_step_on_max_steps",
-            "stuck_max_failures", "stuck_max_total",
+            "stuck_max_failures", "stuck_max_total", "tool_max_concurrency",
         }
         if unknown_agent:
             raise SystemExit(f"Unknown [agent] keys: {', '.join(sorted(unknown_agent))}")
@@ -345,6 +420,13 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                 if not isinstance(val, int) or val < 0:
                     raise SystemExit(f"Config error: agent.{_key} must be a non-negative integer")
                 setattr(config.agent, _key, val)
+        if "tool_max_concurrency" in agent:
+            val = agent["tool_max_concurrency"]
+            if not isinstance(val, int) or isinstance(val, bool) or val < 1:
+                raise SystemExit(
+                    "Config error: agent.tool_max_concurrency must be an integer >= 1"
+                )
+            config.agent.tool_max_concurrency = val
 
     if "budget" in data:
         budget = data["budget"]
@@ -388,8 +470,16 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         unknown_llm: set[str] = set(llm.keys()) - {
             "default_model",
             "provider",
+            "api_format",
             "router",
             "context_window",
+            "max_output_tokens",
+            "temperature",
+            "top_p",
+            "reasoning_effort",
+            "timeout_s",
+            "max_retries",
+            "cache_control",
         }
         if unknown_llm:
             raise SystemExit(f"Unknown [llm] keys: {', '.join(sorted(unknown_llm))}")
@@ -405,6 +495,17 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     "Config error: llm.provider must be 'anthropic' or 'openai'"
                 )
             config.llm.provider = val
+            if "api_format" not in llm:
+                config.llm.api_format = normalize_api_format(None, val)
+        if "api_format" in llm:
+            val = llm["api_format"]
+            if not isinstance(val, str) or val not in API_FORMATS:
+                raise SystemExit(
+                    "Config error: llm.api_format must be 'openai_chat_completions', "
+                    "'anthropic_messages', or 'openai_responses'"
+                )
+            config.llm.api_format = val
+            config.llm.provider = provider_for_api_format(val)
         if "router" in llm:
             val = llm["router"]
             if not isinstance(val, str):
@@ -415,6 +516,36 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, int) or val <= 0:
                 raise SystemExit("Config error: llm.context_window must be a positive integer")
             config.llm.context_window = val
+        for name in ("max_output_tokens", "max_retries"):
+            if name not in llm:
+                continue
+            val = llm[name]
+            minimum = 1 if name == "max_output_tokens" else 0
+            if not isinstance(val, int) or val < minimum:
+                raise SystemExit(f"Config error: llm.{name} must be an integer >= {minimum}")
+            setattr(config.llm, name, val)
+        for name in ("temperature", "top_p"):
+            if name not in llm:
+                continue
+            val = llm[name]
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or not 0 <= val <= 1:
+                raise SystemExit(f"Config error: llm.{name} must be between 0 and 1")
+            setattr(config.llm, name, float(val))
+        if "reasoning_effort" in llm:
+            val = llm["reasoning_effort"]
+            if val not in {"", "low", "medium", "high", "xhigh", "max"}:
+                raise SystemExit("Config error: llm.reasoning_effort is invalid")
+            config.llm.reasoning_effort = str(val)
+        if "timeout_s" in llm:
+            val = llm["timeout_s"]
+            if not isinstance(val, (int, float)) or isinstance(val, bool) or val <= 0:
+                raise SystemExit("Config error: llm.timeout_s must be a positive number")
+            config.llm.timeout_s = float(val)
+        if "cache_control" in llm:
+            val = llm["cache_control"]
+            if not isinstance(val, bool):
+                raise SystemExit("Config error: llm.cache_control must be a boolean")
+            config.llm.cache_control = val
 
     if "trace" in data:
         trace = data["trace"]
@@ -463,8 +594,13 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             raise SystemExit("Config error: [compaction] must be a table")
         unknown_comp: set[str] = set(comp.keys()) - {
             "auto_threshold",
+            "auto_compact_min_tokens",
+            "auto_compact_min_steps",
             "tool_result_limit",
             "tool_result_keep",
+            "sliding_window_size",
+            "compact_cooldown_steps",
+            "circuit_breaker_max_failures",
         }
         if unknown_comp:
             raise SystemExit(f"Unknown [compaction] keys: {', '.join(sorted(unknown_comp))}")
@@ -473,6 +609,14 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
             if not isinstance(val, (int, float)) or not (0.0 <= val <= 1.0):
                 raise SystemExit("Config error: compaction.auto_threshold must be between 0 and 1")
             config.compaction.auto_threshold = float(val)
+        for _key in ("auto_compact_min_tokens", "auto_compact_min_steps"):
+            if _key in comp:
+                val = comp[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(
+                        f"Config error: compaction.{_key} must be a non-negative integer"
+                    )
+                setattr(config.compaction, _key, val)
         if "tool_result_limit" in comp:
             val = comp["tool_result_limit"]
             if not isinstance(val, int) or val <= 0:
@@ -487,6 +631,17 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     "Config error: compaction.tool_result_keep must be a positive integer"
                 )
             config.compaction.tool_result_keep = val
+        _compaction_keys = (
+            "sliding_window_size", "compact_cooldown_steps", "circuit_breaker_max_failures"
+        )
+        for _key in _compaction_keys:
+            if _key in comp:
+                val = comp[_key]
+                if not isinstance(val, int) or val < 0:
+                    raise SystemExit(
+                        f"Config error: compaction.{_key} must be a non-negative integer"
+                    )
+                setattr(config.compaction, _key, val)
 
     if "offload" in data:
         off = data["offload"]
@@ -538,15 +693,15 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         for i, srv in enumerate(servers_raw):
             if not isinstance(srv, dict):
                 raise SystemExit(f"Config error: mcp.servers[{i}] must be a table")
-            name = srv.get("name")
-            if not isinstance(name, str) or not name:
+            srv_name = srv.get("name")
+            if not isinstance(srv_name, str) or not srv_name:
                 raise SystemExit(f"Config error: mcp.servers[{i}].name must be a non-empty string")
             transport = srv.get("transport", "stdio")
             if transport not in ("stdio", "tcp"):
                 raise SystemExit(
                     f"Config error: mcp.servers[{i}].transport must be 'stdio' or 'tcp'"
                 )
-            s = McpServerConfig(name=name, transport=transport)
+            s = McpServerConfig(name=srv_name, transport=transport)
             if "command" in srv:
                 val = srv["command"]
                 if not isinstance(val, str):
@@ -640,6 +795,22 @@ def _apply_env(config: SztuConfig) -> None:
                     f"Config error: {_env} must be an integer, got: {_str!r}"
                 )
 
+    tool_concurrency_str = os.environ.get("SZTU_TOOL_MAX_CONCURRENCY")
+    if tool_concurrency_str is not None:
+        try:
+            tool_concurrency = int(tool_concurrency_str)
+        except ValueError:
+            raise SystemExit(
+                "Config error: SZTU_TOOL_MAX_CONCURRENCY must be an integer, "
+                f"got: {tool_concurrency_str!r}"
+            )
+        if tool_concurrency < 1:
+            raise SystemExit(
+                "Config error: SZTU_TOOL_MAX_CONCURRENCY must be >= 1, "
+                f"got: {tool_concurrency_str!r}"
+            )
+        config.agent.tool_max_concurrency = tool_concurrency
+
     # --- 多智能体工作流环境变量 ---
     for _env, _attr, _minimum in (
         ("SZTU_WORKFLOW_MAX_CONCURRENCY", "max_concurrency", 1),
@@ -667,6 +838,18 @@ def _apply_env(config: SztuConfig) -> None:
                     f" got: {llm_provider!r}"
                 )
         config.llm.provider = llm_provider
+        if os.environ.get("SZTU_LLM_API_FORMAT") is None:
+            config.llm.api_format = normalize_api_format(None, llm_provider)
+
+    llm_api_format = os.environ.get("SZTU_LLM_API_FORMAT")
+    if llm_api_format is not None:
+        if llm_api_format not in API_FORMATS:
+            raise SystemExit(
+                "Config error: SZTU_LLM_API_FORMAT must be a supported API format, "
+                f"got: {llm_api_format!r}"
+            )
+        config.llm.api_format = llm_api_format
+        config.llm.provider = provider_for_api_format(llm_api_format)
 
     # SZTU_* is the supported name. Keep the original KAMA name so existing
     # project .env files remain valid while migrating to the SztuCode prefix.
@@ -724,6 +907,58 @@ def _apply_env(config: SztuConfig) -> None:
                 f"got: {llm_context_window!r}"
             )
 
+    llm_cache_control = os.environ.get("SZTU_LLM_CACHE_CONTROL")
+    if llm_cache_control is not None:
+        config.llm.cache_control = llm_cache_control.lower() not in ("0", "false", "no")
+
+    for env_name, attr, minimum in (
+        ("SZTU_LLM_MAX_OUTPUT_TOKENS", "max_output_tokens", 1),
+        ("SZTU_LLM_MAX_RETRIES", "max_retries", 0),
+    ):
+        raw = os.environ.get(env_name)
+        if raw is None:
+            continue
+        try:
+            value: int | float = int(raw)
+        except ValueError:
+            raise SystemExit(f"Config error: {env_name} must be an integer, got: {raw!r}")
+        if value < minimum:
+            raise SystemExit(f"Config error: {env_name} must be >= {minimum}, got: {raw!r}")
+        setattr(config.llm, attr, value)
+
+    for env_name, attr in (
+        ("SZTU_LLM_TEMPERATURE", "temperature"),
+        ("SZTU_LLM_TOP_P", "top_p"),
+    ):
+        raw = os.environ.get(env_name)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            raise SystemExit(f"Config error: {env_name} must be a number, got: {raw!r}")
+        if not 0 <= value <= 1:
+            raise SystemExit(f"Config error: {env_name} must be between 0 and 1")
+        setattr(config.llm, attr, value)
+
+    reasoning_effort = os.environ.get("SZTU_LLM_REASONING_EFFORT")
+    if reasoning_effort is not None:
+        if reasoning_effort not in {"", "low", "medium", "high", "xhigh", "max"}:
+            raise SystemExit("Config error: SZTU_LLM_REASONING_EFFORT is invalid")
+        config.llm.reasoning_effort = reasoning_effort
+
+    timeout_raw = os.environ.get("SZTU_LLM_TIMEOUT_S")
+    if timeout_raw is not None:
+        try:
+            timeout = float(timeout_raw)
+        except ValueError:
+            raise SystemExit(
+                f"Config error: SZTU_LLM_TIMEOUT_S must be a number, got: {timeout_raw!r}"
+            )
+        if timeout <= 0:
+            raise SystemExit("Config error: SZTU_LLM_TIMEOUT_S must be positive")
+        config.llm.timeout_s = timeout
+
     compact_threshold = os.environ.get("SZTU_COMPACT_THRESHOLD")
     if compact_threshold is not None:
         try:
@@ -771,6 +1006,27 @@ def _apply_env(config: SztuConfig) -> None:
                 "Config error: SZTU_COMPACT_TOOL_KEEP must be an integer, "
                 f"got: {compact_tool_keep!r}"
             )
+
+    for _env, _attr in (
+        ("SZTU_COMPACT_MIN_TOKENS", "auto_compact_min_tokens"),
+        ("SZTU_COMPACT_MIN_STEPS", "auto_compact_min_steps"),
+        ("SZTU_SLIDING_WINDOW_SIZE", "sliding_window_size"),
+        ("SZTU_COMPACT_COOLDOWN", "compact_cooldown_steps"),
+        ("SZTU_COMPACT_CIRCUIT_BREAKER", "circuit_breaker_max_failures"),
+    ):
+        _str = os.environ.get(_env)
+        if _str is not None:
+            try:
+                val = int(_str)
+                if val < 0:
+                    raise SystemExit(
+                        f"Config error: {_env} must be a non-negative integer, got: {_str!r}"
+                    )
+                setattr(config.compaction, _attr, val)
+            except ValueError:
+                raise SystemExit(
+                    f"Config error: {_env} must be an integer, got: {_str!r}"
+                )
 
     # --- 上下文卸载环境变量 ---
     offload_enabled = os.environ.get("SZTU_OFFLOAD_ENABLED")

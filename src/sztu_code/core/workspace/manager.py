@@ -43,6 +43,23 @@ class WorkspaceManager:
         "dist",
         "node_modules",
     }
+    _CHANGE_IGNORED_PARTS = {
+        ".cache",
+        ".git",
+        ".hypothesis",
+        ".mypy_cache",
+        ".nox",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".sztu",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+    }
+    _CHANGE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 
     # 初始化本地工作区管理器，并加载最近打开目录记录
     def __init__(self, recent_file: Path) -> None:
@@ -96,7 +113,11 @@ class WorkspaceManager:
         root = Path(workspace.path)
         branch = self._git(root, ["branch", "--show-current"]).strip()
         changes = self._git(root, ["status", "--short"])
-        changed_files = [line for line in changes.splitlines() if line]
+        changed_files = [
+            line
+            for line in changes.splitlines()
+            if line and not self._is_ignored_status_line(line)
+        ]
         return {
             "workspace": workspace,
             "branch": branch or None,
@@ -232,7 +253,7 @@ class WorkspaceManager:
         raw = self._git(Path(workspace.path), ["status", "--porcelain"])
         changes: list[dict[str, str]] = []
         for line in raw.splitlines():
-            if len(line) < 4:
+            if len(line) < 4 or self._is_ignored_status_line(line):
                 continue
             index_status, worktree_status, path = line[0], line[1], line[3:]
             changes.append({
@@ -249,7 +270,11 @@ class WorkspaceManager:
         args = ["diff", "--no-ext-diff"]
         if relative_path is not None:
             self._resolve_in_workspace(workspace_id, relative_path)
+            if self._is_ignored_change_path(relative_path):
+                return ""
             args.extend(["--", relative_path])
+        else:
+            args.extend(["--", ".", *self._change_exclude_pathspecs()])
         diff = self._git(root, args)
         if relative_path is not None and not diff:
             diff = self._git(root, ["diff", "--cached", "--no-ext-diff", "--", relative_path])
@@ -283,6 +308,8 @@ class WorkspaceManager:
         stats: dict[str, tuple[int, int]] = {}
         for relative_path in paths:
             self._resolve_in_workspace(workspace_id, relative_path)
+            if self._is_ignored_change_path(relative_path):
+                continue
             git_path = relative_path.replace("\\", "/")
             raw = self._git(root, ["diff", "--numstat", "--", git_path]).strip()
             if raw:
@@ -305,6 +332,33 @@ class WorkspaceManager:
             else:
                 stats[relative_path] = (0, 0)
         return stats
+
+    @classmethod
+    def _is_ignored_change_path(cls, relative_path: str) -> bool:
+        normalized = relative_path.replace("\\", "/").strip().strip('"')
+        parts = [part for part in normalized.split("/") if part and part != "."]
+        if any(part in cls._CHANGE_IGNORED_PARTS for part in parts):
+            return True
+        return any(normalized.lower().endswith(suffix) for suffix in cls._CHANGE_IGNORED_SUFFIXES)
+
+    @classmethod
+    def _is_ignored_status_line(cls, line: str) -> bool:
+        path = line[3:] if len(line) >= 4 else ""
+        # Git reports renames as "old -> new"; either side being ignored is
+        # enough to keep generated/cache files out of the review surface.
+        return any(cls._is_ignored_change_path(part.strip()) for part in path.split(" -> "))
+
+    @classmethod
+    def _change_exclude_pathspecs(cls) -> list[str]:
+        directory_patterns = [
+            pattern
+            for part in sorted(cls._CHANGE_IGNORED_PARTS)
+            for pattern in (f":(exclude){part}/**", f":(exclude)**/{part}/**")
+        ]
+        suffix_patterns = [
+            f":(exclude)**/*{suffix}" for suffix in cls._CHANGE_IGNORED_SUFFIXES
+        ]
+        return [*directory_patterns, *suffix_patterns]
 
     # 根据稳定 workspace_id 取回已登记的工作区，不存在时拒绝请求
     def get(self, workspace_id: str) -> Workspace:

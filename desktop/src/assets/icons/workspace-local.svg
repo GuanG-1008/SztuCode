@@ -1,6 +1,0 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
-  <title id="title">Local Workspace</title>
-  <path d="M3.8 8.2C3.8 7.1 4.7 6.2 5.8 6.2H10L11.6 8H18.2C19.3 8 20.2 8.9 20.2 10V17.8C20.2 18.9 19.3 19.8 18.2 19.8H5.8C4.7 19.8 3.8 18.9 3.8 17.8V8.2Z" fill="#F8FAFC" stroke="#172033" stroke-width="1.9" stroke-linejoin="round"/>
-  <path d="M7.2 13.9L10 11.4L12.8 13.9L16.8 10.5" stroke="#2563EB" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="17.6" cy="6.2" r="2.2" fill="#38BDF8"/>
-</svg>

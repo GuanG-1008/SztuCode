@@ -1,6 +1,6 @@
 export type TimelineStatus = "thinking" | "acting" | "observing" | "done" | "failed";
 export type RunOutcome = { status: "success" | "failed" | "interrupted"; reason?: string };
-export type RunStats = { inputTokens: number; outputTokens: number; elapsedSeconds: number };
+export type RunStats = { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; elapsedSeconds: number };
 
 export type ToolCallEntry = {
   id: string;
@@ -10,6 +10,13 @@ export type ToolCallEntry = {
   output?: string;
   error?: string;
   elapsedMs?: number;
+};
+
+export type TimelineEvent = {
+  id: string;
+  kind: "text" | "thinking" | "tool";
+  text?: string;
+  toolCallId?: string;
 };
 
 export type PermissionDecision = "allow_once" | "always_allow" | "deny_once" | "always_deny";
@@ -26,6 +33,15 @@ export type LlmUsage = {
   outputTokens: number;
   contextPct: number;
   model: string;
+  contextWindow: number;
+  availableTokens: number;
+  reservedOutputTokens: number;
+  systemTokens: number;
+  summaryTokens: number;
+  conversationTokens: number;
+  toolTokens: number;
+  compacting?: boolean;
+  compactedTokens?: number;
 };
 
 export type PlanItem = {
@@ -84,7 +100,9 @@ export interface TimelineStep {
   status: TimelineStatus;
   thinking?: string;
   tokens: string[];
+  streamText?: string;
   toolCalls: ToolCallEntry[];
+  events?: TimelineEvent[];
   permission?: PermissionState;
   usage?: LlmUsage;
   userMessage?: string;

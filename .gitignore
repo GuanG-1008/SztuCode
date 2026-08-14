@@ -14,7 +14,6 @@ build/
 .pytest-run-*/
 .vscode/
 .codegraph/
-uv.lock
 .idea/
 .DS_Store
 *.log

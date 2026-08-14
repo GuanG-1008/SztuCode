@@ -183,6 +183,9 @@ class OffloadManager:
     def should_offload(self, tool_name: str, content: str) -> bool:
         if not self._enabled:
             return False
+        # 回读工具已经自行分页，禁止再次卸载形成 read → offload → read 循环
+        if tool_name in {"memory_read", "read_ref"}:
+            return False
         if tool_name in self._force_tools:
             return True
         if len(content) > self._min_chars:

@@ -17,6 +17,7 @@ from sztu_code.core.bus.events import (
     SkillInvokedEvent,
 )
 from sztu_code.core.events.bus import EventBus
+from sztu_code.core.prompts import build_system_prompt
 from sztu_code.core.runs import new_run_id
 from sztu_code.core.session.model import Session, SessionMode
 from sztu_code.core.session.store import SessionStore
@@ -53,12 +54,15 @@ class SessionManager:
         self._workspace_resolver = workspace_resolver
         restored = self._store.list_sessions(include_archived=True)
         for session in restored:
+            # daemon 重启后不存在任何在途 run，磁盘遗留的 active 统一回落为等待输入
+            if session.status == "active":
+                session.status = "waiting_for_input"
+                self._store.write_meta(session)
             self._store.backfill_run_stats(session)
         self._sessions: dict[str, Session] = {session.id: session for session in restored}
         self._locks: dict[str, asyncio.Lock] = {
             session.id: asyncio.Lock() for session in restored
         }
-        self._skill_loader = SkillLoader()
 
     def set_provider(self, provider: LLMProvider | None) -> None:
         self._provider = provider
@@ -75,7 +79,7 @@ class SessionManager:
         session = Session(
             id=sid,
             mode=mode,
-            status="active",
+            status="waiting_for_input",
             title=title,
             created_at=ts,
             updated_at=ts,
@@ -89,7 +93,14 @@ class SessionManager:
         return session
 
     # 处理用户消息，追加 thread 并启动一次 agent run
-    async def send_message(self, sid: str, content: str, *, run_id: str | None = None) -> str:
+    async def send_message(
+        self,
+        sid: str,
+        content: str,
+        *,
+        run_id: str | None = None,
+        images: list[dict[str, Any]] | None = None,
+    ) -> str:
         session = self._get_session(sid)
         lock = self._locks[sid]
         if lock.locked():
@@ -103,7 +114,24 @@ class SessionManager:
                 await self._bus.publish(SessionResumedEvent(session_id=sid, ts=_now()))
 
             run_id = run_id or new_run_id()
-            self._store.append_message(sid, "user", content, run_id=run_id)
+            stored_content: str | list[dict[str, Any]] = content
+            if images:
+                stored_content = [
+                    {"type": "text", "text": content},
+                    *[
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": str(image.get("media_type", "")),
+                                "data": str(image.get("data", "")),
+                            },
+                        }
+                        for image in images
+                        if image.get("data")
+                    ],
+                ]
+            self._store.append_message(sid, "user", stored_content, run_id=run_id)
             await self._bus.publish(
                 SessionMessageReceivedEvent(session_id=sid, content=content, ts=_now())
             )
@@ -112,6 +140,8 @@ class SessionManager:
                 session.title = content[:40]
 
             session.run_ids.append(run_id)
+            # run 开始执行：状态切为 active，结束后统一回落到 waiting_for_input / closed
+            session.status = "active"
             session.updated_at = _now()
             self._store.write_meta(session)
 
@@ -119,14 +149,26 @@ class SessionManager:
             goal = content
             system_prompt_override: str | None = None
             tool_whitelist: list[str] | None = None
+            workspace_root = (
+                self._workspace_resolver(session.workspace_id)
+                if session.workspace_id is not None and self._workspace_resolver is not None
+                else None
+            )
+            skill_loader = SkillLoader(project_root=workspace_root)
             if content.startswith("/"):
                 parts = content[1:].split(None, 1)
                 skill_name = parts[0]
                 arguments = parts[1] if len(parts) > 1 else ""
-                skill = self._skill_loader.resolve(skill_name)
+                skill = skill_loader.resolve(skill_name)
                 if skill is not None:
-                    goal = self._skill_loader.render_prompt(skill, arguments)
-                    system_prompt_override = skill.system_prompt_template
+                    rendered_skill = skill_loader.render_prompt(skill, arguments)
+                    goal = arguments or content
+                    system_prompt_override = "\n\n".join(
+                        [
+                            build_system_prompt(workspace_root=workspace_root),
+                            f"## Active skill: {skill.name}\n{rendered_skill}",
+                        ]
+                    )
                     tool_whitelist = skill.allowed_tools or None
                     await self._bus.publish(
                         SkillInvokedEvent(
@@ -138,11 +180,6 @@ class SessionManager:
                     )
 
             runner = self._runner_factory()
-            workspace_root = (
-                self._workspace_resolver(session.workspace_id)
-                if session.workspace_id is not None and self._workspace_resolver is not None
-                else None
-            )
             try:
                 await runner.run_and_capture(
                     goal,
@@ -226,17 +263,17 @@ class SessionManager:
             session_dir = self._store.session_dir(sid)
             compactor = Compactor(self._bus, session_dir, sid)
             await compactor.notify_compacting("")
-            result = await compactor.compact_messages(messages, self._provider, focus=focus)
-            if result is None:
+            ret = await compactor.compact_messages(messages, self._provider, focus=focus)
+            if ret is None or isinstance(ret, tuple):
                 raise HandlerError(-32021, "compaction failed or not beneficial")
             self._store.write_compacted(sid, [
-                {"role": "user", "content": _continuation_message(result.summary_text)},
+                {"role": "user", "content": _continuation_message(ret.summary_text)},
                 {"role": "assistant", "content": "Understood, I'll continue from this summary."},
             ])
-            await compactor.record_compaction(run_id="", result=result)
+            await compactor.record_compaction(run_id="", result=ret)
             return SessionCompactResult(
-                summary_tokens=result.summary_tokens,
-                saved_tokens=max(0, result.original_token_estimate - result.summary_tokens),
+                summary_tokens=ret.summary_tokens,
+                saved_tokens=max(0, ret.original_token_estimate - ret.summary_tokens),
             )
 
     # 读取指定 session 的完整 thread 历史

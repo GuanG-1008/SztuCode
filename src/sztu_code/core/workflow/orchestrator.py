@@ -6,8 +6,6 @@ from collections.abc import Awaitable
 from datetime import UTC, datetime
 from typing import Protocol
 
-from pydantic import ValidationError
-
 from sztu_code.core.bus.events import (
     WorkflowFinishedEvent,
     WorkflowHandoffEvent,

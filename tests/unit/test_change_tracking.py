@@ -81,3 +81,22 @@ def test_active_changes_disappear_after_a_successful_revert(tmp_path: Path) -> N
     revert_manifest_changes(tracker.manifest_path, workspace, ["agent.txt"])
 
     assert active_manifest_changes(manifest, workspace) == []
+
+
+def test_tracker_ignores_cache_files_but_keeps_business_cache_modules(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tracker = WorkspaceChangeTracker(workspace, tmp_path / "run", "run-cache")
+    module = workspace / "src" / "cache.py"
+    cache_file = workspace / ".pytest_cache" / "state.json"
+    bytecode = workspace / "src" / "__pycache__" / "cache.pyc"
+    module.parent.mkdir()
+    cache_file.parent.mkdir()
+    bytecode.parent.mkdir()
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_file.write_text("{}\n", encoding="utf-8")
+    bytecode.write_bytes(b"compiled")
+
+    records = tracker.finalize()
+
+    assert [record["path"] for record in records] == ["src/cache.py"]

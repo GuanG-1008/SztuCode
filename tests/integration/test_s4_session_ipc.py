@@ -49,7 +49,7 @@ async def test_session_create_history_close_over_ipc(
     )
     assert "result" in created, created
     session_id = created["result"]["session_id"]
-    assert created["result"]["status"] == "active"
+    assert created["result"]["status"] == "waiting_for_input"
 
     listed = await _send_recv(
         reader,

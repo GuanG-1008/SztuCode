@@ -94,6 +94,32 @@ def test_preprocess_windows_commands() -> None:
     assert _preprocess_command("cd src && ls") == "cd src && ls"
 
 
+# 功能：验证 cmd 风格命令（where/set/nul/%VAR%/type/cls）被转译为 git-bash 等价物
+# 设计：逐条断言转换结果，并验证 bash 内建 type -p 等不误伤
+def test_preprocess_cmd_isms_translated() -> None:
+    from sztu_code.core.tools.builtin.bash import _preprocess_command
+
+    assert _preprocess_command("where git") == "which git"
+    assert _preprocess_command("dir 2>nul") == "ls 2>/dev/null"
+    assert _preprocess_command("find . >nul") == "find . >/dev/null"
+    assert (
+        _preprocess_command("set PYTHONIOENCODING=utf-8 && python -V")
+        == "export PYTHONIOENCODING=utf-8 && python -V"
+    )
+    assert _preprocess_command("cd %USERPROFILE%") == "cd $USERPROFILE"
+    assert _preprocess_command("cls") == "clear"
+    assert _preprocess_command("type config.py") == "cat config.py"
+    # bash 内建 `type -p` 不应被误转为 cat
+    assert _preprocess_command("type -p bash") == "type -p bash"
+    assert _preprocess_command("del tmp.txt") == "rm tmp.txt"
+    assert _preprocess_command("copy a.txt b.txt") == "cp a.txt b.txt"
+    # dir 的 /s /b 标志映射到 ls 的 -R / -1
+    assert _preprocess_command("dir /s /b src") == "ls -R src"
+    assert _preprocess_command("dir /s src") == "ls -R src"
+    assert _preprocess_command("dir /b src") == "ls -1 src"
+    assert _preprocess_command("dir src") == "ls src"
+
+
 # 功能：验证安装/更新依赖命令被 bash 工具直接拦截不执行
 # 设计：pip/npm/apt/ensurepip 等命令应返回 is_error 且内容含 blocked，不触发子进程
 async def test_install_commands_blocked() -> None:

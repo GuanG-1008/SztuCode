@@ -10,12 +10,20 @@ from sztu_code.core.bus.events import (
     StepFinishedEvent,
     StepStartedEvent,
     StuckLoopEvent,
+    ToolSchedulerMode,
 )
 from sztu_code.core.compact.budget import truncate_tool_results
 from sztu_code.core.context import ContinueReason, ExecutionContext, TerminationReason
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.base import LLMProvider
+from sztu_code.core.llm.types import ToolCallBlock
+from sztu_code.core.permissions.policy import PermissionDecision
 from sztu_code.core.stuck_tracker import stuck_signature
+from sztu_code.core.tools.base import (
+    _PERMISSION_GRANT_KEY,
+    ToolPermission,
+    ToolResult,
+)
 from sztu_code.core.tools.invocation import invoke_tool
 from sztu_code.core.tools.registry import ToolRegistry
 
@@ -44,6 +52,80 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# 检查一批调用是否均为无需审批的显式只读工具，未知或分类异常一律保守降级
+def _can_run_read_only_batch_concurrently(
+    registry: ToolRegistry,
+    tool_calls: list[ToolCallBlock],
+    permission_manager: PermissionManager | None,
+) -> list[ToolPermission] | None:
+    permissions: list[ToolPermission] = []
+    for tool_call in tool_calls:
+        tool = registry.get(tool_call.name)
+        if tool is None:
+            return None
+        runtime_params = dict(tool_call.input)
+        runtime_params.pop("description", None)
+        runtime_params.pop(_PERMISSION_GRANT_KEY, None)
+        try:
+            permission = tool.classify_permission(runtime_params)
+        except Exception:
+            return None
+        if (
+            not isinstance(permission, ToolPermission)
+            or permission is not ToolPermission.READ_ONLY
+        ):
+            return None
+        if permission_manager is not None:
+            try:
+                decision = permission_manager.evaluate(tool_call.name, runtime_params)
+            except Exception:
+                return None
+            if (
+                not isinstance(decision, PermissionDecision)
+                or decision is not PermissionDecision.ALLOW
+            ):
+                return None
+        permissions.append(permission)
+    return permissions
+
+
+# 在有界信号量内执行单个工具调用并附加统一调度 Trace 元数据
+async def _invoke_scheduled_tool(
+    registry: ToolRegistry,
+    tool_call: ToolCallBlock,
+    bus: EventBus,
+    run_id: str,
+    permission_manager: PermissionManager | None,
+    session_id: str,
+    semaphore: asyncio.Semaphore,
+    batch_id: str,
+    scheduler_mode: ToolSchedulerMode,
+    queued_at: str,
+    queued_monotonic: float,
+    classified_permission: ToolPermission | None = None,
+) -> ToolResult:
+    try:
+        async with semaphore:
+            return await invoke_tool(
+                registry,
+                tool_call,
+                bus,
+                run_id,
+                permission_manager=permission_manager,
+                session_id=session_id,
+                batch_id=batch_id,
+                scheduler_mode=scheduler_mode,
+                queued_at=queued_at,
+                queued_monotonic=queued_monotonic,
+                classified_permission=classified_permission,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Isolate an unexpected call-level failure from the rest of the batch.
+        return ToolResult(content=str(exc), is_error=True, error_type="runtime_error")
+
+
 class AgentLoop:
     # 初始化循环所需依赖：LLM provider、工具注册表、事件总线、
     # 以及可选的权限管理器、拒绝追踪器、压缩器、卸载管理器和 session ID
@@ -57,6 +139,8 @@ class AgentLoop:
         denial_tracker: DenialTracker | None = None,
         compactor: Compactor | None = None,
         compact_threshold: float = 0.80,
+        auto_compact_min_tokens: int = 0,
+        auto_compact_min_steps: int = 0,
         tool_result_limit: int = 8_000,
         tool_result_keep: int = 4_000,
         session_id: str = "",
@@ -65,7 +149,14 @@ class AgentLoop:
         wrap_up_on_max_steps: bool = True,
         grace_step_on_max_steps: bool = True,
         stuck_tracker: StuckLoopTracker | None = None,
+        # 滑动窗口压缩参数
+        sliding_window_size: int = 5,
+        compact_cooldown_steps: int = 3,
+        circuit_breaker_max_failures: int = 3,
+        tool_max_concurrency: int = 4,
     ) -> None:
+        if tool_max_concurrency < 1:
+            raise ValueError("tool_max_concurrency must be at least 1")
         self._provider = provider
         self._registry = registry
         self._bus = bus
@@ -73,6 +164,8 @@ class AgentLoop:
         self._denial_tracker = denial_tracker
         self._compactor = compactor
         self._compact_threshold = compact_threshold
+        self._auto_compact_min_tokens = auto_compact_min_tokens
+        self._auto_compact_min_steps = auto_compact_min_steps
         self._tool_result_limit = tool_result_limit
         self._tool_result_keep = tool_result_keep
         self._session_id = session_id
@@ -81,6 +174,15 @@ class AgentLoop:
         self._wrap_up_on_max_steps = wrap_up_on_max_steps
         self._grace_step_on_max_steps = grace_step_on_max_steps
         self._stuck_tracker = stuck_tracker
+        # 滑动窗口压缩配置
+        self._sliding_window_size = sliding_window_size
+        self._compact_cooldown_steps = compact_cooldown_steps
+        self._circuit_breaker_max_failures = circuit_breaker_max_failures
+        self._tool_max_concurrency = tool_max_concurrency
+        # 压缩冷却期：两次压缩之间至少间隔 N 步；冷启动即可触发
+        self._last_compact_step: int = -15
+        # 熔断器日志去重：避免每步都刷屏
+        self._circuit_breaker_logged: bool = False
 
     # 驱动 plan→act→observe 循环直到上下文终止；CancelledError 向上传播
     async def run(self, context: ExecutionContext) -> None:
@@ -91,13 +193,21 @@ class AgentLoop:
         canvas: TaskCanvas = context.canvas
 
         while not context.is_done():
+            # Ensure a prepared summary replaces the oversized snapshot before
+            # the next model request instead of only at runner shutdown.
+            if self._compactor is not None:
+                await self._compactor.wait_pending()
             # 惰性记录 run 开始墙钟（runner/子 agent 都可能未设置）
             if context.started_at <= 0.0:
                 context.started_at = time.monotonic()
 
             # [budget] 墙钟上限预检：超时直接终止，不再发起 LLM 调用
+            # 若已有 result（上一步已产出内容），优先保留而非丢弃
             if context.wall_clock_exceeded():
-                context.mark_interrupted("max_wall_clock_exceeded")
+                if context.result:
+                    context.mark_interrupted("max_wall_clock_exceeded")
+                else:
+                    context.mark_failed("max_wall_clock_exceeded")
                 break
 
             context.step += 1
@@ -181,6 +291,7 @@ class AgentLoop:
             if response.usage is not None:
                 context.total_input_tokens += response.usage.input_tokens
                 context.total_output_tokens += response.usage.output_tokens
+                context.total_cache_read_input_tokens += response.usage.cache_read_input_tokens
 
             # 在写入历史前补齐工具调用标题，确保回放与实时事件使用同一份参数
             for tool_call in response.tool_calls:
@@ -212,13 +323,74 @@ class AgentLoop:
                         tool_names=[tc.name for tc in response.tool_calls],
                         status="running",
                     )
-                for tc in response.tool_calls:
-                    canvas_tool_names.append(tc.name)
-                    result = await invoke_tool(
-                        self._registry, tc, self._bus, context.run_id,
-                        permission_manager=self._permission_manager,
-                        session_id=self._session_id,
+                batch_id = f"{context.run_id}:{context.step}"
+                queued_at = _now()
+                queued_monotonic = time.monotonic()
+                batch_permissions: list[ToolPermission] | None = None
+                if self._tool_max_concurrency > 1 and len(response.tool_calls) > 1:
+                    batch_permissions = _can_run_read_only_batch_concurrently(
+                        self._registry,
+                        response.tool_calls,
+                        self._permission_manager,
                     )
+                use_concurrent_scheduler = (
+                    self._tool_max_concurrency > 1
+                    and len(response.tool_calls) > 1
+                    and batch_permissions is not None
+                )
+                if use_concurrent_scheduler:
+                    assert batch_permissions is not None
+                    semaphore = asyncio.Semaphore(self._tool_max_concurrency)
+                    concurrent_results = await asyncio.gather(
+                        *(
+                            _invoke_scheduled_tool(
+                                self._registry,
+                                tool_call,
+                                self._bus,
+                                context.run_id,
+                                self._permission_manager,
+                                self._session_id,
+                                semaphore,
+                                batch_id,
+                                "concurrent",
+                                queued_at,
+                                queued_monotonic,
+                                batch_permissions[index],
+                            )
+                            for index, tool_call in enumerate(response.tool_calls)
+                        ),
+                        return_exceptions=True,
+                    )
+                else:
+                    concurrent_results = None
+
+                for index, tc in enumerate(response.tool_calls):
+                    if concurrent_results is None:
+                        result = await invoke_tool(
+                            self._registry,
+                            tc,
+                            self._bus,
+                            context.run_id,
+                            permission_manager=self._permission_manager,
+                            session_id=self._session_id,
+                            batch_id=batch_id,
+                            scheduler_mode="serial",
+                            queued_at=queued_at,
+                            queued_monotonic=queued_monotonic,
+                        )
+                    else:
+                        scheduled_result = concurrent_results[index]
+                        if isinstance(scheduled_result, asyncio.CancelledError):
+                            raise scheduled_result
+                        if not isinstance(scheduled_result, ToolResult):
+                            result = ToolResult(
+                                content=str(scheduled_result),
+                                is_error=True,
+                                error_type="runtime_error",
+                            )
+                        else:
+                            result = scheduled_result
+                    canvas_tool_names.append(tc.name)
                     if result.is_error:
                         has_errors = True
                         # Claude Code 风格错误累积：非权限类错误 ≥3 次触发熔断
@@ -268,6 +440,7 @@ class AgentLoop:
                         summary="; ".join(canvas_summaries[:3]),
                         refs=canvas_refs,
                     )
+                    context.add_canvas_update()
 
             elif response.stop_reason == "max_tokens" and response.tool_calls:
                 # Output token limit hit mid-tool-call; input is incomplete.
@@ -294,7 +467,7 @@ class AgentLoop:
             ):
                 pending_summaries = await self._wait_for_background(context)
 
-            # Termination check — end_turn wins over max_steps if both hit on same step
+            # Termination check — end_turn wins over everything if it hits
             if response.stop_reason == "end_turn":
                 base = response.text or ""
                 if pending_summaries:
@@ -302,7 +475,19 @@ class AgentLoop:
                 context.result = base
                 context.mark_success()
 
-            # --- Claude Code 风格中间层终止检测 ---
+            # --- 终止检测（Claude Code 风格优先级链）---
+            # 顺序：end_turn > token_budget > wall_clock > blocking_limit
+            #        > max_budget_usd > repeated_error > max_steps
+            # token/wall_clock 在 max_steps 之前检查，避免预算超了还要烧 wrap_up 调用
+
+            # token_budget: 累计 token 已超限 → 直接终止，不做 wrap_up
+            elif context.token_budget_exhausted():
+                context.mark_interrupted("max_tokens_exceeded")
+
+            # wall_clock: 累计时间已超限 → 直接终止
+            elif context.wall_clock_exceeded():
+                context.mark_interrupted("max_wall_clock_exceeded")
+
             # blocking_limit: 上下文即将溢出
             elif (
                 response.usage is not None
@@ -351,11 +536,6 @@ class AgentLoop:
                         context.result = "\n".join(pending_summaries)
                     context.mark_interrupted("exceeded_max_steps")
 
-            # [budget] token 上限：run 仍需继续但累计已超限 → 直接终止（end_turn 成功优先）
-            if not context.is_done() and context.token_budget_exhausted():
-                context.mark_interrupted("max_tokens_exceeded")
-                break
-
             # Claude Code 风格继续原因追踪
             if not context.is_done() and response.stop_reason == "tool_use":
                 context.last_continue_reason = ContinueReason.NEXT_TURN
@@ -375,23 +555,75 @@ class AgentLoop:
 
             # 工具结果追加完毕（messages 末尾为 user）后检查压缩，仅在 run 继续时触发
             # 此时压缩结果 [user_summary, assistant_ack] 对下一次 LLM 调用是合法输入
+            # 多条件触发（Claude Code 风格）：context_pct OR 累计 tokens OR 步数 OR turn 数
             if (
                 not context.is_done()
                 and response.stop_reason != "end_turn"
                 and self._compactor is not None
-                and self._compact_threshold > 0
                 and response.usage is not None
             ):
-                trigger_pct = response.usage.context_pct
-                if response.usage.input_tokens > 0 and added_estimate:
-                    trigger_pct = (
-                        response.usage.context_pct
-                        * (response.usage.input_tokens + added_estimate)
-                        / response.usage.input_tokens
-                    )
-                if trigger_pct >= self._compact_threshold:
-                    # Phase 3a: 异步压缩 — 不阻塞 Agent 继续处理下一步
-                    self._compactor.compact_async(context, self._provider)
+                should_compact = False
+                # 条件 A: context_pct 超过百分比阈值
+                if self._compact_threshold > 0:
+                    trigger_pct = response.usage.context_pct
+                    if response.usage.input_tokens > 0 and added_estimate:
+                        trigger_pct = (
+                            response.usage.context_pct
+                            * (response.usage.input_tokens + added_estimate)
+                            / response.usage.input_tokens
+                        )
+                    if trigger_pct >= self._compact_threshold:
+                        should_compact = True
+                # 条件 B: 累计 input tokens 超过绝对值阈值
+                if (
+                    not should_compact
+                    and self._auto_compact_min_tokens > 0
+                    and context.total_input_tokens >= self._auto_compact_min_tokens
+                ):
+                    should_compact = True
+                # 条件 C: 步数超过阈值
+                if (
+                    not should_compact
+                    and self._auto_compact_min_steps > 0
+                    and context.step >= self._auto_compact_min_steps
+                ):
+                    should_compact = True
+                # 条件 D: 滑动窗口 — turn 数超过窗口 + 缓冲
+                if (
+                    not should_compact
+                    and self._sliding_window_size > 0
+                ):
+                    from sztu_code.core.compact.compactor import _split_into_turns
+                    turns = _split_into_turns(context.messages)
+                    body_turns = turns[1:] if turns else []
+                    if len(body_turns) > self._sliding_window_size + 2:
+                        should_compact = True
+                if should_compact:
+                    # 熔断器检查：连续压缩失败超阈值则禁用自动压缩
+                    if (
+                        self._circuit_breaker_max_failures > 0
+                        and context.compaction_failure_count >= self._circuit_breaker_max_failures
+                    ):
+                        if not self._circuit_breaker_logged:
+                            log.warning(
+                                "compaction circuit breaker tripped failures=%d session=%s — "
+                                "auto-compaction disabled for this run",
+                                context.compaction_failure_count, self._session_id,
+                            )
+                            self._circuit_breaker_logged = True
+                        should_compact = False
+                    # 压缩冷却期：两次压缩至少间隔 N 步，防止压缩→失忆→重读→触发压缩死循环
+                    elif self._compact_cooldown_steps > 0 and (
+                        context.step - self._last_compact_step < self._compact_cooldown_steps
+                    ):
+                        should_compact = False
+                    else:
+                        # 滑动窗口异步压缩 — 不阻塞 Agent 继续处理下一步
+                        self._compactor.compact_async(
+                            context, self._provider,
+                            sliding_window_size=self._sliding_window_size,
+                        )
+                        self._last_compact_step = context.step
 
             await self._bus.publish(
                 StepFinishedEvent(run_id=context.run_id, step=context.step, ts=_now())
