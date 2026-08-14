@@ -132,6 +132,166 @@ new goal
         )
 
 
+class _CancelableCompactingProvider:
+    def __init__(self) -> None:
+        self._calls = 0
+        self.compact_started = asyncio.Event()
+        self.main_waiting = asyncio.Event()
+        self.compact_cancelled = False
+
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tool_schemas: list[dict[str, object]],
+        bus: EventBus,
+        run_id: str,
+        *,
+        step: int = 0,
+        system: str | None = None,
+    ) -> LlmResponse:
+        if run_id == "compact":
+            self.compact_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.compact_cancelled = True
+                raise
+
+        self._calls += 1
+        if self._calls == 1:
+            return LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[ToolCallBlock(id="t1", name="unknown_tool", input={})],
+                usage=UsageStats(
+                    input_tokens=100_000,
+                    output_tokens=10,
+                    context_pct=0.9,
+                ),
+            )
+
+        self.main_waiting.set()
+        await asyncio.Future()
+
+
+class _AsyncCompactingProvider:
+    def __init__(self) -> None:
+        self._calls = 0
+        self.compact_started = asyncio.Event()
+        self.compact_completed = asyncio.Event()
+        self._allow_compact = asyncio.Event()
+        self._summary = """\
+## 1. Original Goal
+finish without session
+## 2. Completed Steps
+- queued compaction
+## 3. Key Constraints & Discoveries
+- no session store
+## 4. Current File State
+- none
+## 5. Remaining TODOs
+- none
+## 6. Critical Data
+- none
+"""
+
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tool_schemas: list[dict[str, object]],
+        bus: EventBus,
+        run_id: str,
+        *,
+        step: int = 0,
+        system: str | None = None,
+    ) -> LlmResponse:
+        if run_id == "compact":
+            self.compact_started.set()
+            await self._allow_compact.wait()
+            await asyncio.sleep(0)
+            self.compact_completed.set()
+            return LlmResponse(
+                stop_reason="end_turn",
+                text=self._summary,
+                usage=UsageStats(input_tokens=100_000, output_tokens=10),
+            )
+
+        self._calls += 1
+        if self._calls == 1:
+            return LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[ToolCallBlock(id="t1", name="unknown_tool", input={})],
+                usage=UsageStats(
+                    input_tokens=100_000,
+                    output_tokens=10,
+                    context_pct=0.9,
+                ),
+            )
+
+        self._allow_compact.set()
+        return LlmResponse(
+            stop_reason="end_turn",
+            text="done",
+            usage=UsageStats(input_tokens=200, output_tokens=10),
+        )
+
+
+class _FailingCompactingProvider:
+    def __init__(self) -> None:
+        self._calls = 0
+        self.compact_started = asyncio.Event()
+        self.compact_completed = asyncio.Event()
+        self.main_failed = asyncio.Event()
+        self._summary = """\
+## 1. Original Goal
+survive failure
+## 2. Completed Steps
+- compaction drained during failure
+## 3. Key Constraints & Discoveries
+- main loop failed after scheduling compaction
+## 4. Current File State
+- none
+## 5. Remaining TODOs
+- inspect failure
+## 6. Critical Data
+- boom
+"""
+
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tool_schemas: list[dict[str, object]],
+        bus: EventBus,
+        run_id: str,
+        *,
+        step: int = 0,
+        system: str | None = None,
+    ) -> LlmResponse:
+        if run_id == "compact":
+            self.compact_started.set()
+            await self.main_failed.wait()
+            self.compact_completed.set()
+            return LlmResponse(
+                stop_reason="end_turn",
+                text=self._summary,
+                usage=UsageStats(input_tokens=100_000, output_tokens=10),
+            )
+
+        self._calls += 1
+        if self._calls == 1:
+            return LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[ToolCallBlock(id="t1", name="unknown_tool", input={})],
+                usage=UsageStats(
+                    input_tokens=100_000,
+                    output_tokens=10,
+                    context_pct=0.9,
+                ),
+            )
+
+        self.main_failed.set()
+        raise RuntimeError("boom")
+
+
 # --- helpers -----------------------------------------------------------------
 
 
@@ -162,6 +322,14 @@ async def _run(
     )
     await runner.run(goal)
     return collected
+
+
+def _read_event_types(events_path: Path) -> list[str]:
+    return [
+        json.loads(line)["type"]
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
 
 
 # --- tests -------------------------------------------------------------------
@@ -418,12 +586,135 @@ async def test_auto_compact_writes_summary_to_thread(tmp_path: Path) -> None:
         store=store,
     )
     # Phase 3a: 等待异步压缩完成（后台 Task 需要事件循环调度）
-    await asyncio.sleep(0.1)
-
     messages = store.read_messages("sess-1")
     assert messages[0]["role"] == "user"
     assert "Original Goal" in messages[0]["content"]
     assert messages[1]["role"] == "assistant"
+    event_types = [
+        json.loads(line)["type"]
+        for line in (store.runs_dir("sess-1") / "run-compact" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert "context.compacted" in event_types
+    assert event_types.index("context.compacted") < event_types.index("run.finished")
+    assert event_types[-1] == "run.finished"
+
+
+async def test_cancelled_run_cancels_pending_compaction(tmp_path: Path) -> None:
+    cfg = _config()
+    cfg.compaction.auto_threshold = 0.8
+    store = SessionStore(tmp_path / "sessions")
+    session = Session(
+        id="sess-1",
+        mode="chat",
+        status="active",
+        title="",
+        created_at="t",
+        updated_at="t",
+    )
+    store.write_meta(session)
+    store.append_message("sess-1", "user", "old goal")
+    store.append_message("sess-1", "user", "new goal with enough history")
+
+    provider = _CancelableCompactingProvider()
+    runner = AgentRunner(
+        cfg,
+        provider=provider,  # type: ignore[arg-type]
+        runs_dir=tmp_path / "runs",
+    )
+    task = asyncio.create_task(
+        runner.run_and_capture(
+            "new goal",
+            run_id="run-cancel",
+            session=session,
+            store=store,
+        )
+    )
+
+    await provider.compact_started.wait()
+    await provider.main_waiting.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert provider.compact_cancelled is True
+    event_types = [
+        json.loads(line)["type"]
+        for line in (store.runs_dir("sess-1") / "run-cancel" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert "context.compacted" not in event_types
+    assert event_types[-1] == "run.finished"
+
+
+async def test_run_without_session_waits_for_pending_compaction(tmp_path: Path) -> None:
+    cfg = _config()
+    cfg.compaction.auto_threshold = 0.8
+    provider = _AsyncCompactingProvider()
+    runner = AgentRunner(
+        cfg,
+        provider=provider,  # type: ignore[arg-type]
+        runs_dir=tmp_path,
+    )
+
+    outcome = await runner.run_and_capture("new goal", run_id="run-no-session")
+
+    assert outcome.status == "success"
+    assert provider.compact_started.is_set()
+    assert provider.compact_completed.is_set()
+    run_path = tmp_path / "run-no-session"
+    assert len(list(run_path.glob("summary_*.md"))) == 1
+    event_types = _read_event_types(run_path / "events.jsonl")
+    assert "context.compacted" in event_types
+    assert event_types.index("context.compacted") < event_types.index("run.finished")
+    assert event_types[-1] == "run.finished"
+
+
+async def test_failed_run_waits_for_pending_compaction(tmp_path: Path) -> None:
+    cfg = _config()
+    cfg.compaction.auto_threshold = 0.8
+    store = SessionStore(tmp_path / "sessions")
+    session = Session(
+        id="sess-1",
+        mode="chat",
+        status="active",
+        title="",
+        created_at="t",
+        updated_at="t",
+    )
+    store.write_meta(session)
+    store.append_message("sess-1", "user", "old goal")
+    store.append_message("sess-1", "user", "new goal with enough history")
+
+    provider = _FailingCompactingProvider()
+    runner = AgentRunner(
+        cfg,
+        provider=provider,  # type: ignore[arg-type]
+        runs_dir=tmp_path / "runs",
+    )
+
+    outcome = await runner.run_and_capture(
+        "new goal",
+        run_id="run-failure",
+        session=session,
+        store=store,
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.reason == "llm_error"
+    assert provider.compact_started.is_set()
+    assert provider.compact_completed.is_set()
+    messages = store.read_messages("sess-1")
+    assert "Original Goal" in messages[0]["content"]
+    event_types = _read_event_types(store.runs_dir("sess-1") / "run-failure" / "events.jsonl")
+    assert "context.compacted" in event_types
+    assert event_types.index("context.compacted") < event_types.index("run.finished")
+    assert event_types[-1] == "run.finished"
 
 
 # 功能：验证 session run 中注册了 note_save，工具调用会写入 notes.md

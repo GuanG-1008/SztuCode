@@ -351,6 +351,13 @@ class AgentRunner:
                             ts=_now(),
                         )
                     )
+            if compactor is not None:
+                await compactor.wait_pending(cancel_pending=cancelled)
+            if session is not None and store is not None:
+                if context.compacted:
+                    store.write_compacted(session.id, context.messages)
+                else:
+                    store.append_messages(session.id, context.messages[prefill_len:], run_id=run_id)
             final_stats = RunStats(
                 input_tokens=context.total_input_tokens,
                 output_tokens=context.total_output_tokens,
@@ -374,14 +381,6 @@ class AgentRunner:
                 )
             )
 
-        if session is not None and store is not None:
-            # Phase 3a: 等待后台异步压缩完成（compactor 为 None 时跳过）
-            if compactor is not None:
-                await compactor.wait_pending()
-            if context.compacted:
-                store.write_compacted(session.id, context.messages)
-            else:
-                store.append_messages(session.id, context.messages[prefill_len:], run_id=run_id)
 
         if cancelled:
             raise asyncio.CancelledError()
