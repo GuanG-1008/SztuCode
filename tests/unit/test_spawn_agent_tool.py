@@ -417,6 +417,33 @@ async def test_budget_fields_propagate_to_child(tmp_path: Path, monkeypatch: pyt
     assert captured[0].max_wall_clock_s == 30
 
 
+# 功能：验证子 agent 会继承父 agent 已检测并渲染好的项目画像上下文
+# 设计：替换 AgentLoop.run 捕获子上下文，避免调用真实模型，并直接断言继承内容不会丢失
+async def test_child_inherits_project_profile_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent_context = ExecutionContext(
+        run_id="parent-context",
+        goal="parent goal",
+        max_steps=5,
+        project_profile_context="Language: Python\nRecommended unit test: uv run pytest",
+    )
+    captured: list[ExecutionContext] = []
+
+    # 捕获子运行上下文并直接标记成功，隔离继承断言
+    async def fake_run(self: Any, context: ExecutionContext) -> None:
+        captured.append(context)
+        context.mark_success()
+
+    monkeypatch.setattr("sztu_code.core.subagent.tool.AgentLoop.run", fake_run)
+    tool, _, _ = _make_tool(tmp_path, parent_context=parent_context)
+
+    result = await tool.invoke({"description": "child task", "prompt": "inspect project"})
+
+    assert not result.is_error
+    assert captured[0].project_profile_context == parent_context.project_profile_context
+
+
 # 功能：验证父代理的工具并发上限会继承给子 AgentLoop
 # 设计：替换 child loop 的 run 捕获实例私有配置，覆盖多代理传播链而不依赖实际工具执行
 async def test_tool_concurrency_propagates_to_child(

@@ -134,6 +134,8 @@ from sztu_code.core.bus.commands import (
     WorkspaceListResult,
     WorkspaceOpenCommand,
     WorkspaceOpenResult,
+    WorkspaceProfileCommand,
+    WorkspaceProfileResult,
     WorkspaceResumeCommand,
     WorkspaceResumeResult,
     WorkspaceStatusCommand,
@@ -461,6 +463,16 @@ class CoreApp:
             is_git_repository=bool(status["is_git_repository"]),
             changed_file_count=changed_file_count,
         )
+
+    # 返回工作区离线检测出的结构化项目画像，refresh 仅重新读取磁盘而不执行建议命令
+    async def _workspace_profile_handler(self, params: dict[str, Any]) -> WorkspaceProfileResult:
+        assert self._workspaces is not None
+        cmd = WorkspaceProfileCommand.model_validate(params)
+        try:
+            profile = self._workspaces.profile(cmd.workspace_id, refresh=cmd.refresh)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return WorkspaceProfileResult(profile=profile)
 
     # 返回指定工作区子路径的受限目录树
     async def _workspace_tree_handler(self, params: dict[str, Any]) -> WorkspaceTreeResult:
@@ -1705,6 +1717,7 @@ class CoreApp:
         server.register("workspace.resume", self._workspace_resume_handler)
         server.register("workspace.delete", self._workspace_delete_handler)
         server.register("workspace.status", self._workspace_status_handler)
+        server.register("workspace.profile", self._workspace_profile_handler)
         server.register("workspace.tree", self._workspace_tree_handler)
         server.register("file.read", self._file_read_handler)
         server.register("file.search", self._file_search_handler)

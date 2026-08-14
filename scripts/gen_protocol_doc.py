@@ -70,6 +70,8 @@ from sztu_code.core.bus.commands import (
     SkillListResult,
     SkillSetEnabledCommand,
     SkillSetEnabledResult,
+    WorkspaceProfileCommand,
+    WorkspaceProfileResult,
 )
 from sztu_code.core.bus.envelope import EventPushEnvelope
 from sztu_code.core.bus.events import (
@@ -223,6 +225,10 @@ def generate() -> str:
         _model_section("AgentRunCommand", AgentRunCommand, agent_run_req_example),
         "\n",
         _model_section("AgentRunResult", AgentRunResult, agent_run_resp_example),
+        "\n",
+        _model_section("WorkspaceProfileCommand", WorkspaceProfileCommand),
+        "\n",
+        _model_section("WorkspaceProfileResult", WorkspaceProfileResult),
         "\n",
         _model_section("ChangeListCommand", ChangeListCommand),
         "\n",

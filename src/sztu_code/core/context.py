@@ -36,6 +36,7 @@ class ExecutionContext:
     session_notes: str = ""
     global_context: str = ""
     project_context: str = ""
+    project_profile_context: str = ""
     base_system_prompt: str = ""  # 分层基础提示词（runner 构建），空则回退默认
     messages: list[dict[str, Any]] = field(default_factory=list)
     step: int = 0
@@ -83,6 +84,8 @@ class ExecutionContext:
             parts.append("\n\n## Global Context\n" + self.global_context.strip())
         if self.project_context.strip():
             parts.append("\n\n## Project Context\n" + self.project_context.strip())
+        if self.project_profile_context.strip():
+            parts.append("\n\n## Project Profile\n" + self.project_profile_context.strip())
         if self.session_notes.strip():
             parts.append(
                 "\n\n## Session Notes\n"

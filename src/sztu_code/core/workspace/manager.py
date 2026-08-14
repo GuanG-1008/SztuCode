@@ -10,6 +10,8 @@ from codecs import BOM_UTF8, BOM_UTF16_BE, BOM_UTF16_LE
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from sztu_code.core.workspace.project_profile import ProjectProfile, detect_project_profile
+
 
 @dataclass(frozen=True)
 class Workspace:
@@ -65,6 +67,7 @@ class WorkspaceManager:
     def __init__(self, recent_file: Path) -> None:
         self._recent_file = recent_file.expanduser()
         self._workspaces: dict[str, Workspace] = {}
+        self._profiles: dict[str, ProjectProfile] = {}
         self._load_recent()
 
     # 打开本地目录并将其加入最近工作区列表
@@ -74,6 +77,7 @@ class WorkspaceManager:
             raise ValueError("workspace path must be an existing directory")
         workspace = self._make_workspace(resolved, archived=False)
         self._workspaces[workspace.id] = workspace
+        self._profiles.pop(workspace.id, None)
         self._save_recent()
         return workspace
 
@@ -105,6 +109,7 @@ class WorkspaceManager:
     def delete(self, workspace_id: str) -> None:
         self.get(workspace_id)  # 不存在时抛错
         del self._workspaces[workspace_id]
+        self._profiles.pop(workspace_id, None)
         self._save_recent()
 
     # 返回工作区的 Git 分支和未提交文件摘要
@@ -124,6 +129,15 @@ class WorkspaceManager:
             "is_git_repository": bool(branch or self._is_git_repository(root)),
             "changed_file_count": len(changed_files),
         }
+
+    # 返回工作区的离线项目画像；默认复用缓存，显式刷新时重新扫描磁盘。
+    def profile(self, workspace_id: str, *, refresh: bool = False) -> ProjectProfile:
+        if not refresh and (cached := self._profiles.get(workspace_id)) is not None:
+            return cached
+        workspace = self.get(workspace_id)
+        profile = detect_project_profile(Path(workspace.path))
+        self._profiles[workspace_id] = profile
+        return profile
 
     # 构建受深度和条目数限制的目录树，供客户端文件面板展示
     def tree(

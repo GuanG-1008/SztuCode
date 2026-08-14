@@ -5,6 +5,41 @@ export type Workspace = { workspace_id: string; name: string; path: string; arch
 export type NativeSettings = { autostart: boolean; stay_awake: boolean; supported: boolean };
 export type WorkspaceNode = { path: string; name: string; kind: "directory" | "file"; children?: WorkspaceNode[] };
 export type FileSearchMatch = { path: string; line: number; preview: string };
+export type DetectionEvidence = {
+  path: string;
+  rule: string;
+  detail?: string | null;
+  strength: "confirmed" | "supporting" | "weak";
+};
+export type TechnologyFinding = {
+  name: string;
+  confidence: "confirmed" | "likely";
+  evidence: DetectionEvidence[];
+};
+export type ValidationCategory = "format" | "static_check" | "unit_test" | "integration_test" | "build";
+export type ValidationCommand = {
+  category: ValidationCategory;
+  command: string;
+  working_directory: string;
+  reason: string;
+  evidence: DetectionEvidence[];
+  recommendation_only: true;
+};
+export type ProjectComponent = {
+  path: string;
+  languages: TechnologyFinding[];
+  frameworks: TechnologyFinding[];
+  package_managers: TechnologyFinding[];
+  build_tools: TechnologyFinding[];
+  evidence: DetectionEvidence[];
+  validation_plan: ValidationCommand[];
+};
+export type ProjectProfile = {
+  root_path: string;
+  monorepo: boolean;
+  projects: ProjectComponent[];
+  scan_limited: boolean;
+};
 export type FileReadResult = {
   content: string; encoding: string; binary: boolean; truncated: boolean;
   media_base64?: string | null; mime_type?: string | null;
@@ -230,6 +265,11 @@ export async function workspaceStatus(workspaceId: string): Promise<WorkspaceSta
     is_git_repository: Boolean(result.is_git_repository),
     changed_file_count: Number(result.changed_file_count ?? 0),
   };
+}
+
+export async function getWorkspaceProfile(workspaceId: string, refresh = false): Promise<ProjectProfile> {
+  const result = await client.request("workspace.profile", { workspace_id: workspaceId, refresh });
+  return result.profile as ProjectProfile;
 }
 
 export async function workspaceTree(workspaceId: string, path = "", maxDepth = 1): Promise<WorkspaceNode[]> {

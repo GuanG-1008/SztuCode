@@ -208,6 +208,11 @@ class SpawnAgentTool(BaseTool):
             run_id=child_run_id,
             goal=p.prompt,
             max_steps=child_max_steps,
+            project_profile_context=(
+                self._parent_context.project_profile_context
+                if self._parent_context is not None
+                else ""
+            ),
             system_prompt_override=system_prompt_override,
             max_tokens=(
                 p.max_tokens
