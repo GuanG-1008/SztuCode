@@ -23,7 +23,7 @@ export type ValidationCommand = {
   working_directory: string;
   reason: string;
   evidence: DetectionEvidence[];
-  recommendation_only: boolean;
+  recommendation_only: true;
 };
 export type ProjectComponent = {
   path: string;
