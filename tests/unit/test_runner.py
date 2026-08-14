@@ -340,6 +340,28 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
     assert not (tmp_path / "runs" / "run-new").exists()
 
 
+# 功能：验证有工作区的 Agent run 会获得自动生成的项目画像和仅建议的验证策略。
+# 设计：用捕获型 provider 观察真正传给模型的 system prompt，避免只测试渲染函数而漏掉 Runner 接入。
+async def test_workspace_project_profile_is_injected_into_agent_context(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "package.json").write_text(
+        json.dumps({"name": "web", "scripts": {"build": "unsafe-build --all"}}),
+        encoding="utf-8",
+    )
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    await runner.run_and_capture("inspect", run_id="run-profile", workspace_root=workspace)
+
+    assert provider.system is not None
+    assert "## Project Profile" in provider.system
+    assert "Detected Project Profile" in provider.system
+    assert "npm run build" in provider.system
+    assert "advisory only" in provider.system
+    assert "unsafe-build --all" not in provider.system
+
+
 # 功能：验证桌面端收到 run.finished 时本轮耗时与 token 已经持久化
 # 设计：在完成事件订阅器中立即读取 meta，锁定先落盘再广播的时序契约
 async def test_session_stats_persisted_before_finished_event(tmp_path: Path) -> None:

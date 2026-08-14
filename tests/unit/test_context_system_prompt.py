@@ -44,6 +44,21 @@ def test_only_global() -> None:
     assert "## Session Notes" not in prompt
 
 
+# 功能：验证自动检测的项目画像作为独立区段注入 system prompt，并保留项目记忆的顺序。
+# 设计：同时设置人工项目上下文与生成画像，断言画像不会覆盖用户内容且包含明确的建议安全边界。
+def test_project_profile_context_is_injected_after_project_context() -> None:
+    ctx = _make_ctx(
+        project_context="user project context",
+        project_profile_context="Detected Project Profile\nadvisory only",
+    )
+
+    prompt = ctx.system_prompt("BASE")
+
+    assert "## Project Context\nuser project context" in prompt
+    assert "## Project Profile\nDetected Project Profile\nadvisory only" in prompt
+    assert prompt.index("Project Context") < prompt.index("Project Profile")
+
+
 # 功能：验证 session_notes 非空时包含 note_save 提示语
 # 设计：只设置 session_notes，断言 prompt 含 note_save 相关提示
 def test_session_notes_hint() -> None:

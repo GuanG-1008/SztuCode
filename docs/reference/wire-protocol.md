@@ -188,6 +188,275 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 }
 ```
 
+### WorkspaceProfileCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `workspace_id` | `string` | yes |
+| `refresh` | `boolean` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "workspace.profile",
+      "default": "workspace.profile",
+      "title": "Type",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "refresh": {
+      "default": false,
+      "title": "Refresh",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "workspace_id"
+  ],
+  "title": "WorkspaceProfileCommand",
+  "type": "object"
+}
+```
+
+### WorkspaceProfileResult
+
+| Field | Type | Required |
+|---|---|---|
+| `profile` | `object` | yes |
+
+```json
+{
+  "$defs": {
+    "DetectionEvidence": {
+      "description": "\u63cf\u8ff0\u4e00\u9879\u68c0\u6d4b\u7ed3\u8bba\u7684\u672c\u5730\u8bc1\u636e\u3002",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "rule": {
+          "title": "Rule",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
+        },
+        "strength": {
+          "$ref": "#/$defs/EvidenceStrength",
+          "default": "supporting"
+        }
+      },
+      "required": [
+        "path",
+        "rule"
+      ],
+      "title": "DetectionEvidence",
+      "type": "object"
+    },
+    "EvidenceStrength": {
+      "enum": [
+        "confirmed",
+        "supporting",
+        "weak"
+      ],
+      "title": "EvidenceStrength",
+      "type": "string"
+    },
+    "ProjectComponent": {
+      "description": "\u63cf\u8ff0\u5de5\u4f5c\u533a\u5185\u4e00\u4e2a\u72ec\u7acb\u9879\u76ee\u8fb9\u754c\u7684\u6280\u672f\u753b\u50cf\u3002",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "languages": {
+          "items": {
+            "$ref": "#/$defs/TechnologyFinding"
+          },
+          "title": "Languages",
+          "type": "array"
+        },
+        "frameworks": {
+          "items": {
+            "$ref": "#/$defs/TechnologyFinding"
+          },
+          "title": "Frameworks",
+          "type": "array"
+        },
+        "package_managers": {
+          "items": {
+            "$ref": "#/$defs/TechnologyFinding"
+          },
+          "title": "Package Managers",
+          "type": "array"
+        },
+        "build_tools": {
+          "items": {
+            "$ref": "#/$defs/TechnologyFinding"
+          },
+          "title": "Build Tools",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/DetectionEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "validation_plan": {
+          "items": {
+            "$ref": "#/$defs/ValidationCommand"
+          },
+          "title": "Validation Plan",
+          "type": "array"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ProjectComponent",
+      "type": "object"
+    },
+    "ProjectProfile": {
+      "description": "\u63cf\u8ff0\u6574\u4e2a\u5de5\u4f5c\u533a\u7684\u9879\u76ee\u753b\u50cf\uff0c\u8def\u5f84\u5747\u76f8\u5bf9\u5de5\u4f5c\u533a\u6839\u76ee\u5f55\u3002",
+      "properties": {
+        "root_path": {
+          "default": ".",
+          "title": "Root Path",
+          "type": "string"
+        },
+        "monorepo": {
+          "default": false,
+          "title": "Monorepo",
+          "type": "boolean"
+        },
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/ProjectComponent"
+          },
+          "title": "Projects",
+          "type": "array"
+        },
+        "scan_limited": {
+          "default": false,
+          "title": "Scan Limited",
+          "type": "boolean"
+        }
+      },
+      "title": "ProjectProfile",
+      "type": "object"
+    },
+    "TechnologyFinding": {
+      "description": "\u63cf\u8ff0\u8bed\u8a00\u3001\u6846\u67b6\u3001\u5305\u7ba1\u7406\u5668\u6216\u6784\u5efa\u5de5\u5177\u7ed3\u8bba\u3002",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "confidence": {
+          "default": "confirmed",
+          "enum": [
+            "confirmed",
+            "likely"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/DetectionEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "TechnologyFinding",
+      "type": "object"
+    },
+    "ValidationCategory": {
+      "enum": [
+        "format",
+        "static_check",
+        "unit_test",
+        "integration_test",
+        "build"
+      ],
+      "title": "ValidationCategory",
+      "type": "string"
+    },
+    "ValidationCommand": {
+      "description": "\u63cf\u8ff0\u4e00\u6761\u4ec5\u4f9b\u53c2\u8003\u7684\u9a8c\u8bc1\u547d\u4ee4\u3002",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ValidationCategory"
+        },
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "working_directory": {
+          "title": "Working Directory",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/DetectionEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "recommendation_only": {
+          "const": true,
+          "default": true,
+          "title": "Recommendation Only",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "category",
+        "command",
+        "working_directory",
+        "reason"
+      ],
+      "title": "ValidationCommand",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "profile": {
+      "$ref": "#/$defs/ProjectProfile"
+    }
+  },
+  "required": [
+    "profile"
+  ],
+  "title": "WorkspaceProfileResult",
+  "type": "object"
+}
+```
+
 ### ChangeListCommand
 
 | Field | Type | Required |
