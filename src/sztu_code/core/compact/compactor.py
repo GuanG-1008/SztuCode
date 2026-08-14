@@ -170,11 +170,15 @@ class Compactor:
         return task
 
     # 等待所有后台压缩任务完成（runner 收尾时调用）
-    async def wait_pending(self) -> None:
-        if self._pending_tasks:
-            tasks = self._pending_tasks[:]
-            self._pending_tasks.clear()
-            await asyncio.gather(*tasks, return_exceptions=True)
+    async def wait_pending(self, *, cancel_pending: bool = False) -> None:
+        if not self._pending_tasks:
+            return
+        tasks = self._pending_tasks[:]
+        self._pending_tasks.clear()
+        if cancel_pending:
+            for task in tasks:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def notify_compacting(self, run_id: str) -> None:
         await self._bus.publish(
