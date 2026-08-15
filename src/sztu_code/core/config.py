@@ -23,6 +23,12 @@ _DEFAULT_STUCK_MAX_FAILURES = 3
 _DEFAULT_STUCK_MAX_TOTAL = 0
 _DEFAULT_TOOL_MAX_CONCURRENCY = 4
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
+_DEFAULT_TUI_THEME = "dark"
+_DEFAULT_TUI_WALLPAPER = "none"
+
+# TUI 主题与壁纸的可选值，与 src/sztu_code/tui/theme.py 的注册表保持一致
+TUI_THEME_NAMES: tuple[str, ...] = ("dark", "light")
+TUI_WALLPAPER_NAMES: tuple[str, ...] = ("none", "aurora", "ocean", "sunset")
 
 API_FORMATS = {
     "openai_chat_completions",
@@ -171,6 +177,13 @@ class McpConfig:
 
 
 @dataclass
+class TuiConfig:
+    # TUI 明暗主题与背景壁纸样式（可选值见 TUI_THEME_NAMES / TUI_WALLPAPER_NAMES）
+    theme: str = _DEFAULT_TUI_THEME
+    wallpaper: str = _DEFAULT_TUI_WALLPAPER
+
+
+@dataclass
 class SztuConfig:
     host: str = _DEFAULT_HOST
     port: int = _DEFAULT_PORT
@@ -184,6 +197,7 @@ class SztuConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
+    tui: TuiConfig = field(default_factory=TuiConfig)
 
 
 # 构建并返回运行时配置：默认值 → 全局 TOML → 项目本地 TOML → .env → 系统环境变量（后者优先级最高）
@@ -270,6 +284,16 @@ def _apply_client_settings(config: SztuConfig) -> None:
         config.llm.reasoning_effort = value["reasoning_effort"]
     if isinstance(value.get("cache_control"), bool):
         config.llm.cache_control = value["cache_control"]
+    # TUI 明暗主题与壁纸选择：客户端设置优先于 TOML（用户即时切换后落盘到这里）
+    tui_settings = value.get("tui")
+    if isinstance(tui_settings, dict):
+        if isinstance(tui_settings.get("theme"), str) and tui_settings["theme"] in TUI_THEME_NAMES:
+            config.tui.theme = tui_settings["theme"]
+        if (
+            isinstance(tui_settings.get("wallpaper"), str)
+            and tui_settings["wallpaper"] in TUI_WALLPAPER_NAMES
+        ):
+            config.tui.wallpaper = tui_settings["wallpaper"]
 
 
 def load_model_profiles() -> tuple[list[dict[str, Any]], str]:
@@ -324,12 +348,35 @@ def save_client_settings(
         value["models"] = models
     if active_model_id is not None:
         value["active_model_id"] = active_model_id
+    value["tui"] = {"theme": config.tui.theme, "wallpaper": config.tui.wallpaper}
     temporary.write_text(
         json.dumps(
             value,
             ensure_ascii=False,
             indent=2,
         ) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+    return path
+
+
+# 仅持久化 TUI 的明暗主题与壁纸选择（不动 LLM 等其余设置），返回写入的路径
+def save_tui_settings(theme: str | None = None, wallpaper: str | None = None) -> Path:
+    path = _client_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    value = _read_client_settings()
+    tui = value.get("tui")
+    if not isinstance(tui, dict):
+        tui = {}
+    if theme is not None and theme in TUI_THEME_NAMES:
+        tui["theme"] = theme
+    if wallpaper is not None and wallpaper in TUI_WALLPAPER_NAMES:
+        tui["wallpaper"] = wallpaper
+    value["tui"] = tui
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     temporary.replace(path)
@@ -350,6 +397,7 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
         "budget",
         "workflow",
         "mcp",
+        "tui",
     }
     if unknown:
         raise SystemExit(f"Unknown top-level config keys: {', '.join(sorted(unknown))}")
@@ -728,6 +776,28 @@ def _apply_toml(config: SztuConfig, data: dict[str, Any]) -> None:
                     raise SystemExit(f"Config error: mcp.servers[{i}].port must be an integer")
                 s.port = val
             config.mcp.servers.append(s)
+
+    if "tui" in data:
+        tui = data["tui"]
+        if not isinstance(tui, dict):
+            raise SystemExit("Config error: [tui] must be a table")
+        unknown_tui: set[str] = set(tui.keys()) - {"theme", "wallpaper"}
+        if unknown_tui:
+            raise SystemExit(f"Unknown [tui] keys: {', '.join(sorted(unknown_tui))}")
+        if "theme" in tui:
+            val = tui["theme"]
+            if not isinstance(val, str) or val not in TUI_THEME_NAMES:
+                raise SystemExit(
+                    f"Config error: tui.theme must be one of {', '.join(TUI_THEME_NAMES)}"
+                )
+            config.tui.theme = val
+        if "wallpaper" in tui:
+            val = tui["wallpaper"]
+            if not isinstance(val, str) or val not in TUI_WALLPAPER_NAMES:
+                raise SystemExit(
+                    f"Config error: tui.wallpaper must be one of {', '.join(TUI_WALLPAPER_NAMES)}"
+                )
+            config.tui.wallpaper = val
 
 
 # 用 SZTU_* 环境变量覆盖 config 中对应字段（若变量已设置）

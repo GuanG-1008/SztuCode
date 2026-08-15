@@ -161,3 +161,23 @@ async def test_zen_builtin_profile_keyless(
 
     with pytest.raises(HandlerError):
         await app._model_profile_delete_handler({"model_id": zen.id})
+
+
+# 功能：验证 save_tui_settings 只更新 tui 键，reload 后能读回主题与壁纸
+# 设计：将 SZTU_CLIENT_SETTINGS 指向工作区内临时文件，保存后调用 get_config 校验，
+#       用 finally 清理临时文件，避免依赖用户真实配置
+def test_save_tui_settings_persists_theme_and_wallpaper(monkeypatch) -> None:
+    from pathlib import Path
+
+    from sztu_code.core.config import get_config, save_tui_settings
+
+    target = Path("_tui_settings_test.json").resolve()
+    try:
+        monkeypatch.setenv("SZTU_CLIENT_SETTINGS", str(target))
+        monkeypatch.setenv("SZTU_CONFIG", str(target.parent / "_tui_missing_config.toml"))
+        save_tui_settings(theme="light", wallpaper="aurora")
+        cfg = get_config()
+        assert cfg.tui.theme == "light"
+        assert cfg.tui.wallpaper == "aurora"
+    finally:
+        target.unlink(missing_ok=True)

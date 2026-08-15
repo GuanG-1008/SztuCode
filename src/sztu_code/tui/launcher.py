@@ -105,6 +105,8 @@ def main() -> None:
         read_only=args.read_only,
         trust=args.trust,
         replay_run_id=args.replay,
+        theme=config.tui.theme,
+        wallpaper=config.tui.wallpaper,
     )
     app.run()
 

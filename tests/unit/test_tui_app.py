@@ -16,6 +16,7 @@ from sztu_code.tui.app import (
     PermissionSelect,
     RunBlock,
     ToolCallBlock,
+    _BgRun,
     _param_summary,
     _preview,
 )
@@ -393,6 +394,26 @@ async def test_llm_stream_throttles_high_frequency_tokens(
         assert isinstance(block.content, Markdown)
 
 
+# 功能：验证终端尺寸变化时背景壁纸按新尺寸重新生成
+# 设计：挂载真实 DOM 并 resize_terminal，断言壁纸行数与新高度一致，
+#       覆盖 on_resize → _render_wallpaper(event.size) 的联动路径
+async def test_wallpaper_regenerates_on_resize(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("SZTU_TRUSTED_PROJECTS", str(tmp_path / "trusted.json"))
+    monkeypatch.setattr(KamaTuiApp, "_start_socket_loop", lambda self: None)
+    app = KamaTuiApp(
+        "127.0.0.1", 9999,
+        project_path=str(tmp_path / "proj"), trust=True, wallpaper="ocean",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        rows = str(app.query_one("#wallpaper").render()).splitlines()
+        assert len(rows) == 40
+
+
 # 功能：验证技能斜杠命令由后台加载填充候选列表
 # 设计：monkeypatch _build_slash_items 返回带技能的列表并直接 await _load_slash_items，
 #       断言 _slash_items 被替换，避免依赖真实技能扫描和定时等待的不确定性
@@ -408,3 +429,101 @@ async def test_slash_items_load_async(monkeypatch) -> None:
 
     assert ("my-skill", "desc") in app._slash_items
     assert app._builtin_slash_items()[0] in app._slash_items
+
+
+# 功能：验证 /theme 按序切换明暗主题并更新 Textual 主题与全局取色
+# 设计：直接调用 _cycle_theme 两次，断言主题名与 textual theme 依次切换，
+#       覆盖循环首尾衔接（light 之后回到 dark）；async 提供事件循环供 run_worker 调度
+async def test_theme_cycle_toggles_dark_and_light() -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+
+    app._cycle_theme()
+    assert app._theme_name == "light"
+    assert app.theme == "sztu-light"
+    app._cycle_theme()
+    assert app._theme_name == "dark"
+    assert app.theme == "sztu-dark"
+    assert len(appended) == 2  # 每次切换追加一条日志
+
+
+# 功能：验证 /wallpaper 循环完整一圈后回到初始样式
+# 设计：调用 _cycle_wallpaper 共 4 次（与 WALLPAPER_ORDER 等长），断言回到 none，
+#       且未挂载壁纸层时 _render_wallpaper 静默跳过不抛异常
+async def test_wallpaper_cycle_returns_to_none() -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+
+    start = app._wallpaper_name
+    for _ in range(4):
+        app._cycle_wallpaper()
+    assert app._wallpaper_name == start
+
+
+# 功能：验证 /bg 通过 agent.run 在独立会话启动后台任务并登记 run_id
+# 设计：注入 fake client 返回 run_id，直接 await _start_background_run，
+#       断言 run_id 登记与目标记录，不依赖真实 daemon
+async def test_bg_command_starts_background_run() -> None:
+    class _FakeClient:
+        async def send_command(self, method: str, params: dict) -> dict:
+            assert method == "agent.run"
+            assert params == {"goal": "summarize repo"}
+            return {"run_id": "bg-42"}
+
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+    app._client = _FakeClient()  # type: ignore[assignment]
+
+    await app._start_background_run("summarize repo")
+
+    assert app._bg_run_ids == {"bg-42"}
+    assert app._bg_runs["bg-42"].goal == "summarize repo"
+
+
+# 功能：验证后台 run 事件按 run_id 路由到任务面板而非主日志 RunBlock
+# 设计：预置后台 run_id，feed run.finished，断言状态与步数更新、
+#       主 _run_block 保持 None（未被 run 事件创建）
+def test_bg_events_route_to_bg_panel_not_main_log() -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+    app._bg_run_ids = {"bg-1"}
+    app._bg_runs["bg-1"] = _BgRun("bg-1", "do it")
+
+    app._handle_event({
+        "type": "run.finished", "run_id": "bg-1", "status": "success",
+        "steps": 3, "reason": "", "ts": "t",
+    })
+
+    assert app._bg_runs["bg-1"].status == "success"
+    assert app._bg_runs["bg-1"].steps == 3
+    assert app._bg_runs["bg-1"].finished_at is not None
+    assert app._run_block is None  # 后台任务不创建主日志 RunBlock
+
+
+# 功能：验证状态栏文本包含会话用量、后台任务数与主题名
+# 设计：注入 fake #status widget 并设置 token 与后台任务状态，
+#       断言关键片段存在，覆盖状态栏的信息聚合
+def test_status_bar_renders_session_and_bg_info() -> None:
+    class _Status:
+        value = ""
+
+        def update(self, value: str) -> None:
+            self.value = value
+
+    app = KamaTuiApp("127.0.0.1", 9999)
+    status = _Status()
+    app.query_one = lambda *_args, **_kwargs: status  # type: ignore[method-assign]
+    app._session_tokens = {"in": 1200, "out": 340, "cache_read": 0, "cache_write": 0}
+    app._state = "ready"
+    app._bg_runs = {"bg-1": _BgRun("bg-1", "g")}
+
+    app._update_status()
+
+    assert "in=1.2K" in status.value
+    assert "out=340" in status.value
+    assert "bg 1/1" in status.value
+    assert "theme" in status.value
