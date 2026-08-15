@@ -477,7 +477,7 @@ function addUserMessage(content: string) {
 }
 function hydrateTimeline(
   messages: unknown[],
-  runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {},
+  runStats: Record<string, { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number }> = {},
   contextInjections: Array<Record<string, unknown>> = [],
 ) {
   tokenBatcher.clear();
@@ -558,6 +558,7 @@ function hydrateTimeline(
       runStats: messageRunId && runStats[messageRunId] ? {
         inputTokens: Number(runStats[messageRunId].input_tokens ?? 0),
         outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
+        cacheReadInputTokens: Number(runStats[messageRunId].cache_read_input_tokens ?? 0),
         elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
       } : current.runStats,
       thinking: [current.thinking, thinking].filter(Boolean).join("\n\n") || undefined,

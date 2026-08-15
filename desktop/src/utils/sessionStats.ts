@@ -82,9 +82,13 @@ export function deriveSessionStats(steps: readonly TimelineStep[]): SessionStats
 // 命中率 = 缓存读 / 计费输入。input_tokens 是未缓存部分，分母必须与分子同口径
 // （高命中时会远大于 input_tokens，不能只用它做分母——否则命中率会超过 100%）
 export function cacheHitPercent(stats: SessionStats): number | null {
-  const billedInput = stats.inputTokens + stats.cacheReadTokens;
+  // Number() 归一化兜底：历史数据缺字段时 undefined/NaN 会被归零，
+  // 否则 0 + undefined = NaN 会一路传染成「缓存命中 NaN%」
+  const input = Number(stats.inputTokens) || 0;
+  const cacheRead = Number(stats.cacheReadTokens) || 0;
+  const billedInput = input + cacheRead;
   if (billedInput <= 0) return null;
-  return Math.round((stats.cacheReadTokens / billedInput) * 100);
+  return Math.round((cacheRead / billedInput) * 100);
 }
 
 // 紧凑 token 格式（517 / 12.2K / 517K / 1.2M，千以下一位小数、整千去 .0）

@@ -37,6 +37,18 @@ test("cacheHitPercent returns null with no billed input", () => {
   assert.equal(cacheHitPercent(stats), null);
 });
 
+// 功能：历史数据缺缓存字段（undefined 累加成 NaN）时兜底为 0，不显示「缓存命中 NaN%」
+test("cacheHitPercent falls back to 0 when cache fields are missing", () => {
+  const stats = deriveSessionStats([
+    step({
+      runId: "run-a",
+      // 旧会话历史没有 cache_read_input_tokens，映射时缺字段 → 累加出 NaN
+      runStats: { inputTokens: 100, outputTokens: 5, elapsedSeconds: 1 } as unknown as TimelineStep["runStats"],
+    }),
+  ]);
+  assert.equal(cacheHitPercent(stats), 0);
+});
+
 test("deriveSessionStats returns all-zero stats for an empty timeline", () => {
   const stats = deriveSessionStats([]);
   assert.deepEqual(stats, {
