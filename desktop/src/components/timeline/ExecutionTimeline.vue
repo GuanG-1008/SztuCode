@@ -374,10 +374,10 @@ const turns = computed<TurnView[]>(() => {
             <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="12" />
           </div>
 
-          <!-- 实时思考行（借鉴 dsh ReasoningRow）：运行中折叠态只渲染最新一行并跟随流式输出，
-               等待授权时退化为稳定首行摘要，结算后由历史区的事件级面板接管 -->
+          <!-- 折叠态思考行：运行中跟随增量输出；结算后继续保留到历史区展开，
+               让一次到达的大块 thinking 也能按顺序播放完，不会在 run.finished 时被直接卸载。 -->
           <ThinkingPanel
-            v-if="(turn.state === 'running' || turn.state === 'waiting') && turn.thinkingText"
+            v-if="turn.thinkingText && !isTurnExpanded(turn)"
             :text="turn.thinkingText"
             :completed="turn.state !== 'running'"
           />

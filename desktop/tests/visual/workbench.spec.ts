@@ -1357,6 +1357,75 @@ test("dark theme keeps sidebar and conversation content readable", async ({ page
   });
 });
 
+test("Think replays a large thinking chunk from start to finish", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const target = "先检查项目结构，再定位事件链路，然后逐项验证增量发布与界面更新，最后确认所有思考文字都按顺序出现。";
+  const observed = await page.locator("#app").evaluate(async (root, thinkingText) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState as {
+      timeline: Map<number, unknown>;
+      workspace: Record<string, unknown> | null;
+      workspaces: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+      activeId: string | null;
+      activeRunId: string | null;
+      runActive: boolean;
+      applyRuntimeEvent: (event: Record<string, unknown>) => void;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+
+    const values: string[] = [];
+    const observer = new MutationObserver(() => {
+      const value = document.querySelector<HTMLElement>(".thinking-panel__preview")?.textContent ?? "";
+      if (value && values.at(-1) !== value) values.push(value);
+    });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+
+    const runId = "run-thinking-playback";
+    const workspace = { workspace_id: "workspace-thinking", name: "Think playback", path: "F:/thinking", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [{
+      session_id: "session-thinking", title: "Think playback", status: "active", updated_at: "",
+      archived: false, pinned: false, workspace_id: "workspace-thinking",
+      total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+    }];
+    state.activeId = "session-thinking";
+    state.timeline = new Map([[1, { step: 1, status: "thinking", tokens: [], toolCalls: [], runId }]]);
+    state.activeRunId = runId;
+    state.runActive = true;
+    state.applyRuntimeEvent({ type: "llm.thinking", run_id: runId, step: 1, thinking: thinkingText });
+    await Promise.resolve();
+    state.applyRuntimeEvent({ type: "run.finished", run_id: runId, status: "success" });
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error("Think playback did not finish")), 3000);
+      const check = () => {
+        const panel = document.querySelector<HTMLElement>(".thinking-panel");
+        const value = panel?.querySelector<HTMLElement>(".thinking-panel__preview")?.textContent ?? "";
+        if (value === thinkingText && panel?.dataset.state === "ok") {
+          window.clearTimeout(timeout);
+          resolve();
+          return;
+        }
+        requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
+    observer.disconnect();
+    return values;
+  }, target);
+
+  expect(observed.length).toBeGreaterThan(3);
+  expect(observed.at(-1)).toBe(target);
+  expect(observed.every((value) => target.startsWith(value))).toBe(true);
+  const lengths = observed.map((value) => Array.from(value).length);
+  expect(lengths.every((length, index) => index === 0 || length > lengths[index - 1])).toBe(true);
+  expect(Math.max(...lengths.map((length, index) => index === 0 ? length : length - lengths[index - 1]))).toBeLessThanOrEqual(12);
+});
+
 test("high-risk permission dialog follows the dark theme", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
