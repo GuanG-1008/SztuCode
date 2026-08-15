@@ -168,6 +168,47 @@ def test_backfill_keeps_each_run_stats_independent(tmp_path: Path) -> None:
     assert session.run_stats["run-1"] != session.run_stats["run-2"]
 
 
+def test_read_context_injections_restores_full_text_across_runs(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = Session(
+        id="sess-1", mode="chat", status="waiting_for_input", title="context",
+        created_at="t1", updated_at="t2", run_ids=["run-1", "run-2"],
+    )
+    store.write_meta(session)
+    events_by_run = {
+        "run-1": [
+            '{"type":"run.started","run_id":"run-1"}',
+            '{"type":"context.injected","run_id":"run-1","source":"system",'
+            '"label":"上下文注入","chars":35,"preview":"# Base",'
+            '"text":"# Base\\n\\n## Project Context\\nproject rules","ts":"t1"}',
+        ],
+        "run-2": [
+            "{broken json",
+            '{"type":"llm.token","run_id":"run-2","token":"ignored"}',
+            '{"type":"context.injected","run_id":"run-2","source":"system",'
+            '"label":"系统提示词","chars":"invalid","preview":"legacy preview","ts":"t2"}',
+        ],
+    }
+    for run_id, lines in events_by_run.items():
+        events_path = store.runs_dir(session.id) / run_id / "events.jsonl"
+        events_path.parent.mkdir(parents=True)
+        events_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    injections = store.read_context_injections(session.id)
+
+    assert [item["run_id"] for item in injections] == ["run-1", "run-2"]
+    assert injections[0]["text"].endswith("project rules")
+    assert injections[1] == {
+        "run_id": "run-2",
+        "source": "system",
+        "label": "上下文注入",
+        "chars": 0,
+        "preview": "legacy preview",
+        "text": "legacy preview",
+        "ts": "t2",
+    }
+
+
 def test_store_delete_removes_session_files(tmp_path: Path) -> None:
     store = SessionStore(tmp_path)
     store.write_meta(Session(

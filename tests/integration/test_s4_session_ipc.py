@@ -102,6 +102,7 @@ async def test_session_create_history_close_over_ipc(
         req_id="history",
     )
     assert history["result"]["messages"] == []
+    assert history["result"]["context_injections"] == []
 
     closed = await _send_recv(
         reader,

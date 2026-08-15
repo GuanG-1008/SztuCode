@@ -475,10 +475,15 @@ function addUserMessage(content: string) {
   setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: startedAt, runStartedAt: startedAt }));
   return step;
 }
-function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {}) {
+function hydrateTimeline(
+  messages: unknown[],
+  runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {},
+  contextInjections: Array<Record<string, unknown>> = [],
+) {
   tokenBatcher.clear();
   discardPendingTimeline();
   const next = new Map<number, TimelineStep>();
+  const stepByRunId = new Map<string, number>();
   let step = 0;
   for (const message of messages) {
     const role = entryRole(message);
@@ -514,6 +519,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     }
     if (role === "user") {
       step += 1;
+      if (messageRunId) stepByRunId.set(messageRunId, step);
       next.set(step, {
         ...emptyStep(step),
         status: "done",
@@ -530,6 +536,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       continue;
     }
     if (!step) step = 1;
+    if (messageRunId) stepByRunId.set(messageRunId, step);
     const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
     const thinking = visibleBlocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
     const calls: ToolCallEntry[] = visibleBlocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
@@ -557,6 +564,25 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       finalText: [current.finalText, text].filter(Boolean).join("\n\n") || undefined,
       toolCalls: [...current.toolCalls, ...calls],
       events: [...(current.events ?? []), ...events],
+    });
+  }
+  for (const injection of contextInjections) {
+    const runId = String(injection.run_id ?? "");
+    const injectionStep = stepByRunId.get(runId);
+    if (!injectionStep) continue;
+    const current = next.get(injectionStep) ?? { ...emptyStep(injectionStep), status: "done" };
+    const text = String(injection.text ?? injection.preview ?? "");
+    const entry: ContextInjectionEntry = {
+      id: `ctx-history-${runId}-${current.contextInjections?.length ?? 0}`,
+      source: "system",
+      label: String(injection.label ?? "上下文注入"),
+      chars: Number(injection.chars ?? text.length),
+      preview: String(injection.preview ?? ""),
+      text,
+    };
+    next.set(injectionStep, {
+      ...current,
+      contextInjections: [...(current.contextInjections ?? []), entry],
     });
   }
   timeline.value = next;
@@ -604,7 +630,7 @@ function applyRuntimeEvent(event: RuntimeEvent) {
     firstTokenByRun.delete(runId);
     return;
   }
-  // 上下文注入：模型实际收到的 system/global/project/session 注入 → 可折叠上下文行
+  // 上下文注入：模型实际收到的完整 system 内容 → 可折叠上下文行
   if (type === "context.injected") {
     if (String(event.source ?? "system") === "canvas") return;
     const step = stepFor(timelineEvent);
@@ -614,6 +640,7 @@ function applyRuntimeEvent(event: RuntimeEvent) {
       label: String(event.label ?? "上下文注入"),
       chars: Number(event.chars ?? 0),
       preview: String(event.preview ?? ""),
+      text: String(event.text ?? event.preview ?? ""),
     };
     setStep(step, (current) => ({ ...current, contextInjections: [...(current.contextInjections ?? []), entry] }));
     return;
@@ -863,7 +890,7 @@ async function refreshIndex(loadHistory = false) {
   activeId.value ??= nextSessions.find((item) => !item.archived)?.session_id ?? null;
   if (loadHistory && activeId.value) {
     const history = await sessionHistory(activeId.value);
-    hydrateTimeline(history.messages, history.run_stats);
+    hydrateTimeline(history.messages, history.run_stats, history.context_injections);
   }
   loading.value = false;
 }
@@ -961,7 +988,7 @@ async function chooseTask(id: string) {
   firstTokenByRun.clear();
   activeRunId.value = null;
   runActive.value = false;
-  hydrateTimeline(history.messages, history.run_stats);
+  hydrateTimeline(history.messages, history.run_stats, history.context_injections);
   activeRunId.value = latestRunId;
   // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
   runActive.value = !!latestRunId && sessions.value.find((item) => item.session_id === id)?.status === "active";

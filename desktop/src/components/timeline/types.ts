@@ -13,11 +13,11 @@ export type ToolCallEntry = {
   startedAt?: string;  // 工具开始执行的 UTC 时间戳，用于 running 计时
 };
 
-// 上下文注入行：模型实际收到的注入来源（借鉴 dsh web GUI 的 ContextInjectionRow）
+// 上下文注入行：展示模型实际收到的完整 system 上下文及内部干预。
 export type ContextInjectionEntry = {
   id: string;
   source: "compaction" | "canvas" | "intervention" | "system";
-  label: string;    // 展示名（如 "会话压缩"、"全局上下文"）
+  label: string;    // 展示名（如 "上下文注入"、"会话压缩"）
   chars: number;    // 注入内容字符数
   preview: string;  // 折叠时摘要（首行/前 100 字符）
   text?: string;    // 展开时完整正文（缺省用 preview）

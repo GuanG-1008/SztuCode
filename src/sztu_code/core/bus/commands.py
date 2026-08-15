@@ -349,6 +349,7 @@ class SessionGetHistoryCommand(BaseModel):
 class SessionGetHistoryResult(BaseModel):
     messages: list[dict[str, Any]]
     run_stats: dict[str, dict[str, int | float]] = Field(default_factory=dict)
+    context_injections: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SessionCloseCommand(BaseModel):

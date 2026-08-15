@@ -668,6 +668,7 @@ class CoreApp:
         return SessionGetHistoryResult(
             messages=messages,
             run_stats=self._sessions.get_run_stats(cmd.session_id),
+            context_injections=self._sessions.get_context_injections(cmd.session_id),
         )
 
     # 接收客户端权限审批响应，resolve 对应挂起的 Future

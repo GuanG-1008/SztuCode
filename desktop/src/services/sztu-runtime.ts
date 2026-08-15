@@ -34,7 +34,14 @@ export type Session = {
   total_input_tokens: number; total_output_tokens: number; total_elapsed_s: number;
 };
 export type RunStats = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number };
-export type SessionHistory = { messages: unknown[]; run_stats: Record<string, RunStats> };
+export type ContextInjectionRecord = {
+  run_id: string; source: string; label: string; chars: number; preview: string; text: string; ts?: string;
+};
+export type SessionHistory = {
+  messages: unknown[];
+  run_stats: Record<string, RunStats>;
+  context_injections: ContextInjectionRecord[];
+};
 export type ApiFormat = "openai_chat_completions" | "anthropic_messages" | "openai_responses";
 export type ModelRequestSettings = {
   api_format: ApiFormat; context_window: number; max_output_tokens: number;
@@ -176,6 +183,7 @@ export async function sessionHistory(sessionId: string): Promise<SessionHistory>
   return {
     messages: (result.messages as unknown[] | undefined) ?? [],
     run_stats: (result.run_stats as Record<string, RunStats> | undefined) ?? {},
+    context_injections: (result.context_injections as ContextInjectionRecord[] | undefined) ?? [],
   };
 }
 

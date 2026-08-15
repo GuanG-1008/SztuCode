@@ -1426,6 +1426,84 @@ test("Think replays a large thinking chunk from start to finish", async ({ page 
   expect(Math.max(...lengths.map((length, index) => index === 0 ? length : length - lengths[index - 1]))).toBeLessThanOrEqual(12);
 });
 
+test("context injection expands to the complete live and restored text", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const liveTail = "LIVE_CONTEXT_TAIL";
+  await page.locator("#app").evaluate((root, tail) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState as {
+      timeline: Map<number, unknown>;
+      workspace: Record<string, unknown> | null;
+      workspaces: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+      activeId: string | null;
+      activeRunId: string | null;
+      runActive: boolean;
+      applyRuntimeEvent: (event: Record<string, unknown>) => void;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+
+    const runId = "run-context-live";
+    const workspace = { workspace_id: "workspace-context", name: "Context", path: "F:/context", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [{
+      session_id: "session-context", title: "Context injection", status: "active", updated_at: "",
+      archived: false, pinned: false, workspace_id: "workspace-context",
+      total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+    }];
+    state.activeId = "session-context";
+    state.timeline = new Map([[1, {
+      step: 1, status: "thinking", tokens: [], toolCalls: [], runId,
+      userMessage: "检查上下文",
+    }]]);
+    state.activeRunId = runId;
+    state.runActive = true;
+    const text = `# Base context\n\n## Project Context\n${tail}`;
+    state.applyRuntimeEvent({
+      type: "context.injected", run_id: runId, source: "system", label: "上下文注入",
+      chars: text.length, preview: "# Base context", text,
+    });
+  }, liveTail);
+
+  const liveRow = page.locator(".context-injection-row");
+  await expect(liveRow.getByText("上下文注入", { exact: true })).toBeVisible();
+  await liveRow.getByRole("button").click();
+  await expect(liveRow.locator("pre")).toContainText(liveTail);
+
+  const restoredTail = "RESTORED_CONTEXT_TAIL";
+  await page.locator("#app").evaluate((root, tail) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState as {
+      hydrateTimeline: (
+        messages: unknown[],
+        runStats: Record<string, unknown>,
+        contextInjections: Array<Record<string, unknown>>,
+      ) => void;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const text = `# Restored base\n\n## Session Notes\n${tail}`;
+    state.hydrateTimeline(
+      [
+        { role: "user", content: "恢复历史", run_id: "run-context-history" },
+        { role: "assistant", content: "历史回答", run_id: "run-context-history" },
+      ],
+      {},
+      [{
+        run_id: "run-context-history", source: "system", label: "上下文注入",
+        chars: text.length, preview: "# Restored base", text,
+      }],
+    );
+  }, restoredTail);
+
+  const restoredRow = page.locator(".context-injection-row");
+  await expect(restoredRow).toHaveCount(1);
+  await restoredRow.getByRole("button").click();
+  await expect(restoredRow.locator("pre")).toContainText(restoredTail);
+});
+
 test("high-risk permission dialog follows the dark theme", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });

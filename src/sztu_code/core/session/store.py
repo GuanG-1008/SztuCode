@@ -267,6 +267,56 @@ class SessionStore:
             keep=self._tool_result_keep,
         )
 
+    def read_context_injections(self, sid: str) -> list[dict[str, Any]]:
+        try:
+            session = self.read_meta(sid)
+        except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+            return []
+
+        injections: list[dict[str, Any]] = []
+        for run_id in session.run_ids:
+            events_path = self.runs_dir(sid) / run_id / "events.jsonl"
+            if not events_path.exists():
+                continue
+            try:
+                lines = events_path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line_no, line in enumerate(lines, start=1):
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "skip broken run event sid=%s run_id=%s line=%s",
+                        sid,
+                        run_id,
+                        line_no,
+                    )
+                    continue
+                if event.get("type") != "context.injected":
+                    continue
+                try:
+                    chars = max(0, int(event.get("chars") or 0))
+                except (TypeError, ValueError):
+                    chars = 0
+                label = str(event.get("label") or "上下文注入")
+                if label == "系统提示词":
+                    label = "上下文注入"
+                injections.append(
+                    {
+                        "run_id": str(event.get("run_id") or run_id),
+                        "source": str(event.get("source") or "system"),
+                        "label": label,
+                        "chars": chars,
+                        "preview": str(event.get("preview") or ""),
+                        "text": str(event.get("text") or event.get("preview") or ""),
+                        "ts": str(event.get("ts") or ""),
+                    }
+                )
+        return injections
+
     # 裁掉尾部未配对 tool_use 以及其后的消息，避免 Anthropic messages.invalid
     def _trim_orphan_tool_use(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pending: set[str] = set()

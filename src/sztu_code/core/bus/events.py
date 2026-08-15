@@ -145,11 +145,12 @@ class LlmModelSelectedEvent(BaseModel):
 class ContextInjectedEvent(BaseModel):
     type: Literal["context.injected"] = "context.injected"
     run_id: str
-    # 注入来源：system=基础提示词, global=全局上下文, project=项目上下文, session=会话笔记
+    # 新事件统一为 system；其余值用于读取旧版分层注入事件。
     source: Literal["system", "global", "project", "session"]
-    label: str  # 展示名（如 "全局上下文"）
+    label: str  # 展示名（当前为 "上下文注入"）
     chars: int = 0  # 注入内容字符数
     preview: str = ""  # 首行预览（前端折叠行摘要）
+    text: str = ""  # 完整注入正文（旧事件缺省时前端回退 preview）
     ts: str
 
 

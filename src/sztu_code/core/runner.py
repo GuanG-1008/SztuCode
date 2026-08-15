@@ -258,28 +258,23 @@ class AgentRunner:
         async with EventWriter(run_path / "events.jsonl") as writer:
             writer.subscribe(bus)
             await bus.publish(RunStartedEvent(run_id=run_id, goal=goal, ts=_now()))
-            # 发布上下文注入摘要：让前端以可折叠行展示模型实际收到的注入来源
-            # 借鉴 dsh web GUI：一切注入都是可溯源的上下文，前端按 source 分类展示
-            for source, label, content in (
-                ("system", "系统提示词", base_prompt),
-                ("global", "全局上下文", memory_catalog.prompt_content("global")),
-                ("project", "项目上下文", memory_catalog.prompt_content("project")),
-                ("session", "会话笔记", memory_catalog.prompt_content("session")),
-            ):
-                text = (content or "").strip()
-                if not text:
-                    continue
-                first_line = text.splitlines()[0][:80] if text else ""
-                await bus.publish(
-                    ContextInjectedEvent(
-                        run_id=run_id,
-                        source=source,  # type: ignore[arg-type]
-                        label=label,
-                        chars=len(text),
-                        preview=first_line,
-                        ts=_now(),
-                    )
+            # 与 LLM 调用共用同一组装逻辑，确保展开内容就是本次 run 实际注入的 system 上下文。
+            injected_context = context.system_prompt(context.base_system_prompt)
+            first_line = next(
+                (line.strip() for line in injected_context.splitlines() if line.strip()),
+                "",
+            )[:80]
+            await bus.publish(
+                ContextInjectedEvent(
+                    run_id=run_id,
+                    source="system",
+                    label="上下文注入",
+                    chars=len(injected_context),
+                    preview=first_line,
+                    text=injected_context,
+                    ts=_now(),
                 )
+            )
 
             cancelled = False
             try:
