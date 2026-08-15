@@ -639,6 +639,72 @@
   background-clip: padding-box;
 }
 
+/* Capability pages use the shared theme tokens so wallpaper glass stays legible. */
+:root[data-app-theme="dark"] :is(.skill-center, .chat-automations) {
+  color: var(--text) !important;
+  background: var(--surface) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .skill-center__topbar,
+  .skill-search,
+  .automation-form
+) {
+  background: var(--surface-soft) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .skill-page-heading h1,
+  .installed-section > h2,
+  .plugin-installed-strip h2,
+  .plugin-catalog > header h2,
+  .capability-copy b,
+  .plugin-empty b,
+  .chat-automations h1,
+  .automation-empty h2
+) {
+  color: var(--text) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .skill-page-heading p,
+  .skill-center__topbar nav button,
+  .skill-center__actions > button,
+  .skill-search,
+  .capability-copy small,
+  .capability-copy > em,
+  .source-tabs button,
+  .automation-form label,
+  .chat-automations header p,
+  .automation-empty,
+  .automation-empty p
+) {
+  color: var(--text-muted) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .installed-section > h2,
+  .plugin-installed-strip > header,
+  .plugin-catalog > header,
+  .skill-search
+) {
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .skill-center__topbar nav button:hover,
+  .skill-center__topbar nav button.active,
+  .skill-center__actions > button:hover,
+  .source-tabs button:hover,
+  .source-tabs button.active,
+  .catalog-section .capability-row:hover,
+  .skill-state:hover
+) {
+  color: var(--text) !important;
+  background: var(--surface-raised) !important;
+}
+
 /* Wallpaper remains a single continuous layer; large work surfaces reveal it softly. */
 :root:not([data-wallpaper="none"]) .kimi-shell.is-macos::before {
   content: "";
@@ -658,8 +724,48 @@
   background: color-mix(in srgb, var(--surface) var(--conversation-surface-opacity), transparent) !important;
 }
 
-:root:not([data-wallpaper="none"]) .kimi-main:has(.work-page) {
+:root:not([data-wallpaper="none"]) .kimi-main.work-active {
   background: transparent !important;
+}
+
+:root:not([data-wallpaper="none"]) .kimi-main:has(.skill-center),
+:root:not([data-wallpaper="none"]) .kimi-main:has(.chat-automations),
+:root:not([data-wallpaper="none"]) :is(.skill-center, .chat-automations) {
+  background: transparent !important;
+}
+
+:root:not([data-wallpaper="none"]) :is(
+  .skill-search,
+  .automation-form
+) {
+  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent) !important;
+  backdrop-filter: blur(12px) saturate(108%);
+  -webkit-backdrop-filter: blur(12px) saturate(108%);
+}
+
+:root:not([data-wallpaper="none"]) .skill-center__topbar {
+  background: color-mix(in srgb, var(--surface) 28%, transparent) !important;
+  border-color: color-mix(in srgb, var(--border) 58%, transparent) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root:not([data-wallpaper="none"]) :is(.automation-form input, .automation-form select) {
+  background: color-mix(in srgb, var(--surface) 88%, transparent) !important;
+  border-color: color-mix(in srgb, var(--border) 82%, transparent) !important;
+}
+
+:root:not([data-wallpaper="none"]) :is(
+  .skill-center__topbar nav button:hover,
+  .skill-center__topbar nav button.active,
+  .skill-center__actions > button:hover,
+  .source-tabs button:hover,
+  .source-tabs button.active,
+  .catalog-section .capability-row:hover,
+  .skill-state:hover
+) {
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent) !important;
 }
 
 :root:not([data-wallpaper="none"]) .task-canvas {

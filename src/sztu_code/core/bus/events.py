@@ -30,6 +30,7 @@ class RunFinishedEvent(BaseModel):
     total_output_tokens: int = 0
     cache_read_input_tokens: int = 0
     elapsed_s: float = 0.0
+    context_pct: float = 0.0  # 最近一次 LLM 调用的上下文占用百分比
     ts: str
 
 

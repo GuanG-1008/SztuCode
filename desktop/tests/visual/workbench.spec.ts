@@ -20,6 +20,25 @@ test("agent workbench sidebar prioritizes tasks and project context", async ({ p
   await expect(page).toHaveScreenshot("task-launcher-v5-1280.png", { fullPage: true });
 });
 
+test("work page remains mounted while navigating between top-level pages", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const workHost = page.locator(".work-page-host");
+  await expect(workHost).toBeVisible();
+  await workHost.evaluate((element) => { (element as HTMLElement & { persistentMarker?: string }).persistentMarker = "mounted"; });
+
+  await page.getByRole("button", { name: "全部任务", exact: true }).click();
+  await expect(workHost).toBeHidden();
+  await expect(page.locator(".kimi-main")).not.toHaveClass(/work-active/);
+  expect(await workHost.evaluate((element) => (element as HTMLElement & { persistentMarker?: string }).persistentMarker)).toBe("mounted");
+
+  await page.getByRole("button", { name: /新建任务/ }).first().click();
+  await expect(workHost).toBeVisible();
+  await expect(page.locator(".kimi-main")).toHaveClass(/work-active/);
+  expect(await workHost.evaluate((element) => (element as HTMLElement & { persistentMarker?: string }).persistentMarker)).toBe("mounted");
+});
+
 test("task conversation scrolls against the workspace divider while controls stay visible", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -650,6 +669,18 @@ test("settings opens as an appearance dialog from the workbench footer", async (
   await expect(dialog.getByText("系统设置")).toBeVisible();
   await dialog.getByRole("button", { name: "关闭设置" }).click();
   await expect(dialog).toBeHidden();
+});
+
+test("about settings displays the desktop version and project link", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+
+  await dialog.getByRole("button", { name: "关于", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "关于", exact: true })).toBeVisible();
+  await expect(dialog.getByText("v0.1.0", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "打开项目链接" })).toContainText("github.com/rojim666/SztuCode");
 });
 
 test("appearance settings offer distinct interface font previews", async ({ page }) => {

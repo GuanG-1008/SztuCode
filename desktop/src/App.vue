@@ -79,6 +79,20 @@ const activeRunId = ref<string | null>(null);
 const runActive = ref(false);
 const prompt = ref("");
 const activePrompt = ref<HTMLTextAreaElement | null>(null);
+// 会话流“回到底部”悬浮按钮：离开底部超过阈值时显示，点击平滑回底
+const taskStreamEl = ref<HTMLElement | null>(null);
+const streamScrolledUp = ref(false);
+function handleTaskStreamScroll() {
+  const el = taskStreamEl.value;
+  if (!el) return;
+  streamScrolledUp.value = el.scrollHeight - el.scrollTop - el.clientHeight > 120;
+}
+function scrollTaskStreamToBottom() {
+  const el = taskStreamEl.value;
+  if (!el) return;
+  el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  streamScrolledUp.value = false;
+}
 const launcherPrompt = ref<HTMLTextAreaElement | null>(null);
 const slashMenuActiveIndex = ref(0);
 const slashMenuDismissed = ref(false);
@@ -477,7 +491,7 @@ function addUserMessage(content: string) {
 }
 function hydrateTimeline(
   messages: unknown[],
-  runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {},
+  runStats: Record<string, { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number; context_pct: number }> = {},
   contextInjections: Array<Record<string, unknown>> = [],
 ) {
   tokenBatcher.clear();
@@ -529,6 +543,7 @@ function hydrateTimeline(
           outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
           cacheReadInputTokens: Number(runStats[messageRunId].cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
+          contextPct: Number(runStats[messageRunId].context_pct ?? 0),
         } : undefined,
         userMessage: text,
         userMessageTime: String((message as { ts?: unknown })?.ts ?? ""),
@@ -558,7 +573,9 @@ function hydrateTimeline(
       runStats: messageRunId && runStats[messageRunId] ? {
         inputTokens: Number(runStats[messageRunId].input_tokens ?? 0),
         outputTokens: Number(runStats[messageRunId].output_tokens ?? 0),
+        cacheReadInputTokens: Number(runStats[messageRunId].cache_read_input_tokens ?? 0),
         elapsedSeconds: Number(runStats[messageRunId].elapsed_s ?? 0),
+        contextPct: Number(runStats[messageRunId].context_pct ?? 0),
       } : current.runStats,
       thinking: [current.thinking, thinking].filter(Boolean).join("\n\n") || undefined,
       finalText: [current.finalText, text].filter(Boolean).join("\n\n") || undefined,
@@ -867,6 +884,7 @@ function applyRuntimeEvent(event: RuntimeEvent) {
           outputTokens: Number(event.total_output_tokens ?? 0),
           cacheReadInputTokens: Number(event.cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(event.elapsed_s ?? 0),
+          contextPct: Number(event.context_pct ?? 0),
           ttftMs: current.runStats?.ttftMs,
         },
       } : current);
@@ -1506,6 +1524,8 @@ onBeforeUnmount(() => {
   stopDisconnect?.();
 });
 watch(page, (next) => { if (next === "skills") void refreshIndex(false); });
+// 切换/新建会话后会话流从头渲染，回到底部按钮状态随之复位
+watch(activeId, () => { streamScrolledUp.value = false; });
 </script>
 
 <template>
@@ -1662,8 +1682,8 @@ watch(page, (next) => { if (next === "skills") void refreshIndex(false); });
       <div class="session-preview__row"><Coins :size="16" :stroke-width="1.8" /><span>总 tokens</span><em>{{ previewTokens(sessionPreview.task) }}</em></div>
     </div>
 
-    <main class="kimi-main" :class="{ 'chat-main': page === 'chat' }">
-      <template v-if="page === 'work'">
+    <main class="kimi-main" :class="{ 'chat-main': page === 'chat', 'work-active': page === 'work' }">
+      <div v-show="page === 'work'" class="work-page-host">
         <section v-if="active" class="work-page">
           <div class="work-layout" :class="{ 'no-inspector': !inspectorOpen || !activeWorkspace }" :style="workLayoutStyle">
             <section class="task-canvas">
@@ -1687,10 +1707,11 @@ watch(page, (next) => { if (next === "skills") void refreshIndex(false); });
                 </div>
               </div>
               <div class="task-conversation" :class="{ 'task-conversation--empty': !orderedTimeline.length }">
-                <div class="task-stream">
+                <div class="task-stream" ref="taskStreamEl" @scroll="handleTaskStreamScroll">
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>开启「{{ activeWorkspace?.name || '当前项目' }}」的构筑之路。</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
+                <button v-if="streamScrolledUp" type="button" class="task-stream-to-bottom" title="回到底部" aria-label="回到底部" @click="scrollTaskStreamToBottom"><ChevronDown :size="16" :stroke-width="2" /></button>
                 <!-- 底部统计栏（借鉴 dsh StatsLine）：composer 上方一行全局会话统计 -->
                 <SessionStatsLine v-if="sessionStats.steps" :stats="sessionStats" />
                 <BottomDiffPreview
@@ -1779,9 +1800,9 @@ watch(page, (next) => { if (next === "skills") void refreshIndex(false); });
             </section>
           </div>
         </section>
-      </template>
+      </div>
 
-      <section v-else-if="page === 'chat'"><ChatPortal :view="chatView" :connected="connected" @submit="submitChat" @navigate="chatView = $event" @open-project="openLocalProject" /></section>
+      <section v-if="page === 'chat'"><ChatPortal :view="chatView" :connected="connected" @submit="submitChat" @navigate="chatView = $event" @open-project="openLocalProject" /></section>
 
       <section v-else-if="page === 'diff'" class="diff-page"><DiffReview v-if="reviewCtx" :workspace-id="reviewCtx.workspaceId" :run-id="reviewCtx.runId" :paths="reviewCtx.paths" @close="closeReview" @changed="refreshIndex(false)" /></section>
 
