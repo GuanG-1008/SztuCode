@@ -8,11 +8,13 @@ import {
 } from "@lucide/vue";
 import {
   changeDiff, listChanges, readFile,
-  type ChangeSummary,
+  getWorkspaceProfile,
+  type ChangeSummary, type DetectionEvidence, type ProjectComponent, type TechnologyFinding, type ValidationCategory,
 } from "../../services/sztu-runtime";
 import BrowserWebview from "./BrowserWebview.vue";
 import CodePreview from "./CodePreview.vue";
 import FileTree from "./FileTree.vue";
+import { createProjectProfileController, type ProjectProfileState } from "./project-profile";
 import { fileTypeIconUrl } from "../../utils/fileIcon";
 import type { TimelineStep } from "../timeline/types";
 
@@ -32,7 +34,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>();
 
-type SectionKey = "todo" | "artifacts" | "references";
+type SectionKey = "profile" | "todo" | "artifacts" | "references";
 type BrowserTab = {
   id: number;
   label: string;
@@ -51,8 +53,8 @@ const activeTab = ref<ActiveTab>("files");
 const browserSequence = ref(0);
 const sandboxSequence = ref(0);
 const browserTabs = ref<BrowserTab[]>([]);
-const workspaceTabs = ref<WorkspaceTab[]>([{ key: "files", kind: "files" }]);
-const openSections = ref<Set<SectionKey>>(new Set(["todo", "artifacts", "references"]));
+const workspaceTabs = ref<WorkspaceTab[]>([{ key: "summary", kind: "summary" }, { key: "files", kind: "files" }]);
+const openSections = ref<Set<SectionKey>>(new Set(["profile", "todo", "artifacts", "references"]));
 const changes = ref<ChangeSummary[]>([]);
 const loadingArtifacts = ref(false);
 const notice = ref("");
@@ -75,6 +77,17 @@ function closePreviewOnOutside(event: PointerEvent) {
 const expandedPanel = ref(false);
 const toolMenuOpen = ref(false);
 const toolMenuRoot = ref<HTMLElement | null>(null);
+const projectProfileController = createProjectProfileController(getWorkspaceProfile);
+const profileState = ref<ProjectProfileState>(projectProfileController.state);
+const stopProjectProfileSubscription = projectProfileController.subscribe((next) => { profileState.value = next; });
+
+const validationCategories: Array<{ key: ValidationCategory; label: string }> = [
+  { key: "format", label: "格式化" },
+  { key: "static_check", label: "静态检查" },
+  { key: "unit_test", label: "单元测试" },
+  { key: "integration_test", label: "集成测试" },
+  { key: "build", label: "构建" },
+];
 
 const plan = computed(() => [...(props.steps ?? [])].reverse().find((step) => step.plan?.length)?.plan ?? []);
 const completed = computed(() => plan.value.filter((item) => item.status === "completed").length);
@@ -133,6 +146,39 @@ function toggleSection(section: SectionKey) {
   if (next.has(section)) next.delete(section);
   else next.add(section);
   openSections.value = next;
+}
+
+function openSummary() {
+  if (!workspaceTabs.value.some((tab) => tab.kind === "summary")) workspaceTabs.value.unshift({ key: "summary", kind: "summary" });
+  activeTab.value = "summary";
+  selectedPath.value = "";
+  toolMenuOpen.value = false;
+}
+
+function projectTechnologies(project: ProjectComponent): Array<{ label: string; findings: TechnologyFinding[] }> {
+  return [
+    { label: "语言", findings: project.languages },
+    { label: "框架", findings: project.frameworks },
+    { label: "包管理器", findings: project.package_managers },
+    { label: "构建工具", findings: project.build_tools },
+  ];
+}
+
+function commandsFor(project: ProjectComponent, category: ValidationCategory) {
+  return project.validation_plan.filter((command) => command.category === category);
+}
+
+function evidenceLabel(evidence: DetectionEvidence): string {
+  const detail = evidence.detail ? `：${evidence.detail}` : "";
+  return `${evidence.path} · ${evidence.rule}${detail}`;
+}
+
+function confidenceLabel(confidence: TechnologyFinding["confidence"]): string {
+  return confidence === "confirmed" ? "已确认" : "可能";
+}
+
+async function refreshProjectProfile() {
+  await projectProfileController.refresh();
 }
 
 function activateBrowser(id: number) {
@@ -326,9 +372,13 @@ watch(() => [props.workspaceId, props.runId], () => {
   browserSequence.value = 0;
   sandboxSequence.value = 0;
   browserTabs.value = [];
-  workspaceTabs.value = [{ key: "files", kind: "files" }];
+  workspaceTabs.value = [{ key: "summary", kind: "summary" }, { key: "files", kind: "files" }];
   selectedPath.value = "";
   void refreshArtifacts();
+}, { immediate: true });
+
+watch(() => props.workspaceId, (workspaceId) => {
+  void projectProfileController.setWorkspace(workspaceId || null);
 }, { immediate: true });
 
 // 「查看项目文件」信号：seq 变化时切换到文件标签页（在 workspaceId/runId 重置之后执行）。
@@ -343,6 +393,7 @@ onMounted(() => {
   document.addEventListener("keydown", closeToolMenuOnEscape);
 });
 onBeforeUnmount(() => {
+  stopProjectProfileSubscription();
   document.removeEventListener("pointerdown", closeToolMenu);
   document.removeEventListener("pointerdown", closePreviewOnOutside);
   document.removeEventListener("keydown", closeToolMenuOnEscape);
@@ -355,6 +406,7 @@ onBeforeUnmount(() => {
       <div ref="toolMenuRoot" class="workspace-tool-menu-root">
         <button type="button" class="workspace-tool-menu-trigger" :class="{ active: toolMenuOpen }" aria-label="打开功能" aria-haspopup="menu" :aria-expanded="toolMenuOpen" @click="toolMenuOpen = !toolMenuOpen"><Plus :size="16" /></button>
         <nav v-if="toolMenuOpen" class="workspace-tool-menu" aria-label="选择功能" role="menu">
+          <button type="button" role="menuitem" :class="{ active: activeTab === 'summary' }" @click="openSummary"><ListChecks :size="15" /><span>任务摘要</span></button>
           <button type="button" role="menuitem" :class="{ active: currentBrowser }" @click="openBrowser"><Globe2 :size="15" /><span>浏览器</span></button>
           <button type="button" role="menuitem" :class="{ active: activeTab.startsWith('sandbox-') }" @click="openTerminal"><SquareTerminal :size="15" /><span>终端</span></button>
           <button type="button" role="menuitem" :class="{ active: activeTab === 'files' }" @click="openFiles"><FolderOpen :size="15" /><span>文件</span></button>
@@ -381,6 +433,63 @@ onBeforeUnmount(() => {
     </header>
 
     <main v-if="activeTab === 'summary'" class="task-summary-view">
+      <section class="summary-section project-profile-section" :class="{ collapsed: !openSections.has('profile') }">
+        <button type="button" class="summary-section-trigger" :aria-expanded="openSections.has('profile')" @click="toggleSection('profile')">
+          <b>项目画像</b><ChevronDown :size="13" /><small v-if="profileState.profile">{{ profileState.profile.monorepo ? `Monorepo · ${profileState.profile.projects.length} 个项目` : `${profileState.profile.projects.length} 个项目` }}</small>
+        </button>
+        <div v-if="openSections.has('profile')" class="summary-section-body project-profile-body">
+          <div class="project-profile-toolbar">
+            <p><b>基于工作区结构生成</b><small>仅建议，未执行；实际运行仍需经过工具权限与审批。</small></p>
+            <button type="button" class="summary-refresh" :disabled="profileState.loading" @click="refreshProjectProfile"><RefreshCw :size="13" :class="{ spin: profileState.loading }" />{{ profileState.refreshing ? '正在刷新' : '刷新项目画像' }}</button>
+          </div>
+          <div v-if="profileState.loading && !profileState.profile" class="project-profile-loading"><LoaderCircle :size="16" class="spin" /><span>正在识别项目结构</span></div>
+          <p v-if="profileState.error" class="project-profile-error" role="alert">{{ profileState.profile ? `刷新失败，仍显示上次检测结果：${profileState.error}` : `项目画像加载失败：${profileState.error}` }}</p>
+          <template v-if="profileState.profile">
+            <div class="project-profile-meta">
+              <span><b>根目录</b><code :title="profileState.profile.root_path">{{ profileState.profile.root_path }}</code></span>
+              <span v-if="profileState.profile.monorepo" class="project-profile-badge">Monorepo</span>
+              <span v-if="profileState.profile.scan_limited" class="project-profile-warning">扫描范围受限，结果可能不完整</span>
+            </div>
+            <article v-for="project in profileState.profile.projects" :key="project.path" class="project-profile-component">
+              <header>
+                <div><b>{{ project.path === '.' ? '工作区根项目' : project.path }}</b><small>路径归属：{{ project.path }}</small></div>
+                <span>仅建议，未执行</span>
+              </header>
+              <div class="project-technology-grid">
+                <section v-for="group in projectTechnologies(project)" :key="group.label">
+                  <b>{{ group.label }}</b>
+                  <div v-if="group.findings.length" class="project-technology-list">
+                    <span v-for="finding in group.findings" :key="finding.name" :title="finding.evidence.map(evidenceLabel).join('\n')"><em>{{ finding.name }}</em><small>{{ confidenceLabel(finding.confidence) }}</small></span>
+                  </div>
+                  <small v-else>未识别</small>
+                </section>
+              </div>
+              <div class="project-validation-plan">
+                <section v-for="category in validationCategories" :key="category.key" class="project-validation-group">
+                  <header><b>{{ category.label }}</b><small>{{ commandsFor(project, category.key).length }} 条建议</small></header>
+                  <p v-if="!commandsFor(project, category.key).length" class="project-validation-empty">暂无推荐命令</p>
+                  <article v-for="command in commandsFor(project, category.key)" :key="`${command.working_directory}:${command.command}`" class="project-validation-command">
+                    <div><code>{{ command.command }}</code><span>目录：{{ command.working_directory || '.' }}</span></div>
+                    <p>{{ command.reason }}</p>
+                    <small v-if="command.evidence.length">依据：{{ command.evidence.map(evidenceLabel).join('；') }}</small>
+                    <em>仅建议，未执行</em>
+                  </article>
+                </section>
+              </div>
+              <details v-if="project.evidence.length" class="project-evidence">
+                <summary>识别证据（{{ project.evidence.length }}）</summary>
+                <ul><li v-for="evidence in project.evidence" :key="`${evidence.path}:${evidence.rule}`"><code>{{ evidence.path }}</code><span>{{ evidence.rule }}</span><small v-if="evidence.detail">{{ evidence.detail }}</small></li></ul>
+              </details>
+            </article>
+          </template>
+          <div v-else-if="!profileState.loading && !profileState.error" class="summary-empty project-profile-empty">
+            <span class="summary-empty-icon"><ListChecks :size="15" /></span>
+            <b>暂无项目画像</b>
+            <p>可点击“刷新项目画像”重新检测当前工作区。</p>
+          </div>
+        </div>
+      </section>
+
       <section class="summary-section" :class="{ collapsed: !openSections.has('todo') }">
         <button type="button" class="summary-section-trigger" :aria-expanded="openSections.has('todo')" @click="toggleSection('todo')">
           <b>待办</b><ChevronDown :size="13" /><small v-if="plan.length">{{ completed }}/{{ plan.length }}</small>

@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Discriminator, Field
 
 from sztu_code.core.session.model import SessionMode, SessionStatus
+from sztu_code.core.workspace.project_profile import ProjectProfile
 
 ApiFormat = Literal[
     "openai_chat_completions",
@@ -139,6 +140,16 @@ class WorkspaceStatusResult(BaseModel):
     branch: str | None = None
     is_git_repository: bool
     changed_file_count: int
+
+
+class WorkspaceProfileCommand(BaseModel):
+    type: Literal["workspace.profile"] = "workspace.profile"
+    workspace_id: str
+    refresh: bool = False
+
+
+class WorkspaceProfileResult(BaseModel):
+    profile: ProjectProfile
 
 
 class WorkspaceTreeCommand(BaseModel):
@@ -783,6 +794,7 @@ Command = Annotated[
     | WorkspaceResumeCommand
     | WorkspaceDeleteCommand
     | WorkspaceStatusCommand
+    | WorkspaceProfileCommand
     | WorkspaceTreeCommand
     | FileReadCommand
     | FileSearchCommand

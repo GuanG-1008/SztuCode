@@ -117,8 +117,8 @@ async def test_session_create_history_close_over_ipc(
     await writer.wait_closed()
 
 
-# 功能：验证 daemon 通过 IPC 打开工作区后可列出文件树、搜索文本并读取指定文件。
-# 设计：使用测试专属临时目录而非仓库本身，串联 workspace.open/tree、file.search/read 四个端点，并确认结果不依赖 Git 或真实模型。
+# 功能：验证 daemon 通过 IPC 打开工作区后可列出文件、读取内容并返回结构化项目画像。
+# 设计：使用测试专属临时目录而非仓库本身，串联 workspace.open/tree、file.search/read/profile 端点，并确认画像经真实 IPC 传输而不依赖模型。
 async def test_workspace_file_commands_over_ipc(
     running_daemon: subprocess.Popen[bytes],
     free_port: int,
@@ -127,6 +127,7 @@ async def test_workspace_file_commands_over_ipc(
     project = tmp_path / "workspace"
     project.mkdir()
     (project / "hello.py").write_text("def greet():\n    return 'hello'\n", encoding="utf-8")
+    (project / "pyproject.toml").write_text("[project]\nname = 'workspace'\n", encoding="utf-8")
 
     reader, writer = await asyncio.open_connection("127.0.0.1", free_port)
     opened = await _send_recv(
@@ -184,6 +185,18 @@ async def test_workspace_file_commands_over_ipc(
         req_id="read",
     )
     assert "def greet" in read["result"]["content"]
+
+    profile = await _send_recv(
+        reader,
+        writer,
+        "workspace.profile",
+        {"workspace_id": workspace_id, "refresh": True},
+        req_id="profile",
+    )
+    component = profile["result"]["profile"]["projects"][0]
+    assert component["path"] == "."
+    assert component["languages"][0]["name"] == "Python"
+    assert all(command["recommendation_only"] is True for command in component["validation_plan"])
 
     writer.close()
     await writer.wait_closed()

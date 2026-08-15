@@ -132,6 +132,166 @@ new goal
         )
 
 
+class _CancelableCompactingProvider:
+    def __init__(self) -> None:
+        self._calls = 0
+        self.compact_started = asyncio.Event()
+        self.main_waiting = asyncio.Event()
+        self.compact_cancelled = False
+
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tool_schemas: list[dict[str, object]],
+        bus: EventBus,
+        run_id: str,
+        *,
+        step: int = 0,
+        system: str | None = None,
+    ) -> LlmResponse:
+        if run_id == "compact":
+            self.compact_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.compact_cancelled = True
+                raise
+
+        self._calls += 1
+        if self._calls == 1:
+            return LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[ToolCallBlock(id="t1", name="unknown_tool", input={})],
+                usage=UsageStats(
+                    input_tokens=100_000,
+                    output_tokens=10,
+                    context_pct=0.9,
+                ),
+            )
+
+        self.main_waiting.set()
+        await asyncio.Future()
+
+
+class _AsyncCompactingProvider:
+    def __init__(self) -> None:
+        self._calls = 0
+        self.compact_started = asyncio.Event()
+        self.compact_completed = asyncio.Event()
+        self._allow_compact = asyncio.Event()
+        self._summary = """\
+## 1. Original Goal
+finish without session
+## 2. Completed Steps
+- queued compaction
+## 3. Key Constraints & Discoveries
+- no session store
+## 4. Current File State
+- none
+## 5. Remaining TODOs
+- none
+## 6. Critical Data
+- none
+"""
+
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tool_schemas: list[dict[str, object]],
+        bus: EventBus,
+        run_id: str,
+        *,
+        step: int = 0,
+        system: str | None = None,
+    ) -> LlmResponse:
+        if run_id == "compact":
+            self.compact_started.set()
+            await self._allow_compact.wait()
+            await asyncio.sleep(0)
+            self.compact_completed.set()
+            return LlmResponse(
+                stop_reason="end_turn",
+                text=self._summary,
+                usage=UsageStats(input_tokens=100_000, output_tokens=10),
+            )
+
+        self._calls += 1
+        if self._calls == 1:
+            return LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[ToolCallBlock(id="t1", name="unknown_tool", input={})],
+                usage=UsageStats(
+                    input_tokens=100_000,
+                    output_tokens=10,
+                    context_pct=0.9,
+                ),
+            )
+
+        self._allow_compact.set()
+        return LlmResponse(
+            stop_reason="end_turn",
+            text="done",
+            usage=UsageStats(input_tokens=200, output_tokens=10),
+        )
+
+
+class _FailingCompactingProvider:
+    def __init__(self) -> None:
+        self._calls = 0
+        self.compact_started = asyncio.Event()
+        self.compact_completed = asyncio.Event()
+        self.main_failed = asyncio.Event()
+        self._summary = """\
+## 1. Original Goal
+survive failure
+## 2. Completed Steps
+- compaction drained during failure
+## 3. Key Constraints & Discoveries
+- main loop failed after scheduling compaction
+## 4. Current File State
+- none
+## 5. Remaining TODOs
+- inspect failure
+## 6. Critical Data
+- boom
+"""
+
+    async def chat(
+        self,
+        messages: list[dict[str, object]],
+        tool_schemas: list[dict[str, object]],
+        bus: EventBus,
+        run_id: str,
+        *,
+        step: int = 0,
+        system: str | None = None,
+    ) -> LlmResponse:
+        if run_id == "compact":
+            self.compact_started.set()
+            await self.main_failed.wait()
+            self.compact_completed.set()
+            return LlmResponse(
+                stop_reason="end_turn",
+                text=self._summary,
+                usage=UsageStats(input_tokens=100_000, output_tokens=10),
+            )
+
+        self._calls += 1
+        if self._calls == 1:
+            return LlmResponse(
+                stop_reason="tool_use",
+                tool_calls=[ToolCallBlock(id="t1", name="unknown_tool", input={})],
+                usage=UsageStats(
+                    input_tokens=100_000,
+                    output_tokens=10,
+                    context_pct=0.9,
+                ),
+            )
+
+        self.main_failed.set()
+        raise RuntimeError("boom")
+
+
 # --- helpers -----------------------------------------------------------------
 
 
@@ -162,6 +322,14 @@ async def _run(
     )
     await runner.run(goal)
     return collected
+
+
+def _read_event_types(events_path: Path) -> list[str]:
+    return [
+        json.loads(line)["type"]
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
 
 
 # --- tests -------------------------------------------------------------------
@@ -341,6 +509,93 @@ async def test_session_history_and_notes_injected(tmp_path: Path) -> None:
     assert not (tmp_path / "runs" / "run-new").exists()
 
 
+# 功能：验证每次 run 都会在工作区根目录检测画像并把渲染结果注入 system prompt
+# 设计：替换检测与渲染函数并用捕获型 provider 观察最终 system，避免依赖真实文件结构或模型调用
+async def test_project_profile_is_injected_into_system_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    detected_roots: list[Path] = []
+
+    # 记录检测根目录并返回最小画像替身
+    def fake_detect_project_profile(root: Path) -> object:
+        detected_roots.append(root)
+        return object()
+
+    monkeypatch.setattr(
+        "sztu_code.core.runner.detect_project_profile", fake_detect_project_profile
+    )
+    monkeypatch.setattr(
+        "sztu_code.core.runner.render_project_profile_context",
+        lambda profile: "Language: Python\nRecommended unit test: uv run pytest",
+    )
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    outcome = await runner.run_and_capture("inspect project", workspace_root=workspace_root)
+
+    assert outcome.status == "success"
+    assert detected_roots == [workspace_root.resolve()]
+    assert provider.system is not None
+    assert "## Project Profile" in provider.system
+    assert "Recommended unit test: uv run pytest" in provider.system
+
+
+# 功能：验证项目画像检测遇到文件系统或数据错误时不会阻断 agent run
+# 设计：依次注入 OSError 和 ValueError，确认两种允许捕获的失败均保留正常 run 且不产生画像段
+async def test_project_profile_detection_errors_do_not_block_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    for error_type in (OSError, ValueError):
+        # 模拟检测阶段抛出可恢复的文件系统或数据异常
+        def raise_detection_error(
+            root: Path, error_type: type[OSError | ValueError] = error_type
+        ) -> object:
+            raise error_type("unreadable project metadata")
+
+        monkeypatch.setattr(
+            "sztu_code.core.runner.detect_project_profile", raise_detection_error
+        )
+        provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+        runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / error_type.__name__)
+
+        outcome = await runner.run_and_capture(
+            "inspect project",
+            run_id=f"profile-error-{error_type.__name__}",
+            workspace_root=workspace_root,
+        )
+
+        assert outcome.status == "success"
+        assert provider.system is not None
+        assert "## Project Profile" not in provider.system
+
+
+# 功能：验证真实工作区画像会进入 Agent prompt，且 package script 正文不会被注入。
+# 设计：用捕获型 provider 观察真实检测和渲染后的 system prompt，锁定推荐命令与不执行脚本正文的边界。
+async def test_workspace_project_profile_is_injected_into_agent_context(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "package.json").write_text(
+        json.dumps({"name": "web", "scripts": {"build": "unsafe-build --all"}}),
+        encoding="utf-8",
+    )
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    await runner.run_and_capture("inspect", run_id="run-profile", workspace_root=workspace)
+
+    assert provider.system is not None
+    assert "## Project Profile" in provider.system
+    assert "Detected Project Profile" in provider.system
+    assert "npm run build" in provider.system
+    assert "advisory only" in provider.system
+    assert "unsafe-build --all" not in provider.system
+
+
 # 功能：验证桌面端收到 run.finished 时本轮耗时与 token 已经持久化
 # 设计：在完成事件订阅器中立即读取 meta，锁定先落盘再广播的时序契约
 async def test_session_stats_persisted_before_finished_event(tmp_path: Path) -> None:
@@ -419,12 +674,135 @@ async def test_auto_compact_writes_summary_to_thread(tmp_path: Path) -> None:
         store=store,
     )
     # Phase 3a: 等待异步压缩完成（后台 Task 需要事件循环调度）
-    await asyncio.sleep(0.1)
-
     messages = store.read_messages("sess-1")
     assert messages[0]["role"] == "user"
     assert "Original Goal" in messages[0]["content"]
     assert messages[1]["role"] == "assistant"
+    event_types = [
+        json.loads(line)["type"]
+        for line in (store.runs_dir("sess-1") / "run-compact" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert "context.compacted" in event_types
+    assert event_types.index("context.compacted") < event_types.index("run.finished")
+    assert event_types[-1] == "run.finished"
+
+
+async def test_cancelled_run_cancels_pending_compaction(tmp_path: Path) -> None:
+    cfg = _config()
+    cfg.compaction.auto_threshold = 0.8
+    store = SessionStore(tmp_path / "sessions")
+    session = Session(
+        id="sess-1",
+        mode="chat",
+        status="active",
+        title="",
+        created_at="t",
+        updated_at="t",
+    )
+    store.write_meta(session)
+    store.append_message("sess-1", "user", "old goal")
+    store.append_message("sess-1", "user", "new goal with enough history")
+
+    provider = _CancelableCompactingProvider()
+    runner = AgentRunner(
+        cfg,
+        provider=provider,  # type: ignore[arg-type]
+        runs_dir=tmp_path / "runs",
+    )
+    task = asyncio.create_task(
+        runner.run_and_capture(
+            "new goal",
+            run_id="run-cancel",
+            session=session,
+            store=store,
+        )
+    )
+
+    await provider.compact_started.wait()
+    await provider.main_waiting.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert provider.compact_cancelled is True
+    event_types = [
+        json.loads(line)["type"]
+        for line in (store.runs_dir("sess-1") / "run-cancel" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line
+    ]
+    assert "context.compacted" not in event_types
+    assert event_types[-1] == "run.finished"
+
+
+async def test_run_without_session_waits_for_pending_compaction(tmp_path: Path) -> None:
+    cfg = _config()
+    cfg.compaction.auto_threshold = 0.8
+    provider = _AsyncCompactingProvider()
+    runner = AgentRunner(
+        cfg,
+        provider=provider,  # type: ignore[arg-type]
+        runs_dir=tmp_path,
+    )
+
+    outcome = await runner.run_and_capture("new goal", run_id="run-no-session")
+
+    assert outcome.status == "success"
+    assert provider.compact_started.is_set()
+    assert provider.compact_completed.is_set()
+    run_path = tmp_path / "run-no-session"
+    assert len(list(run_path.glob("summary_*.md"))) == 1
+    event_types = _read_event_types(run_path / "events.jsonl")
+    assert "context.compacted" in event_types
+    assert event_types.index("context.compacted") < event_types.index("run.finished")
+    assert event_types[-1] == "run.finished"
+
+
+async def test_failed_run_waits_for_pending_compaction(tmp_path: Path) -> None:
+    cfg = _config()
+    cfg.compaction.auto_threshold = 0.8
+    store = SessionStore(tmp_path / "sessions")
+    session = Session(
+        id="sess-1",
+        mode="chat",
+        status="active",
+        title="",
+        created_at="t",
+        updated_at="t",
+    )
+    store.write_meta(session)
+    store.append_message("sess-1", "user", "old goal")
+    store.append_message("sess-1", "user", "new goal with enough history")
+
+    provider = _FailingCompactingProvider()
+    runner = AgentRunner(
+        cfg,
+        provider=provider,  # type: ignore[arg-type]
+        runs_dir=tmp_path / "runs",
+    )
+
+    outcome = await runner.run_and_capture(
+        "new goal",
+        run_id="run-failure",
+        session=session,
+        store=store,
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.reason == "llm_error"
+    assert provider.compact_started.is_set()
+    assert provider.compact_completed.is_set()
+    messages = store.read_messages("sess-1")
+    assert "Original Goal" in messages[0]["content"]
+    event_types = _read_event_types(store.runs_dir("sess-1") / "run-failure" / "events.jsonl")
+    assert "context.compacted" in event_types
+    assert event_types.index("context.compacted") < event_types.index("run.finished")
+    assert event_types[-1] == "run.finished"
 
 
 # 功能：验证 session run 中注册了 note_save，工具调用会写入 notes.md

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -157,3 +158,29 @@ async def test_compact_messages_rejects_truncated_summary(tmp_path: Path) -> Non
     result = await compactor.compact_messages(_make_messages(), provider)
 
     assert result is None
+
+
+async def test_wait_pending_can_cancel_background_tasks(tmp_path: Path) -> None:
+    provider = MagicMock()
+    cancel_seen = asyncio.Event()
+
+    async def _chat(**_: Any) -> LlmResponse:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancel_seen.set()
+            raise
+
+    provider.chat = AsyncMock(side_effect=_chat)
+    compactor = Compactor(EventBus(), tmp_path, "sess-1")
+    ctx = ExecutionContext(run_id="r1", goal="test", max_steps=5)
+    ctx.messages = _make_messages()
+
+    task = compactor.compact_async(ctx, provider)
+    assert task is not None
+
+    await asyncio.sleep(0)
+    await compactor.wait_pending(cancel_pending=True)
+
+    assert cancel_seen.is_set()
+    assert task.cancelled() is True
