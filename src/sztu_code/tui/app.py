@@ -413,9 +413,14 @@ class SlashCompleteWidget(Static):
 
     can_focus = False
 
+    # 每页最多展示的命令条数，超出后通过 PgUp/PgDn 翻页
+    _PAGE_SIZE = 10
+
     DEFAULT_CSS = """
     SlashCompleteWidget {
         height: auto;
+        max-height: 14;
+        overflow-y: auto;
         padding: 0 1;
         margin: 0 2;
         background: $surface;
@@ -436,61 +441,112 @@ class SlashCompleteWidget(Static):
         self._all_items = items
         self._filtered: list[tuple[str, str]] = list(items)
         self._cursor = 0
+        self._page = 0
 
     # 根据查询字符串筛选列表，重置光标并重新渲染
     def set_query(self, query: str) -> None:
         q = query.lower()
         self._filtered = [(n, d) for n, d in self._all_items if not q or q in n.lower()]
+        self._page = 0
         self._cursor = min(self._cursor, max(0, len(self._filtered) - 1))
         if self.is_attached:
             self._redraw()
 
-    # 向上移动光标并重新渲染
-    def move_up(self) -> None:
-        if self._filtered:
-            self._cursor = (self._cursor - 1) % len(self._filtered)
-            self._redraw()
+    # 当前总页数（至少 1 页）
+    def _page_count(self) -> int:
+        return max(1, (len(self._filtered) + self._PAGE_SIZE - 1) // self._PAGE_SIZE)
 
-    # 向下移动光标并重新渲染
+    # 当前页首条在完整列表中的下标
+    def _page_start(self) -> int:
+        return self._page * self._PAGE_SIZE
+
+    # 当前页实际条数（最后一页可能不满一页）
+    def _page_items(self) -> int:
+        return min(self._PAGE_SIZE, len(self._filtered) - self._page_start())
+
+    # 向上移动光标并重新渲染；页首再上翻则回到上一页
+    def move_up(self) -> None:
+        if not self._filtered:
+            return
+        if self._cursor > 0:
+            self._cursor -= 1
+        else:
+            self._page = (self._page - 1) % self._page_count()
+            self._cursor = self._page_items() - 1
+        self._redraw()
+
+    # 向下移动光标并重新渲染；页尾再下翻则进入下一页
     def move_down(self) -> None:
-        if self._filtered:
-            self._cursor = (self._cursor + 1) % len(self._filtered)
-            self._redraw()
+        if not self._filtered:
+            return
+        if self._cursor < self._page_items() - 1:
+            self._cursor += 1
+        else:
+            self._page = (self._page + 1) % self._page_count()
+            self._cursor = 0
+        self._redraw()
+
+    # 向上翻一页，光标保持在页内对应位置
+    def page_up(self) -> None:
+        if not self._filtered:
+            return
+        self._page = (self._page - 1) % self._page_count()
+        self._cursor = min(self._cursor, self._page_items() - 1)
+        self._redraw()
+
+    # 向下翻一页，光标保持在页内对应位置
+    def page_down(self) -> None:
+        if not self._filtered:
+            return
+        self._page = (self._page + 1) % self._page_count()
+        self._cursor = min(self._cursor, self._page_items() - 1)
+        self._redraw()
 
     # 选中当前光标项并发布 Selected 消息
     def select_current(self) -> None:
-        if self._filtered:
-            self.post_message(self.Selected(self._filtered[self._cursor][0]))
+        if not self._filtered:
+            return
+        index = self._page_start() + self._cursor
+        if index < len(self._filtered):
+            self.post_message(self.Selected(self._filtered[index][0]))
 
     # 返回当前是否有可选项
     def has_selection(self) -> bool:
         return len(self._filtered) > 0
 
-    # 鼠标点击补全项时选中该条目（Static 默认不响应点击，按内容行号换算）
+    # 鼠标点击补全项时选中该条目（Static 默认不响应点击，按内容行号换算并叠加页偏移）
     def on_click(self, event: events.Click) -> None:
         row = event.y + self.scroll_offset.y
-        if 0 <= row < len(self._filtered):
+        index = self._page_start() + row
+        if 0 <= index < len(self._filtered):
             event.stop()
             self._cursor = row
             self._redraw()
-            self.post_message(self.Selected(self._filtered[row][0]))
+            self.post_message(self.Selected(self._filtered[index][0]))
 
     def on_mount(self) -> None:
         self._redraw()
 
-    # 渲染筛选后的命令列表，高亮当前光标项
+    # 渲染当前页的命令列表，高亮光标项，底部显示翻页提示与页码
     def _redraw(self) -> None:
         if not self._filtered:
             self.update("[dim]  no matching commands[/dim]")
             return
+        start = self._page_start()
+        end = min(start + self._PAGE_SIZE, len(self._filtered))
         lines: list[str] = []
-        for i, (name, desc) in enumerate(self._filtered):
+        for i in range(start, end):
+            name, desc = self._filtered[i]
             desc_part = f"  [dim]{desc}[/dim]" if desc else ""
-            if i == self._cursor:
+            if i - start == self._cursor:
                 lines.append(f"  [bold cyan]❯ /{name}[/bold cyan]{desc_part}")
             else:
                 lines.append(f"    [cyan]/{name}[/cyan]{desc_part}")
-        lines.append("[dim]  ↑↓ navigate   tab/enter select   esc dismiss[/dim]")
+        page_info = f"  [dim]{self._page + 1}/{self._page_count()}[/dim]"
+        lines.append(
+            "[dim]  ↑↓ navigate   PgUp/PgDn page   tab/enter select   esc dismiss[/dim]"
+            f"{page_info}"
+        )
         self.update("\n".join(lines))
 
 
@@ -577,6 +633,16 @@ class ChatTextArea(TextArea):
                 event.stop()
                 event.prevent_default()
                 popup.move_down()
+                return
+            elif key == "pageup":
+                event.stop()
+                event.prevent_default()
+                popup.page_up()
+                return
+            elif key == "pagedown":
+                event.stop()
+                event.prevent_default()
+                popup.page_down()
                 return
             elif key == "escape":
                 event.stop()

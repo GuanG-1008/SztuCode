@@ -1,0 +1,753 @@
+:root {
+  --app-bg: #edf0f1;
+  --surface: #ffffff;
+  --surface-soft: #f6f7f7;
+  --surface-raised: #ffffff;
+  --chrome-bg: #f9fafb;
+  --border: #dfe3e4;
+  --border-strong: #ccd2d4;
+  --text: #202426;
+  --text-muted: #6f777b;
+  --text-faint: #98a0a4;
+  --accent: #30383b;
+  --accent-soft: #e5e9ea;
+  --accent-contrast: #ffffff;
+  --danger: #b64a42;
+  --shadow-modal: 0 24px 70px rgb(26 34 38 / 22%), 0 4px 18px rgb(26 34 38 / 12%);
+  --wallpaper-opacity: .28;
+  --wallpaper-opacity-dark: .46;
+  --chrome-surface-opacity: 68%;
+  --conversation-surface-opacity: 64%;
+  --composer-surface-opacity: 92%;
+  --inspector-surface-opacity: 64%;
+}
+
+:root[data-accent="blue"] { --accent: #2d6fbe; --accent-soft: #e0ebf7; }
+:root[data-accent="jade"] { --accent: #26745d; --accent-soft: #deeee8; }
+:root[data-accent="coral"] { --accent: #aa5146; --accent-soft: #f5e3e0; }
+
+:root[data-app-theme="dark"] {
+  color-scheme: dark;
+  --app-bg: #171a1b;
+  --surface: #202425;
+  --surface-soft: #282d2f;
+  --surface-raised: #2b3032;
+  --chrome-bg: var(--surface-soft);
+  --border: #373d3f;
+  --border-strong: #4a5255;
+  --text: #edf0f1;
+  --text-muted: #a8b0b3;
+  --text-faint: #7d878b;
+  --accent: #d7dddf;
+  --accent-soft: #3a4144;
+  --accent-contrast: #171a1b;
+  --danger: #e37a70;
+  --shadow-modal: 0 26px 80px rgb(0 0 0 / 48%), 0 5px 20px rgb(0 0 0 / 32%);
+}
+
+:root[data-app-theme="dark"][data-accent="blue"] { --accent: #78aeea; --accent-soft: #263b52; }
+:root[data-app-theme="dark"][data-accent="jade"] { --accent: #72c5a8; --accent-soft: #253f37; }
+:root[data-app-theme="dark"][data-accent="coral"] { --accent: #ee9a90; --accent-soft: #4c302e; }
+
+:root[data-app-theme="dark"] .kimi-shell::before {
+  opacity: var(--wallpaper-opacity-dark) !important;
+}
+
+.kimi-shell {
+  position: relative;
+  isolation: isolate;
+  color: var(--text) !important;
+  background: var(--app-bg) !important;
+  border-color: var(--border) !important;
+}
+
+.kimi-shell::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  opacity: var(--wallpaper-opacity);
+  pointer-events: none;
+  content: "";
+  transition: opacity 160ms ease;
+}
+
+:root[data-wallpaper="none"] .kimi-shell::before { background: none; }
+
+:root[data-wallpaper="mist"] .kimi-shell::before {
+  background:
+    linear-gradient(128deg, color-mix(in srgb, var(--accent) 68%, transparent), transparent 42%),
+    linear-gradient(310deg, rgb(172 116 88 / 52%), transparent 38%),
+    linear-gradient(35deg, rgb(66 123 118 / 42%), transparent 52%);
+}
+
+:root[data-wallpaper="grid"] .kimi-shell::before {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--accent) 68%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 68%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+:root[data-wallpaper="paper"] .kimi-shell::before {
+  background:
+    repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb, var(--text) 32%, transparent) 3px 4px),
+    linear-gradient(115deg, rgb(166 118 82 / 48%), transparent 55%);
+  background-size: auto, 100% 100%;
+}
+
+:root[data-wallpaper="custom"] .kimi-shell::before {
+  background-image: var(--custom-wallpaper-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.kimi-titlebar,
+.sidebar-viewport {
+  color: var(--text) !important;
+  background: var(--chrome-bg) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none;
+}
+
+.kimi-sidebar {
+  color: var(--text) !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+.kimi-main {
+  color: var(--text) !important;
+  background: var(--surface) !important;
+}
+
+.settings-link { color: var(--text-muted) !important; }
+.settings-link:hover { color: var(--text) !important; background: var(--accent-soft) !important; }
+.sidebar-footer { border: 0 !important; }
+.permission-confirm-backdrop { z-index: 920 !important; }
+.model-manager-backdrop { z-index: 940 !important; }
+
+:root[data-density="compact"] .sidebar-tools button,
+:root[data-density="compact"] .project-task,
+:root[data-density="compact"] .conversation-row { min-height: 31px; }
+:root[data-density="compact"] .task-stream { padding-top: 28px; }
+
+:root[data-app-theme="dark"] :where(
+  .work-header,
+  .task-canvas,
+  .kimi-composer,
+  .project-popover,
+  .launcher-popover,
+  .bottom-diff-preview,
+  .bottom-diff-preview__bar,
+  .simple-page,
+  .session-board article,
+  .permission-confirm,
+  .model-manager-dialog,
+  .model-manager-backdrop > section
+) {
+  color: var(--text) !important;
+  background: var(--surface) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .sidebar-brand h1,
+  .workspace-trigger,
+  .task-head h1,
+  .task-intro,
+  .markdown-body,
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .kimi-composer textarea,
+  .service-status b,
+  .simple-page h1,
+  .bridge-card h2,
+  .session-board b
+) { color: var(--text) !important; }
+
+:root[data-app-theme="dark"] :is(
+  .task-kicker,
+  .service-status small,
+  .side-label,
+  .project-task,
+  .conversation-row,
+  .simple-page p,
+  .bridge-card p,
+  .session-board span
+) { color: var(--text-muted) !important; }
+
+:root[data-app-theme="dark"] :is(
+  .task-search,
+  .run-chip,
+  .timeline-user-message,
+  .permission,
+  .round,
+  .model-config-trigger,
+  .outline-button,
+  .bridge-card,
+  select,
+  input
+) {
+  color: var(--text) !important;
+  background: var(--surface-soft) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .sidebar-tools button:hover,
+  .sidebar-tools button.active,
+  .project-task:hover,
+  .project-task.active,
+  .conversation-row:hover,
+  .conversation-row.active,
+  .nav-toggle:hover
+) { color: var(--text) !important; background: var(--accent-soft) !important; }
+
+:root[data-app-theme="dark"] .nav-toggle {
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+:root[data-app-theme="dark"] .session-loading {
+  color: var(--text-muted);
+  background: rgb(32 36 37 / 82%);
+}
+
+:root[data-app-theme="dark"] :is(
+  .task-launcher .launcher-heading h1,
+  .task-launcher .launcher-mark
+) {
+  color: var(--text) !important;
+}
+
+:root[data-app-theme="dark"] .starter-tasks button {
+  color: var(--text-muted) !important;
+  background: color-mix(in srgb, var(--surface) 82%, transparent) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] .starter-tasks button:hover,
+:root[data-app-theme="dark"] .starter-tasks button.selected {
+  color: var(--text) !important;
+  background: var(--surface-raised) !important;
+  border-color: var(--border-strong) !important;
+}
+
+:root[data-app-theme="dark"] .sidebar-session:has(.status-task-row.active),
+:root[data-app-theme="dark"] .sidebar-session:has(.project-task.active),
+:root[data-app-theme="dark"] .sidebar-session:has(.conversation-row.active) {
+  background: var(--accent-soft) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .new-task-button,
+  .sidebar-tools button,
+  .project-row-toggle,
+  .side-item-action,
+  .status-task-row,
+  .account,
+  .window-actions,
+  .window-action,
+  .work-header__tools button,
+  .icon-button,
+  .composer-project,
+  .model-label,
+  .model-config-trigger
+) { color: var(--text-muted) !important; }
+
+:root[data-app-theme="dark"] .project-row-toggle svg { color: currentColor !important; }
+
+:root[data-app-theme="dark"] :is(
+  .new-task-button,
+  .sidebar-tools button,
+  .project-row-shell,
+  .project-row-toggle,
+  .side-item-action,
+  .status-task-row,
+  .work-header__tools button,
+  .icon-button,
+  .model-config-trigger
+):hover {
+  color: var(--text) !important;
+  background: var(--surface-raised) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .session-menu,
+  .session-menu input,
+  .project-action-menu,
+  .project-popover,
+  .launcher-popover,
+  .timeline-user-message__meta,
+  .tool-call-card,
+  .tool-call-card > button,
+  .tool-call-card__details,
+  .thinking-collapse
+) {
+  color: var(--text) !important;
+  background: var(--surface-raised) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .session-menu > button,
+  .project-action-menu button,
+  .project-popover button,
+  .launcher-popover button
+) { color: var(--text) !important; }
+
+:root[data-app-theme="dark"] :is(
+  .session-menu > button,
+  .project-action-menu button,
+  .project-popover button,
+  .launcher-popover button
+):hover { background: var(--surface-soft) !important; }
+
+:root[data-app-theme="dark"] :is(
+  .turn-history-toggle,
+  .thinking-panel button,
+  .thinking-panel__icon,
+  .thinking-panel__label,
+  .thinking-panel__preview,
+  .timeline-row__separator,
+  .timeline-row__chevron,
+  .tool-call-group__trigger,
+  .tool-call-group__icon,
+  .tool-call-event > button,
+  .tool-call-event > button > svg:first-child,
+  .tool-call-event__action,
+  .tool-call-event__detail,
+  .turn-call-summary,
+  .session-stats-line,
+  .turn-tail-metrics
+) { color: var(--text-muted) !important; }
+
+:root[data-app-theme="dark"] :is(
+  .thinking-panel__details,
+  .tool-call-event__details pre,
+  .tool-call-card__details pre,
+  .tool-call-card pre
+) {
+  color: var(--text) !important;
+  background: var(--surface-soft) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] .thinking-panel[data-state="running"]::after {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 10%), transparent);
+}
+
+:root[data-app-theme="dark"] .markdown-body code {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+:root[data-app-theme="dark"] .markdown-body pre {
+  color: var(--text);
+  background: var(--surface-soft);
+  border-color: var(--border);
+}
+
+:root[data-app-theme="dark"] .markdown-body pre code { background: transparent; }
+
+:root[data-app-theme="dark"] .markdown-body table,
+:root[data-app-theme="dark"] .markdown-body th,
+:root[data-app-theme="dark"] .markdown-body td { border-color: var(--border); }
+
+:root[data-app-theme="dark"] .markdown-body th { background: var(--surface-soft); }
+
+:root[data-app-theme="dark"] .markdown-body blockquote {
+  color: var(--text-muted);
+  border-color: var(--border-strong);
+}
+
+:root[data-app-theme="dark"] .markdown-body hr {
+  height: 1px;
+  margin: 18px 0;
+  background: var(--border-strong);
+  border: 0;
+}
+
+:root[data-app-theme="dark"] .task-stream:hover,
+:root[data-app-theme="dark"] .task-stream:focus-within,
+:root[data-app-theme="dark"] .sidebar-workspace {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+:root[data-app-theme="dark"] .task-stream:hover::-webkit-scrollbar-thumb,
+:root[data-app-theme="dark"] .task-stream:focus-within::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+:root[data-app-theme="dark"] .permission-confirm-backdrop {
+  background: rgb(8 11 12 / 72%);
+  backdrop-filter: blur(4px);
+}
+
+:root[data-app-theme="dark"] .permission-confirm > header,
+:root[data-app-theme="dark"] .permission-confirm__body {
+  color: var(--text);
+  background: var(--surface);
+}
+
+:root[data-app-theme="dark"] .permission-confirm > header > span {
+  color: #efb56b;
+  background: #3b3022;
+}
+
+:root[data-app-theme="dark"] .permission-confirm h2,
+:root[data-app-theme="dark"] .permission-confirm__body > b { color: var(--text); }
+
+:root[data-app-theme="dark"] .permission-confirm header p,
+:root[data-app-theme="dark"] .permission-confirm__body ul { color: var(--text-muted); }
+
+:root[data-app-theme="dark"] .permission-confirm__body > p {
+  color: #f0c27a;
+  background: #3f3424;
+  border: 1px solid #5a472c;
+}
+
+:root[data-app-theme="dark"] .permission-confirm > footer {
+  background: var(--surface-soft);
+  border-top: 1px solid var(--border);
+}
+
+:root[data-app-theme="dark"] .permission-confirm > footer button:not(.danger) {
+  color: var(--text);
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+}
+
+:root[data-app-theme="dark"] .permission-confirm > footer button:not(.danger):hover {
+  background: var(--accent-soft);
+}
+
+:root[data-app-theme="dark"] .permission-confirm > footer button.danger {
+  background: #b94a4f;
+  border-color: #b94a4f;
+}
+
+:root[data-app-theme="dark"] .permission-confirm > footer button.danger:hover {
+  background: #a33e43;
+  border-color: #a33e43;
+}
+
+/* The files inspector ships with a light palette; keep its dark treatment scoped
+   so standalone previews and the rest of the workbench retain their own themes. */
+:root[data-app-theme="dark"] .project-inspector.file-rail {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-tab-strip,
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-preview--files > header,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview-meta,
+:root[data-app-theme="dark"] .project-inspector.file-rail .preview-breadcrumb {
+  color: var(--text);
+  background: transparent;
+  border-color: var(--border);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(
+  .workspace-tool-menu-trigger,
+  .workspace-browser-add,
+  .workspace-expand,
+  .workspace-panel-close,
+  .workspace-open-tab > button:first-child,
+  .workspace-tab-close
+) { color: var(--text-muted); }
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(
+  .workspace-tool-menu-trigger:hover,
+  .workspace-tool-menu-trigger.active,
+  .workspace-browser-add:hover,
+  .workspace-expand:hover,
+  .workspace-panel-close:hover,
+  .workspace-tab-close:hover
+) {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-open-tab.active,
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-open-tab.active:hover {
+  background: var(--accent-soft);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 22%);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-open-tab.active > button:first-child {
+  color: var(--text);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-tab-close {
+  background: var(--accent-soft);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-header-divider,
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-tree-divider::after {
+  background: var(--border);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-tree-divider:hover::after,
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-tree-divider:active::after {
+  background: var(--border-strong);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-tool-menu {
+  color: var(--text);
+  background: var(--surface-raised);
+  border-color: var(--border);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 32%);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-tool-menu button,
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-tool-menu button svg {
+  color: var(--text);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .workspace-tool-menu button:hover {
+  background: var(--accent-soft);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(
+  .file-preview--files > header b,
+  .file-row,
+  .files-preview-placeholder b,
+  .code-preview-empty b
+) { color: var(--text); }
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(
+  .file-preview--files > header small,
+  .files-loading,
+  .files-empty,
+  .files-preview-placeholder p,
+  .code-preview-empty,
+  .code-preview-empty svg
+) { color: var(--text-muted); }
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-row:hover {
+  background: color-mix(in srgb, var(--surface-raised) 72%, transparent);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-row.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-row .row-chevron,
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-row .row-icon {
+  color: var(--text-faint);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .file-row.dir .row-icon {
+  color: #82b6f4;
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview {
+  color: var(--text);
+  background: var(--surface);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview-meta > span {
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  border-color: var(--border-strong);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview-meta .format-badge {
+  color: #9bc9ff;
+  background: #24384b;
+  border-color: #3d5972;
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview-meta .truncated-badge {
+  color: #efc27d;
+  background: #413522;
+  border-color: #665230;
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .preview-breadcrumb {
+  color: var(--text-muted);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .preview-breadcrumb i {
+  color: var(--text-faint);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview-scroll {
+  color: var(--text);
+  background: var(--surface);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-line:hover {
+  background: color-mix(in srgb, var(--surface-raised) 72%, transparent);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-line:has(.hljs-addition) {
+  background: rgb(53 104 72 / 24%);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-line:has(.hljs-deletion) {
+  background: rgb(135 61 61 / 24%);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .line-number {
+  color: var(--text-faint);
+  border-color: var(--border);
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-comment,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-quote { color: #9aa7af; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-keyword,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-selector-tag,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-literal { color: #d7a6ec; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-string,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-regexp,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-addition { color: #91d5aa; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-number,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-built_in,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-type { color: #efb477; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-title,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-title.function_,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-section { color: #8fc1ff; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-variable,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-template-variable,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-attr,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-attribute { color: #efa98f; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-meta,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-symbol,
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-bullet { color: #83cbd7; }
+:root[data-app-theme="dark"] .project-inspector.file-rail .code-preview .hljs-deletion { color: #ff938d; }
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(.files-body, .code-preview-scroll) {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(.files-body, .code-preview-scroll)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-app-theme="dark"] .project-inspector.file-rail :is(.files-body, .code-preview-scroll)::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+/* Wallpaper remains a single continuous layer; large work surfaces reveal it softly. */
+:root:not([data-wallpaper="none"]) .kimi-shell.is-macos::before {
+  content: "";
+}
+
+:root:not([data-wallpaper="none"]) :is(.kimi-titlebar, .sidebar-viewport) {
+  background: color-mix(in srgb, var(--chrome-bg) var(--chrome-surface-opacity), transparent) !important;
+  backdrop-filter: blur(16px) saturate(112%);
+  -webkit-backdrop-filter: blur(16px) saturate(112%);
+}
+
+:root:not([data-wallpaper="none"]) .kimi-sidebar {
+  background: transparent !important;
+}
+
+:root:not([data-wallpaper="none"]) .kimi-main {
+  background: color-mix(in srgb, var(--surface) var(--conversation-surface-opacity), transparent) !important;
+}
+
+:root:not([data-wallpaper="none"]) .kimi-main:has(.work-page) {
+  background: transparent !important;
+}
+
+:root:not([data-wallpaper="none"]) .task-canvas {
+  background: color-mix(in srgb, var(--surface) var(--conversation-surface-opacity), transparent) !important;
+}
+
+:root:not([data-wallpaper="none"]) .project-inspector.file-rail {
+  background: color-mix(in srgb, var(--surface) var(--inspector-surface-opacity), transparent) !important;
+}
+
+:root:not([data-wallpaper="none"]) :is(
+  .task-conversation > .kimi-composer,
+  .task-launcher .landing-composer textarea,
+  .chat-composer > textarea
+) {
+  background: color-mix(in srgb, var(--surface) var(--composer-surface-opacity), transparent) !important;
+  backdrop-filter: blur(12px) saturate(108%);
+  -webkit-backdrop-filter: blur(12px) saturate(108%);
+}
+
+:root:not([data-wallpaper="none"]) :is(.work-header, .workspace-tab-strip) {
+  background: transparent !important;
+}
+
+:root:not([data-wallpaper="none"]) :is(
+  .task-summary-view,
+  .summary-section,
+  .files-workspace,
+  .file-tree-view,
+  .file-tree-view .file-preview--files,
+  .file-tree-view .files-body,
+  .files-preview-placeholder,
+  .workspace-empty-view
+) {
+  background: transparent !important;
+}
+
+:root:not([data-wallpaper="none"]) .file-tree-view .code-preview {
+  background: color-mix(in srgb, var(--surface) var(--inspector-surface-opacity), transparent) !important;
+  backdrop-filter: blur(10px) saturate(106%);
+  -webkit-backdrop-filter: blur(10px) saturate(106%);
+}
+
+:root:not([data-wallpaper="none"]) :is(
+  .file-tree-view .code-preview-scroll,
+  .file-tree-view .code-preview-meta,
+  .file-tree-view .preview-breadcrumb
+) {
+  background: transparent !important;
+}
+
+:root[data-wallpaper="mist"] :is(.kimi-titlebar, .sidebar-viewport) {
+  background:
+    linear-gradient(
+      118deg,
+      color-mix(in srgb, #fffaf2 var(--chrome-surface-opacity), transparent) 0%,
+      color-mix(in srgb, #f7e6d5 var(--chrome-surface-opacity), transparent) 18%,
+      color-mix(in srgb, #dbd2ef var(--chrome-surface-opacity), transparent) 40%,
+      color-mix(in srgb, #ebe5dd var(--chrome-surface-opacity), transparent) 62%,
+      color-mix(in srgb, #ebdae9 var(--chrome-surface-opacity), transparent) 80%,
+      color-mix(in srgb, #fff7ee var(--chrome-surface-opacity), transparent) 100%
+    ) !important;
+  background-size: 180% 180% !important;
+  background-attachment: fixed !important;
+  animation: mist-chrome-flow 18s ease-in-out infinite;
+}
+
+:root[data-app-theme="dark"][data-wallpaper="mist"] :is(.kimi-titlebar, .sidebar-viewport) {
+  background:
+    linear-gradient(
+      118deg,
+      color-mix(in srgb, #342d29 var(--chrome-surface-opacity), transparent) 0%,
+      color-mix(in srgb, #3d3029 var(--chrome-surface-opacity), transparent) 18%,
+      color-mix(in srgb, #433754 var(--chrome-surface-opacity), transparent) 40%,
+      color-mix(in srgb, #2b2a28 var(--chrome-surface-opacity), transparent) 62%,
+      color-mix(in srgb, #413141 var(--chrome-surface-opacity), transparent) 80%,
+      color-mix(in srgb, #2f2b28 var(--chrome-surface-opacity), transparent) 100%
+    ) !important;
+}
+
+@keyframes mist-chrome-flow {
+  0%, 100% { background-position: 0% 48%; }
+  50% { background-position: 100% 52%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-wallpaper="mist"] :is(.kimi-titlebar, .sidebar-viewport) {
+    animation: none;
+    background-position: 50% 50%;
+  }
+}

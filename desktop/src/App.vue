@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, ArrowLeft, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  AlertTriangle, Archive, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
   GitBranch, Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
@@ -19,19 +19,21 @@ import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SessionStatsLine from "./components/timeline/SessionStatsLine.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
+import SettingsDialog from "./components/Settings/SettingsDialog.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
 import { appendThinkingBatch, appendTokenBatch, createTokenFrameBatcher } from "./utils/timelineStream";
 import { deriveSessionStats } from "./utils/sessionStats";
+import { loadAppearanceSettings, type AppearanceSettings } from "./services/appearance";
 import {
-  applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
+  cancelRun, connectRuntime, createSession, deleteWorkspace, getProviderStatus, getRuntimeSettings, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
-  resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings, workspaceStatus,
-  type Attachment, type CcswitchProvider, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
+  resumeWorkspace, sendPrompt, sessionHistory, setRuntimeSettings, workspaceStatus,
+  type Attachment, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
 } from "./services/sztu-runtime";
 
-type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "settings" | "diff";
+type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "diff";
 type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
 type RuntimeEvent = Record<string, unknown>;
 const FULL_SIDEBAR_MIN_WIDTH = 952;
@@ -124,12 +126,9 @@ type PendingAttachment = {
 const attachedFiles = ref<PendingAttachment[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
-const notifications = ref(localStorage.getItem("sztu.notifications") !== "false");
-const autostart = ref(false);
-const stayAwake = ref(false);
-const nativeSettingsAvailable = ref(false);
-const nativeSettingsError = ref("");
-const webBridgeAllowed = ref(false);
+const settingsOpen = ref(false);
+const settingsButton = ref<HTMLButtonElement | null>(null);
+const appearanceSettings = ref<AppearanceSettings>(loadAppearanceSettings());
 const currentStepByRun = new Map<string, number>();
 const runStepBase = new Map<string, number>(); // 每个 run 的 step 起点偏移，避免跨 run 步号冲突
 const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number }>();
@@ -143,11 +142,6 @@ const sessionLoading = ref(false);
 let sessionLoadingTimer: ReturnType<typeof setTimeout> | undefined;
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
 const pendingPermissions = ref<Array<{ toolUseId: string; toolName: string; preview: string; runId: string }>>([]);
-const ccswitchOpen = ref(false);
-const ccswitchLoading = ref(false);
-const ccswitchApplying = ref<string | null>(null);
-const ccswitchError = ref("");
-const ccswitchProviders = ref<CcswitchProvider[]>([]);
 const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
@@ -1253,39 +1247,6 @@ function chooseStarterTask(id: string, value: string) {
   void nextTick(() => launcherPrompt.value?.focus());
 }
 function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); thinkingBatcher.clear(); discardPendingTimeline(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
-async function loadNativeSettings() {
-  try {
-    const settings = await getNativeSettings();
-    autostart.value = settings.autostart;
-    stayAwake.value = settings.stay_awake;
-    nativeSettingsAvailable.value = settings.supported;
-    nativeSettingsError.value = "";
-  } catch {
-    nativeSettingsAvailable.value = false;
-  }
-}
-async function toggleAutostart(event: Event) {
-  const enabled = (event.target as HTMLInputElement).checked;
-  try {
-    const settings = await setNativeSettings({ autostart: enabled });
-    autostart.value = settings.autostart;
-    nativeSettingsError.value = "";
-  } catch (error) {
-    nativeSettingsError.value = error instanceof Error ? error.message : String(error);
-    (event.target as HTMLInputElement).checked = autostart.value;
-  }
-}
-async function toggleStayAwake(event: Event) {
-  const enabled = (event.target as HTMLInputElement).checked;
-  try {
-    const settings = await setNativeSettings({ stayAwake: enabled });
-    stayAwake.value = settings.stay_awake;
-    nativeSettingsError.value = "";
-  } catch (error) {
-    nativeSettingsError.value = error instanceof Error ? error.message : String(error);
-    (event.target as HTMLInputElement).checked = stayAwake.value;
-  }
-}
 async function applyPermissionMode(value: RuntimeSettings["permission_mode"]) {
   permissionSaving.value = true;
   permissionSettingsError.value = "";
@@ -1316,32 +1277,17 @@ function handleModelConfigUpdated(settings: RuntimeSettings, status: ProviderSta
   providerStatus.value = status;
 }
 function openModelManager() { modelManagerOpen.value = true; }
-// 加载本机 cc-switch 中可导入的供应商列表并展开面板
-async function loadCcswitchProviders() {
-  ccswitchLoading.value = true;
-  ccswitchError.value = "";
-  try {
-    ccswitchProviders.value = await listCcswitchProviders();
-    ccswitchOpen.value = true;
-  } catch (error) {
-    ccswitchError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    ccswitchLoading.value = false;
-  }
+function openSettings() {
+  settingsOpen.value = true;
+  projectMenuOpen.value = false;
+  closeLauncherMenus();
 }
-// 应用选中的 cc-switch 供应商并刷新运行时设置与状态
-async function useCcswitchProvider(providerId: string) {
-  ccswitchApplying.value = providerId;
-  ccswitchError.value = "";
-  try {
-    const settings = await applyCcswitchProvider(providerId);
-    if (settings) runtimeSettings.value = settings;
-    providerStatus.value = await getProviderStatus();
-  } catch (error) {
-    ccswitchError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    ccswitchApplying.value = null;
-  }
+function closeSettings() {
+  settingsOpen.value = false;
+  void nextTick(() => settingsButton.value?.focus());
+}
+function handleAppearanceChange(settings: AppearanceSettings) {
+  appearanceSettings.value = settings;
 }
 function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; closeLauncherMenus(); if (next === "chat") chatView.value = "home"; }
 async function submitChat(content: string) {
@@ -1522,7 +1468,6 @@ onMounted(() => {
   handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
-  void loadNativeSettings();
   void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
 });
 onBeforeUnmount(() => {
@@ -1543,8 +1488,7 @@ onBeforeUnmount(() => {
   stopEvents?.();
   stopDisconnect?.();
 });
-watch(page, (next) => { if (next === "skills" || next === "settings") void refreshIndex(false); });
-watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", String(enabled)));
+watch(page, (next) => { if (next === "skills") void refreshIndex(false); });
 </script>
 
 <template>
@@ -1674,7 +1618,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 
       <footer class="sidebar-footer">
         <div class="service-status"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : '未连接' }}</small></span></div>
-        <button class="settings-link" title="设置" aria-label="设置" @click="openPage('settings')"><Settings :size="16" :stroke-width="1.8" /></button>
+        <button ref="settingsButton" class="settings-link" title="设置" aria-label="设置" :aria-expanded="settingsOpen" @click="openSettings"><Settings :size="16" :stroke-width="1.8" /></button>
       </footer>
       </aside>
     </div>
@@ -1838,9 +1782,19 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       <section v-else-if="page === 'skills'" class="chat-main"><SkillCenter :connected="connected" :workspace-id="activeWorkspace?.workspace_id ?? null" :workspace-name="activeWorkspace?.name ?? null" /></section>
 
       <section v-else-if="page === 'webbridge'" class="simple-page"><header><div><h1>浏览器连接</h1><p>连接浏览器，让 Agent 在授权范围内协助网页操作</p></div></header><div class="bridge-card"><Globe2 :size="24" /><div><h2>连接状态</h2><p>当前未连接。此功能需要浏览器扩展与本地服务支持。</p></div><span class="status-pill">未连接</span></div></section>
-
-      <section v-else class="settings-screen"><header class="settings-top"><button title="返回工作区" aria-label="返回工作区" @click="openPage('work')"><ArrowLeft :size="19" /></button><h1>设置</h1></header><div class="settings-layout"><aside><span>SztuCode</span><button class="active">SztuCode Work</button></aside><main><section><span class="settings-section-label">系统设置</span><div class="setting-group"><label><div><b>开机自启动</b><p>登录系统时自动启动 SztuCode。</p></div><input :checked="autostart" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleAutostart" /></label><label><div><b>系统通知</b><p>允许 SztuCode 发送任务结果与重要提醒。</p></div><input v-model="notifications" type="checkbox" /></label><label><div><b>保持电脑唤醒</b><p>任务运行期间阻止电脑进入睡眠。</p></div><input :checked="stayAwake" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleStayAwake" /></label><p v-if="nativeSettingsError" class="native-settings-error">{{ nativeSettingsError }}</p></div></section><section><span class="settings-section-label">任务审批</span><div class="setting-group"><label class="stack"><b>权限模式</b><select :value="runtimeSettings?.permission_mode" @change="choosePermissionMode(($event.target as HTMLSelectElement).value as RuntimeSettings['permission_mode'])"><option value="normal">标准审批</option><option value="plan">计划模式</option><option value="accept_edits">允许编辑</option><option value="auto">全部允许</option></select></label></div></section><section><span class="settings-section-label">模型管理</span><div class="setting-group ccswitch-mgr"><div class="ccswitch-current-row"><div><b>当前模型</b><p>{{ runtimeSettings?.model || '未配置模型' }}<template v-if="runtimeSettings?.base_url"><br />{{ runtimeSettings.base_url }}</template></p></div><div class="model-management-actions"><button type="button" class="ccswitch-import-btn primary" @click="openModelManager"><Plus :size="14" />添加和管理模型</button><button type="button" class="ccswitch-import-btn" :disabled="ccswitchLoading" @click="ccswitchOpen ? (ccswitchOpen = false) : loadCcswitchProviders()">{{ ccswitchLoading ? '加载中…' : (ccswitchOpen ? '收起' : '从 cc-switch 导入') }}</button></div></div><div v-if="ccswitchOpen" class="ccswitch-list"><div v-for="item in ccswitchProviders" :key="item.id" class="ccswitch-card"><span class="ccswitch-card__dot" :class="{ has: item.has_api_key }" /><div class="ccswitch-card__info"><b>{{ item.name }}<em v-if="item.is_current">当前</em></b><span>{{ item.base_url }}</span><small>{{ item.model }}</small></div><button type="button" :disabled="ccswitchApplying === item.id" @click="useCcswitchProvider(item.id)">{{ ccswitchApplying === item.id ? '应用中…' : '使用此配置' }}</button></div><p v-if="!ccswitchProviders.length && !ccswitchLoading" class="ccswitch-empty">本机未发现可导入的 cc-switch 供应商，请确认已安装 CC Switch</p></div><p v-if="ccswitchError" class="native-settings-error">{{ ccswitchError }}</p></div></section><section><span class="settings-section-label">WebBridge</span><div class="setting-group"><label><div><b>允许网站所有操作</b><p>允许 Agent 在浏览器中执行已授权的网页动作。</p></div><input v-model="webBridgeAllowed" type="checkbox" disabled /></label><label><div><b>浏览器连接</b><p>显示 SztuCode 与本地浏览器扩展的连接状态。</p></div><em>未连接</em></label></div></section></main></div></section>
     </main>
+
+    <SettingsDialog
+      v-if="settingsOpen"
+      :appearance="appearanceSettings"
+      :runtime-settings="runtimeSettings"
+      :permission-error="permissionSettingsError"
+      @close="closeSettings"
+      @appearance-change="handleAppearanceChange"
+      @permission-change="choosePermissionMode"
+      @manage-model="openModelManager"
+      @runtime-updated="runtimeSettings = $event"
+    />
 
     <div v-if="modelManagerOpen" class="model-manager-backdrop"><ModelManager @close="modelManagerOpen = false" @updated="handleModelConfigUpdated" /></div>
 

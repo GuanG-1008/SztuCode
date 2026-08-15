@@ -533,7 +533,8 @@ def test_status_bar_renders_session_and_bg_info() -> None:
 # 设计：挂载 SlashCompleteWidget 后直接调用 on_click 模拟点击第二行，
 #       断言宿主 App 收到对应 skill 名，覆盖行号换算与消息路由
 async def test_slash_widget_click_selects_item() -> None:
-    from textual.app import App as TextualApp, ComposeResult
+    from textual.app import App as TextualApp
+    from textual.app import ComposeResult
 
     from sztu_code.tui.app import SlashCompleteWidget
 
@@ -564,3 +565,107 @@ async def test_slash_widget_click_selects_item() -> None:
         popup.on_click(_Click())  # type: ignore[arg-type]
         await pilot.pause()
         assert host.selected == ["theme"]
+
+
+
+# 功能：验证斜杠补全弹窗按每页 10 条分页，页数按总数向上取整
+# 设计：构造 25 个候选项，断言页数与各页条数，覆盖最后一页不满一页的情况
+def test_slash_widget_paginates_into_fixed_pages() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", f"desc {i}") for i in range(25)])
+
+    assert popup._page_count() == 3
+    assert popup._page_items() == 10  # 第 1 页满页
+    popup._page = 1
+    assert popup._page_start() == 10
+    popup._page = 2
+    assert popup._page_items() == 5  # 最后一页不满一页
+
+
+# 功能：验证光标跨页导航：页尾下翻进入下一页首项，页首上翻回到上一页末项
+# 设计：move_down 10 次到达页尾再下翻，断言页码与页内光标；再 move_up 回到上一页末项
+def test_slash_widget_navigation_crosses_pages() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", "") for i in range(25)])
+    selected: list[str] = []
+    popup.post_message = lambda m: selected.append(m.skill_name)  # type: ignore[method-assign]
+
+    for _ in range(9):
+        popup.move_down()
+    assert (popup._page, popup._cursor) == (0, 9)
+
+    popup.move_down()  # 第 1 页末尾 → 第 2 页首项
+    assert (popup._page, popup._cursor) == (1, 0)
+    popup.select_current()
+    assert selected == ["cmd10"]
+
+    popup.move_up()  # 第 2 页页首 → 第 1 页末项
+    assert (popup._page, popup._cursor) == (0, 9)
+
+
+# 功能：验证 PgUp/PgDn 直接翻页，光标保持在页内对应位置并在末页钳制
+# 设计：page_down 进入第 2 页，再进入第 3 页（仅 5 项）验证光标钳制，page_up 回退
+def test_slash_widget_pgup_pgdn_switch_pages() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", "") for i in range(25)])
+    popup._cursor = 7
+
+    popup.page_down()
+    assert (popup._page, popup._cursor) == (1, 7)
+    popup.page_down()
+    assert (popup._page, popup._cursor) == (2, 4)  # 末页仅 5 项，光标钳制
+    popup.page_up()
+    assert (popup._page, popup._cursor) == (1, 4)
+
+
+# 功能：验证筛选后回到第 1 页，避免旧页码越界
+# 设计：先翻到第 2 页再 set_query 过滤，断言页码归零且筛选生效
+def test_slash_widget_query_resets_page() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", "") for i in range(25)])
+    popup._page = 1
+
+    popup.set_query("cmd2")
+
+    assert popup._page == 0
+    assert all(name.startswith("cmd2") for name, _ in popup._filtered)
+
+
+# 功能：验证非首页点击换算：页内行号叠加页偏移选中完整列表对应项
+# 设计：翻到第 2 页后模拟点击第 3 行，断言选中全局第 13 项
+async def test_slash_widget_click_maps_page_offset() -> None:
+    from textual.app import App as TextualApp
+    from textual.app import ComposeResult
+
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    class _Click:
+        y = 2
+
+        def stop(self) -> None:
+            pass
+
+    class _Host(TextualApp[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.selected: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield SlashCompleteWidget([(f"cmd{i}", f"desc {i}") for i in range(25)])
+
+        def on_slash_complete_widget_selected(self, event: SlashCompleteWidget.Selected) -> None:
+            self.selected.append(event.skill_name)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        popup = host.query_one(SlashCompleteWidget)
+        popup._page = 1
+        popup._redraw()
+        popup.on_click(_Click())  # type: ignore[arg-type]
+        await pilot.pause()
+        assert host.selected == ["cmd12"]  # 10 + 2

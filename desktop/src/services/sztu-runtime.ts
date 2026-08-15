@@ -2,7 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { IpcClient, IpcRequestError } from "../lib/ipc";
 
 export type Workspace = { workspace_id: string; name: string; path: string; archived: boolean };
-export type NativeSettings = { autostart: boolean; stay_awake: boolean; supported: boolean };
+export type NativeSettings = {
+  autostart: boolean;
+  stay_awake: boolean;
+  supported: boolean;
+  theme: "system" | "light" | "dark";
+  wallpaper: "none" | "mist" | "grid" | "paper" | "custom";
+};
 export type WorkspaceNode = { path: string; name: string; kind: "directory" | "file"; children?: WorkspaceNode[] };
 export type FileSearchMatch = { path: string; line: number; preview: string };
 export type FileReadResult = {
@@ -85,7 +91,12 @@ export async function getNativeSettings(): Promise<NativeSettings> {
   return await invoke<NativeSettings>("native_settings_get");
 }
 
-export async function setNativeSettings(update: { autostart?: boolean; stayAwake?: boolean }): Promise<NativeSettings> {
+export async function setNativeSettings(update: {
+  autostart?: boolean;
+  stayAwake?: boolean;
+  theme?: NativeSettings["theme"];
+  wallpaper?: NativeSettings["wallpaper"];
+}): Promise<NativeSettings> {
   return await invoke<NativeSettings>("native_settings_update", update);
 }
 

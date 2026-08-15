@@ -11,9 +11,9 @@
   overflow: visible;
   color: #303532;
   background: #fff;
-  border: 1px solid #dfe1df;
-  border-radius: 10px;
-  box-shadow: 0 2px 8px rgb(27 35 31 / 4%);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 /* 展开态进入真正全屏：功能区独占整个窗口（无边框/圆角/阴影），其余窗口功能全部隐藏，而非用层级遮挡 */
 .project-inspector.file-rail.is-expanded { position: fixed; inset: 0; z-index: 210; width: auto; max-height: none; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
@@ -32,9 +32,10 @@
   align-items: center;
   padding: 0 12px;
   background: #fff;
-  border-bottom: 1px solid #e7e7e4;
-  border-radius: 9px 9px 0 0;
+  border: 0;
+  border-radius: 0;
 }
+.project-inspector.file-rail > .workspace-tab-strip { border: 0; }
 .workspace-tool-menu-root { position: relative; flex: 0 0 auto; }
 .workspace-tool-menu-trigger,
 .workspace-browser-add,
@@ -75,7 +76,7 @@
 .workspace-tool-menu button svg { flex: 0 0 auto; color: #272b28; }
 .workspace-tool-menu button span { display: inline; min-width: 0; overflow: hidden; color: inherit; text-overflow: ellipsis; white-space: nowrap; }
 
-.task-summary-view { min-height: 0; padding: 0 24px 24px; overflow-y: auto; overflow-x: hidden; background: #fff; border-radius: 0 0 9px 9px; scrollbar-gutter: stable; }
+.task-summary-view { min-height: 0; padding: 0 24px 24px; overflow-y: auto; overflow-x: hidden; background: #fff; border-radius: 0; scrollbar-gutter: stable; }
 .summary-section { min-height: 0; overflow: visible; background: #fff; border: 0; border-bottom: 1px solid #ececea; border-radius: 0; box-shadow: none; }
 .summary-section:last-child { border-bottom: 0; }
 .summary-section-trigger { display: flex; width: 100%; min-height: 66px; align-items: center; gap: 5px; padding: 0; color: #555a56; background: transparent; text-align: left; }
@@ -170,7 +171,7 @@
 .reference-context b { overflow: hidden; color: #303430; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .reference-context small { overflow: hidden; color: #a1a5a2; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
-.browser-workspace { position: relative; isolation: isolate; display: grid; grid-template-rows: 50px minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; background: #fff; border-radius: 0 0 9px 9px; }
+.browser-workspace { position: relative; isolation: isolate; display: grid; grid-template-rows: 50px minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; background: #fff; border-radius: 0; }
 .browser-toolbar { position: relative; z-index: 2; display: grid; grid-template-columns: auto minmax(120px, 1fr) 32px; align-items: center; gap: 10px; padding: 6px 11px; background: #fff; border-bottom: 1px solid #ececec; }
 .browser-navigation-actions { display: flex; align-items: center; gap: 2px; }
 .browser-toolbar-action,
@@ -198,8 +199,8 @@
 .browser-loading { position: absolute; z-index: 2; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: #68716c; background: rgb(255 255 255 / 88%); font-size: 10px; }
 .browser-loading svg { animation: spin 1s linear infinite; }
 
-.sandbox-workspace { min-width: 0; min-height: 0; overflow: hidden; background: #fff; border-radius: 0 0 9px 9px; }
-.workspace-empty-view { min-width: 0; min-height: 0; background: #fff; border-radius: 0 0 9px 9px; }
+.sandbox-workspace { min-width: 0; min-height: 0; overflow: hidden; background: #fff; border-radius: 0; }
+.workspace-empty-view { min-width: 0; min-height: 0; background: #fff; border-radius: 0; }
 .xterm-shell { width: 100%; height: 100%; padding: 8px 13px 12px; overflow: hidden; background: #fff; cursor: text; }
 .xterm-shell .xterm { height: 100%; }
 .xterm-shell .xterm-viewport { background: #fff !important; scrollbar-width: thin; scrollbar-color: #d7d9d7 transparent; }
