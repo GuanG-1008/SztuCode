@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sztu_code.core.bus.events import ChangeAppliedEvent, RunFinishedEvent, RunStartedEvent
+from sztu_code.core.bus.events import (
+    ChangeAppliedEvent,
+    ContextInjectedEvent,
+    RunFinishedEvent,
+    RunStartedEvent,
+)
 from sztu_code.core.changes import WorkspaceChangeTracker
 from sztu_code.core.compact.compactor import Compactor
 from sztu_code.core.compact.offload import OffloadManager
@@ -253,6 +258,28 @@ class AgentRunner:
         async with EventWriter(run_path / "events.jsonl") as writer:
             writer.subscribe(bus)
             await bus.publish(RunStartedEvent(run_id=run_id, goal=goal, ts=_now()))
+            # 发布上下文注入摘要：让前端以可折叠行展示模型实际收到的注入来源
+            # 借鉴 dsh web GUI：一切注入都是可溯源的上下文，前端按 source 分类展示
+            for source, label, content in (
+                ("system", "系统提示词", base_prompt),
+                ("global", "全局上下文", memory_catalog.prompt_content("global")),
+                ("project", "项目上下文", memory_catalog.prompt_content("project")),
+                ("session", "会话笔记", memory_catalog.prompt_content("session")),
+            ):
+                text = (content or "").strip()
+                if not text:
+                    continue
+                first_line = text.splitlines()[0][:80] if text else ""
+                await bus.publish(
+                    ContextInjectedEvent(
+                        run_id=run_id,
+                        source=source,  # type: ignore[arg-type]
+                        label=label,
+                        chars=len(text),
+                        preview=first_line,
+                        ts=_now(),
+                    )
+                )
 
             cancelled = False
             try:
@@ -373,6 +400,11 @@ class AgentRunner:
                     ts=_now(),
                 )
             )
+
+        # run 结束注销本次订阅的额外处理器，防止共享 bus 的订阅者随 run 次数无限累积
+        if self._extra_handlers:
+            for h in self._extra_handlers:
+                bus.unsubscribe(h)
 
         if session is not None and store is not None:
             # Phase 3a: 等待后台异步压缩完成（compactor 为 None 时跳过）

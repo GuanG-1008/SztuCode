@@ -78,7 +78,6 @@ const toolMenuRoot = ref<HTMLElement | null>(null);
 
 const plan = computed(() => [...(props.steps ?? [])].reverse().find((step) => step.plan?.length)?.plan ?? []);
 const completed = computed(() => plan.value.filter((item) => item.status === "completed").length);
-const progress = computed(() => plan.value.length ? Math.round((completed.value / plan.value.length) * 100) : 0);
 const selectedName = computed(() => selectedPath.value.split(/[\\/]/).filter(Boolean).pop() ?? selectedPath.value);
 const usedSkills = computed(() => {
   const skills = (props.steps ?? []).flatMap((step) => step.skills ?? []);
@@ -388,7 +387,11 @@ onBeforeUnmount(() => {
         </button>
         <div v-if="openSections.has('todo')" class="summary-section-body todo-section-body">
           <template v-if="plan.length">
-            <div class="summary-progress"><i :style="{ width: progress + '%' }" /></div>
+            <!-- 分段状态点（替代进度条）：每计划项一个点，完成实心/进行中脉冲光晕/待办浅灰，
+                 与侧栏 StateDot 语言统一（借鉴 dsh 状态可视化） -->
+            <div class="summary-progress-dots" :aria-label="`进度 ${completed}/${plan.length}`">
+              <i v-for="item in plan" :key="item.id" :class="item.status" :title="item.subject" />
+            </div>
             <ol class="summary-plan-list">
               <li v-for="item in plan" :key="item.id" :class="item.status">
                 <span><Check v-if="item.status === 'completed'" :size="11" /><LoaderCircle v-else-if="item.status === 'in_progress'" :size="12" /><Circle v-else :size="9" /></span>

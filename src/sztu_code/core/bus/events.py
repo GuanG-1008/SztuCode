@@ -142,6 +142,17 @@ class LlmModelSelectedEvent(BaseModel):
     ts: str
 
 
+class ContextInjectedEvent(BaseModel):
+    type: Literal["context.injected"] = "context.injected"
+    run_id: str
+    # 注入来源：system=基础提示词, global=全局上下文, project=项目上下文, session=会话笔记
+    source: Literal["system", "global", "project", "session"]
+    label: str  # 展示名（如 "全局上下文"）
+    chars: int = 0  # 注入内容字符数
+    preview: str = ""  # 首行预览（前端折叠行摘要）
+    ts: str
+
+
 class LogLineEvent(BaseModel):
     type: Literal["log.line"] = "log.line"
     run_id: str
@@ -417,6 +428,7 @@ Event = Annotated[
     | LlmThinkingEvent
     | LlmUsageEvent
     | LlmModelSelectedEvent
+    | ContextInjectedEvent
     | LogLineEvent
     | SessionCreatedEvent
     | SessionMessageReceivedEvent

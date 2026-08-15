@@ -1,5 +1,11 @@
 /* Shared typography scale. Keep this stylesheet last so every product surface reads consistently. */
 :root {
+  /* 动效 token（借鉴 dsh ui-theme base.css）：统一缓动曲线 + 三档时长，只用于状态反馈 */
+  --sz-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --sz-duration-fast: 0.1s;
+  --sz-duration: 0.2s;
+  --sz-duration-slow: 0.3s;
+
   --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
   --font-code: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
   --text-page-title: 22px;
@@ -197,7 +203,8 @@ p {
 .work-record > summary,
 .thinking-panel button,
 .tool-call-group__trigger,
-.tool-call-event > button > span {
+.tool-call-event__action,
+.tool-call-event__detail {
   font-size: var(--text-caption);
   line-height: 1.65;
 }

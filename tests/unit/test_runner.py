@@ -202,12 +202,13 @@ async def test_run_finished_event_published_on_max_steps(tmp_path: Path) -> None
 
 
 # 功能：验证 events.jsonl 第一行为 run.started、最后一行为 run.finished
-# 设计：从 tmp_path 递归查找 events.jsonl 并按行解析，因为 events.jsonl 是 S1 的核心产物，首尾事件是完整性的最低要求
+# 设计：从 tmp_path 递归查找 events.jsonl 并按行解析，因为 events.jsonl 是 S1 的核心产物，首尾事件是完整性的最低要求；
+#       显式按 utf-8 读取——EventWriter 固定 utf-8 写入，Windows 默认 gbk 会解码失败
 async def test_events_jsonl_created_with_started_and_finished(tmp_path: Path) -> None:
     await _run(tmp_path=tmp_path)
     jsonl_files = list(tmp_path.rglob("events.jsonl"))
     assert len(jsonl_files) == 1
-    lines = [json.loads(ln) for ln in jsonl_files[0].read_text().splitlines() if ln]
+    lines = [json.loads(ln) for ln in jsonl_files[0].read_text(encoding="utf-8").splitlines() if ln]
     event_types = [e["type"] for e in lines]
     assert event_types[0] == "run.started"
     assert event_types[-1] == "run.finished"

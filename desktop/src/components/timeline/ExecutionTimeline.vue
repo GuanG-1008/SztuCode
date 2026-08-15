@@ -2,14 +2,17 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileDiff, LoaderCircle, Play, TerminalSquare } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
+import ContextInjectionRow from "./ContextInjectionRow.vue";
 import ThinkingPanel from "./ThinkingPanel.vue";
 import TokenStream from "./TokenStream.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import PermissionBadge from "./PermissionBadge.vue";
-import type { PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
+import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
 
 const props = defineProps<{ steps: TimelineStep[]; workspaceId?: string }>();
+// 共享空数组：v-memo 依赖要求引用稳定，避免无注入时每次重算都触发全列表更新
+const EMPTY_CONTEXT: ContextInjectionEntry[] = [];
 defineEmits<{
   decide: [toolUseId: string, decision: PermissionDecision];
   reverted: [runId: string];
@@ -37,6 +40,7 @@ type TurnView = {
   aggregatedStep: TimelineStep;
   steps: TimelineStep[];
   events: Array<TimelineEvent & { tool?: ToolCallEntry }>;
+  contextInjections: ContextInjectionEntry[];
   state: TurnState;
   stateLabel: string;
   failureReason?: string;
@@ -79,6 +83,7 @@ function aggregateStep(steps: TimelineStep[]): TimelineStep {
     subagents: steps.flatMap((step) => step.subagents ?? []),
     skills: steps.flatMap((step) => step.skills ?? []),
     logs: steps.flatMap((step) => step.logs ?? []),
+    contextInjections: steps.flatMap((step) => step.contextInjections ?? []),
     workflowTasks: [...steps].reverse().find((step) => step.workflowTasks?.length)?.workflowTasks ?? [],
     workflowHandoffs: steps.flatMap((step) => step.workflowHandoffs ?? []),
     workflowReviews: steps.flatMap((step) => step.workflowReviews ?? []),
@@ -293,6 +298,7 @@ const turns = computed<TurnView[]>(() => {
       aggregatedStep,
       steps,
       events,
+      contextInjections: aggregatedStep.contextInjections?.filter((entry) => entry.source !== "canvas") ?? EMPTY_CONTEXT,
       state: status.state,
       stateLabel: status.label,
       failureReason: status.reason,
@@ -308,13 +314,20 @@ const turns = computed<TurnView[]>(() => {
 
 <template>
   <section class="execution-timeline" aria-live="polite">
-    <article v-for="turn in turns" :key="turn.key" class="timeline-step">
+    <article
+      v-for="turn in turns"
+      :key="turn.key"
+      v-memo="[turn.key, turn.state, turn.summaryText, turn.thinkingText, turn.runStats, turn.pending, turn.hasContent, turn.contextInjections, isTurnExpanded(turn), turn.state === 'running' ? now : null]"
+      class="timeline-step"
+    >
       <div v-if="turn.userMessage" class="timeline-user-message">
         {{ turn.userMessage }}
         <span v-if="turn.model || turn.userMessageTime" class="timeline-user-message__meta">{{ turn.model || "未记录模型" }} · {{ formatTime(turn.userMessageTime) }}</span>
       </div>
       <div v-if="turn.hasContent" class="timeline-assistant">
         <div class="timeline-step__content">
+          <!-- 上下文注入行：压缩/干预/系统注入；任务进度画布不进入会话区。 -->
+          <ContextInjectionRow v-for="entry in turn.contextInjections" :key="entry.id" :entry="entry" />
           <button
             v-if="turn.hasActivity || turn.runStats"
             type="button"
@@ -343,6 +356,14 @@ const turns = computed<TurnView[]>(() => {
             <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="12" />
           </div>
 
+          <!-- 实时思考行（借鉴 dsh ReasoningRow）：运行中折叠态只渲染最新一行并跟随流式输出，
+               等待授权时退化为稳定首行摘要，结算后由历史区的事件级面板接管 -->
+          <ThinkingPanel
+            v-if="(turn.state === 'running' || turn.state === 'waiting') && turn.thinkingText"
+            :text="turn.thinkingText"
+            :completed="turn.state !== 'running'"
+          />
+
           <PermissionBadge v-if="turn.pending" :permission="turn.pending" @decide="$emit('decide', turn.pending?.toolUseId ?? '', $event)" />
 
           <section v-if="isTurnExpanded(turn)" class="turn-history" aria-label="历史输出与调用">
@@ -368,6 +389,7 @@ const turns = computed<TurnView[]>(() => {
           </div>
 
           <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮 Token 消耗与缓存命中">
+            <span v-if="turn.runStats.ttftMs !== undefined">首字 {{ formatDuration(turn.runStats.ttftMs / 1000) }}</span>
             <span>命中缓存 {{ formatTokens(turn.runStats.cacheReadInputTokens) }}</span>
             <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
             <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>

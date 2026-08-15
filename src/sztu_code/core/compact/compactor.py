@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sztu_code.core.bus.events import ContextCompactedEvent, ContextCompactingEvent
+from sztu_code.core.compact.token_counter import TokenCounter
 from sztu_code.core.events.bus import EventBus
 
 if TYPE_CHECKING:
@@ -16,6 +17,9 @@ if TYPE_CHECKING:
     from sztu_code.core.llm.base import LLMProvider
 
 logger = logging.getLogger(__name__)
+
+# 进程级共享 token 计数器（编码器按名称缓存），避免每次压缩重复加载 tiktoken
+_token_counter = TokenCounter()
 
 
 # 构造压缩续接 user 消息：说明会话续接并附摘要，要求直接续接不寒暄
@@ -345,10 +349,9 @@ class Compactor:
         sliding_window_size: int = 0,
         compaction_count: int = 0,
     ) -> CompactionResult | None | tuple[CompactionResult | None, list[dict[str, Any]] | None]:
-        from sztu_code.core.compact.token_counter import TokenCounter
         from sztu_code.core.events.bus import EventBus as _Bus
 
-        counter = TokenCounter()
+        counter = _token_counter
 
         if sliding_window_size > 0:
             # ─── 滑动窗口模式 ───
