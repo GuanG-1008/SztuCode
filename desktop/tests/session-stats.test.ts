@@ -1,11 +1,41 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TimelineStep } from "../src/components/timeline/types";
-import { deriveSessionStats, formatDuration, formatTokens, formatTokensPerSecond } from "../src/utils/sessionStats";
+import { cacheHitPercent, deriveSessionStats, formatDuration, formatTokens, formatTokensPerSecond } from "../src/utils/sessionStats";
 
 function step(overrides: Partial<TimelineStep>): TimelineStep {
   return { step: 1, status: "done", tokens: [], toolCalls: [], ...overrides };
 }
+
+// 功能：高缓存命中时命中率不超过 100%（分母 = 未缓存输入 + 缓存读）
+// 设计：cacheRead 远大于 inputTokens 的极端场景（input 是不含命中的净输入），
+//       验证分子分母同口径，避免旧公式算出的 1789% 类超范围值
+test("cacheHitPercent stays within 0-100 even when cacheRead exceeds inputTokens", () => {
+  const stats = deriveSessionStats([
+    step({
+      runId: "run-a",
+      runStats: { inputTokens: 18, outputTokens: 5, cacheReadInputTokens: 90, elapsedSeconds: 1 },
+    }),
+  ]);
+  assert.equal(cacheHitPercent(stats), 83); // 90 / (18 + 90)
+});
+
+// 功能：无命中时显示 0%
+test("cacheHitPercent returns 0 when nothing was cached", () => {
+  const stats = deriveSessionStats([
+    step({
+      runId: "run-a",
+      runStats: { inputTokens: 100, outputTokens: 5, cacheReadInputTokens: 0, elapsedSeconds: 1 },
+    }),
+  ]);
+  assert.equal(cacheHitPercent(stats), 0);
+});
+
+// 功能：无计费活动时返回 null（统计条不渲染缓存命中组）
+test("cacheHitPercent returns null with no billed input", () => {
+  const stats = deriveSessionStats([]);
+  assert.equal(cacheHitPercent(stats), null);
+});
 
 test("deriveSessionStats returns all-zero stats for an empty timeline", () => {
   const stats = deriveSessionStats([]);

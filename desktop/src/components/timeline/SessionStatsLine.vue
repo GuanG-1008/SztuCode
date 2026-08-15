@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SessionStats } from "../../utils/sessionStats";
-import { formatDuration, formatTokens, formatTokensPerSecond } from "../../utils/sessionStats";
+import { cacheHitPercent, formatDuration, formatTokens, formatTokensPerSecond } from "../../utils/sessionStats";
 
 const props = defineProps<{ stats: SessionStats }>();
 
@@ -26,10 +26,11 @@ const groups = computed<string[]>(() => {
     g.push(`首 token 平均 ${formatDuration(averageSeconds)} · ${formatTokensPerSecond(tokensPerSecond)} tok/s`);
   }
 
-  // 计费输入 = 输入（含缓存命中部分），命中率 = 缓存读 / 计费输入；
-  // 有计费输入即显示（0% 也显示，提示未命中）
-  if (stats.inputTokens > 0) {
-    g.push(`缓存命中 ${Math.round((stats.cacheReadTokens / stats.inputTokens) * 100)}%`);
+  // 缓存命中率（借鉴 dsh 8.3）：计费输入 = 未缓存输入 + 缓存读，命中率 = 缓存读 / 计费输入；
+  // 高命中时 cacheRead 会远超 inputTokens，必须同口径否则命中率超 100%；有计费输入即显示
+  const hitPercent = cacheHitPercent(stats);
+  if (hitPercent !== null) {
+    g.push(`缓存命中 ${hitPercent}%`);
   }
 
   if (stats.inputTokens + stats.outputTokens > 0) {

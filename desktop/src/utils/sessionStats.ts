@@ -10,7 +10,7 @@ export type SessionStats = {
   toolMs: number;         // 工具调用用时合计（Σ 已完成调用的 elapsedMs）
   ttftSteps: number;      // 有首 token 读数的 run 数
   ttftMsTotal: number;    // 首 token 延迟合计
-  inputTokens: number;    // 输入 token 合计（含缓存命中部分）
+  inputTokens: number;    // 输入 token 合计（未缓存部分，不含命中）
   outputTokens: number;   // 输出 token 合计
   cacheReadTokens: number; // 缓存命中读 token 合计
   contextPct?: number;    // 上下文占用百分比（最新样本，借鉴 dsh contextPressure）
@@ -76,6 +76,15 @@ export function deriveSessionStats(steps: readonly TimelineStep[]): SessionStats
       tool: latestUsage.toolTokens,
     } : undefined,
   };
+}
+
+// 缓存命中率（借鉴 dsh 8.3 公式）：计费输入 = 未缓存输入 + 缓存读（+ 缓存写），
+// 命中率 = 缓存读 / 计费输入。input_tokens 是未缓存部分，分母必须与分子同口径
+// （高命中时会远大于 input_tokens，不能只用它做分母——否则命中率会超过 100%）
+export function cacheHitPercent(stats: SessionStats): number | null {
+  const billedInput = stats.inputTokens + stats.cacheReadTokens;
+  if (billedInput <= 0) return null;
+  return Math.round((stats.cacheReadTokens / billedInput) * 100);
 }
 
 // 紧凑 token 格式（517 / 12.2K / 517K / 1.2M，千以下一位小数、整千去 .0）
