@@ -407,6 +407,26 @@ async def test_usage_event_published() -> None:
     assert ue.cache_read_input_tokens == 150  # type: ignore[attr-defined]
 
 
+# 功能：验证 DeepSeek 顶层 prompt_cache_hit_tokens 被计入缓存命中
+# 设计：构造无 prompt_tokens_details、仅有顶层 prompt_cache_hit_tokens 的 usage，
+#       断言 cache_read_input_tokens 回退读取该字段（DeepSeek 兼容 API 的上报形态）
+async def test_usage_event_reads_deepseek_cache_hit_tokens() -> None:
+    usage = MagicMock()
+    usage.prompt_tokens = 200
+    usage.completion_tokens = 75
+    usage.prompt_tokens_details = None
+    usage.prompt_cache_hit_tokens = 150
+    chunks = [
+        _make_chunk(content="hi"),
+        _make_chunk(finish_reason="stop", usage=usage),
+    ]
+    provider, _ = _make_provider(chunks)
+    _, events = await _chat(provider)
+    usage_events = [e for e in events if e.type == "llm.usage"]  # type: ignore[attr-defined]
+    assert len(usage_events) == 1
+    assert usage_events[0].cache_read_input_tokens == 150  # type: ignore[attr-defined]
+
+
 # 功能：验证事件发布顺序为 model_selected → token（×N） → usage
 # 设计：检查类型列表的首尾元素，聚焦 provider 的时序契约
 async def test_event_order_correct() -> None:

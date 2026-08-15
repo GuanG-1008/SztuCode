@@ -146,6 +146,24 @@ function formatTokens(tokens: number): string {
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k` : String(tokens);
 }
 
+function formatTokensPerSecond(tokensPerSecond: number): string {
+  return tokensPerSecond < 10 ? tokensPerSecond.toFixed(1) : String(Math.round(tokensPerSecond));
+}
+
+// 每轮时序指标（借鉴 dsh 8.6 turn-tail）：首 token 延迟 + 吞吐；
+// 吞吐 = Σ输出 token / decode 墙钟（LLM 用时扣除首 token 前的等待，只计双有步）
+function turnTailMetrics(turn: TurnView): { ttft?: string; throughput?: string } | null {
+  const stats = turn.runStats;
+  if (!stats) return null;
+  const out: { ttft?: string; throughput?: string } = {};
+  if (stats.ttftMs !== undefined) out.ttft = formatDuration(stats.ttftMs / 1000);
+  if (stats.outputTokens > 0 && stats.elapsedSeconds > 0) {
+    const decodeSeconds = Math.max(0.001, stats.elapsedSeconds - (stats.ttftMs ?? 0) / 1000);
+    out.throughput = `${formatTokensPerSecond(stats.outputTokens / decodeSeconds)} tok/s`;
+  }
+  return out.ttft || out.throughput ? out : null;
+}
+
 function liveStatsLabel(turn: TurnView): string {
   const startedAt = turn.runStartedAt ? new Date(turn.runStartedAt).getTime() : Number.NaN;
   const elapsed = turn.state === "running" || turn.state === "waiting"
@@ -382,22 +400,14 @@ const turns = computed<TurnView[]>(() => {
 
           <section v-if="turn.summaryText" class="turn-result" aria-label="任务结果">
             <TokenStream :tokens="[]" :final-text="turn.summaryText" />
-          </section>
-
-          <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
-            <b>{{ turn.stateLabel }}</b>
-          </div>
-
-          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮 Token 消耗与缓存命中">
-            <span v-if="turn.runStats.ttftMs !== undefined">首字 {{ formatDuration(turn.runStats.ttftMs / 1000) }}</span>
-            <span>命中缓存 {{ formatTokens(turn.runStats.cacheReadInputTokens) }}</span>
-            <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
-            <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
-            <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
             <button v-if="turn.text || turn.summaryText" type="button" class="turn-copy" :title="copiedTurn === turn.key ? '已复制' : '复制整段总结'" :aria-label="copiedTurn === turn.key ? '已复制总结' : '复制整段总结'" @click="copyTurnSummary(turn)">
               <Check v-if="copiedTurn === turn.key" :size="15" :stroke-width="1.8" />
               <Copy v-else :size="15" :stroke-width="1.8" />
             </button>
+          </section>
+
+          <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
+            <b>{{ turn.stateLabel }}</b>
           </div>
 
           <section v-if="isTurnExpanded(turn) && (turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason))" class="evidence-strip" aria-label="验证与变更">
@@ -410,6 +420,12 @@ const turns = computed<TurnView[]>(() => {
           <button v-if="isTurnExpanded(turn) && turn.state === 'interrupted'" class="continue-button" type="button" title="从中断处继续执行" @click="$emit('continue', turn.runId)">
             <Play :size="14" />继续执行
           </button>
+
+          <!-- turn 页脚时序指标（借鉴 dsh 8.6 turn-tail）：每轮首字延迟与吞吐，无读数不渲染 -->
+          <div v-if="isTurnExpanded(turn) && turnTailMetrics(turn)" class="turn-tail-metrics" aria-label="本轮时序指标">
+            <span v-if="turnTailMetrics(turn)?.ttft"><b>首字</b> {{ turnTailMetrics(turn)?.ttft }}</span>
+            <span v-if="turnTailMetrics(turn)?.throughput"><b>吞吐</b> {{ turnTailMetrics(turn)?.throughput }}</span>
+          </div>
         </div>
       </div>
     </article>

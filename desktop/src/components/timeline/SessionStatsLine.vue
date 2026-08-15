@@ -1,0 +1,75 @@
+<script setup lang="ts">
+import { computed } from "vue";
+import type { SessionStats } from "../../utils/sessionStats";
+import { formatDuration, formatTokens, formatTokensPerSecond } from "../../utils/sessionStats";
+
+const props = defineProps<{ stats: SessionStats }>();
+
+// 组构建顺序（借鉴 dsh 8.4）：计数 → 用时 → 首 token/吞吐 → 缓存命中 → token 记账；
+// 无数据的组整体不渲染
+const groups = computed<string[]>(() => {
+  const { stats } = props;
+  const g: string[] = [];
+
+  if (stats.steps > 0) g.push(`${stats.turns} 轮 · ${stats.steps} 步`);
+
+  const times: string[] = [];
+  if (stats.llmMs > 0) times.push(`LLM ${formatDuration(stats.llmMs / 1000)}`);
+  if (stats.toolMs > 0) times.push(`工具调用 ${formatDuration(stats.toolMs / 1000)}`);
+  if (times.length) g.push(times.join(" · "));
+
+  if (stats.ttftSteps > 0) {
+    const averageSeconds = stats.ttftMsTotal / stats.ttftSteps / 1000;
+    // 吞吐 = 输出 token / decode 墙钟（LLM 用时扣除首 token 前的等待）
+    const decodeSeconds = Math.max(0.001, (stats.llmMs - stats.ttftMsTotal) / 1000);
+    const tokensPerSecond = stats.outputTokens / decodeSeconds;
+    g.push(`首 token 平均 ${formatDuration(averageSeconds)} · ${formatTokensPerSecond(tokensPerSecond)} tok/s`);
+  }
+
+  // 计费输入 = 输入（含缓存命中部分），命中率 = 缓存读 / 计费输入；
+  // 有计费输入即显示（0% 也显示，提示未命中）
+  if (stats.inputTokens > 0) {
+    g.push(`缓存命中 ${Math.round((stats.cacheReadTokens / stats.inputTokens) * 100)}%`);
+  }
+
+  if (stats.inputTokens + stats.outputTokens > 0) {
+    g.push(`输入 ${formatTokens(stats.inputTokens)} tok · 输出 ${formatTokens(stats.outputTokens)} tok`);
+  }
+
+  // 上下文占用（借鉴 dsh 8.7 ContextMeter）：最新样本的占用百分比 + 分段 breakdown 提示；
+  // 无样本不渲染
+  if (stats.contextPct !== undefined) {
+    const pct = Math.min(100, Math.max(0, Math.round(stats.contextPct)));
+    g.push(`上下文 ${pct}%`);
+  }
+
+  return g;
+});
+
+const line = computed(() => groups.value.join(" | "));
+// 上下文占用等级（借鉴 dsh ContextMeter 警示色）：80% 起警示、95% 起告急
+const contextLevel = computed(() => {
+  const pct = props.stats.contextPct ?? 0;
+  if (pct >= 95) return "critical";
+  if (pct >= 80) return "warn";
+  return "ok";
+});
+// breakdown 提示（system/tools/messages 三段启发式，对应 dsh contextBreakdown）
+const contextTip = computed(() => {
+  const breakdown = props.stats.contextBreakdown;
+  if (!breakdown) return "上下文占用";
+  return `上下文占用 ${Math.round(props.stats.contextPct ?? 0)}%\n系统 ${formatTokens(breakdown.system)} · 摘要 ${formatTokens(breakdown.summary)} · 会话 ${formatTokens(breakdown.conversation)} · 工具 ${formatTokens(breakdown.tool)}`;
+});
+</script>
+
+<template>
+  <div v-if="line" class="session-stats-line" :title="line" aria-label="会话统计">
+    <span v-for="(group, index) in groups" :key="index" class="session-stats-line__group">
+      <span v-if="index" class="session-stats-line__sep" aria-hidden="true">|</span>
+      <template v-if="group.startsWith('上下文 ')">
+        <span class="session-stats-line__ctx" :class="`ctx-${contextLevel}`" :title="contextTip">{{ group }}</span>
+      </template>
+      <template v-else>{{ group }}</template>
+    </span>
+  </div>
+</template>

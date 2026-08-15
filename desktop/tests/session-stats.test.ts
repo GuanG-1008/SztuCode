@@ -1,0 +1,117 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { TimelineStep } from "../src/components/timeline/types";
+import { deriveSessionStats, formatDuration, formatTokens, formatTokensPerSecond } from "../src/utils/sessionStats";
+
+function step(overrides: Partial<TimelineStep>): TimelineStep {
+  return { step: 1, status: "done", tokens: [], toolCalls: [], ...overrides };
+}
+
+test("deriveSessionStats returns all-zero stats for an empty timeline", () => {
+  const stats = deriveSessionStats([]);
+  assert.deepEqual(stats, {
+    turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftSteps: 0, ttftMsTotal: 0,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+    contextPct: undefined, contextBreakdown: undefined,
+  });
+});
+
+test("deriveSessionStats picks the latest usage sample for context occupancy", () => {
+  const steps = [
+    step({
+      runId: "run-1",
+      usage: {
+        inputTokens: 1, outputTokens: 1, contextPct: 40, model: "m",
+        contextWindow: 100, availableTokens: 60, reservedOutputTokens: 10,
+        systemTokens: 10, summaryTokens: 5, conversationTokens: 20, toolTokens: 5,
+      },
+    }),
+    step({
+      runId: "run-1",
+      usage: {
+        inputTokens: 1, outputTokens: 1, contextPct: 72, model: "m",
+        contextWindow: 100, availableTokens: 28, reservedOutputTokens: 10,
+        systemTokens: 12, summaryTokens: 8, conversationTokens: 40, toolTokens: 12,
+      },
+    }),
+  ];
+
+  const stats = deriveSessionStats(steps);
+
+  assert.equal(stats.contextPct, 72);
+  assert.deepEqual(stats.contextBreakdown, { system: 12, summary: 8, conversation: 40, tool: 12 });
+});
+
+test("deriveSessionStats counts one run's runStats once even across many steps", () => {
+  const runStats = {
+    inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 40, elapsedSeconds: 3.2, ttftMs: 800,
+  };
+  const steps = [
+    step({ step: 1, runId: "run-1", runStats }),
+    step({ step: 2, runId: "run-1", runStats }),
+    step({ step: 3, runId: "run-1", runStats }),
+  ];
+
+  const stats = deriveSessionStats(steps);
+
+  assert.equal(stats.turns, 1);
+  assert.equal(stats.steps, 3);
+  assert.equal(stats.inputTokens, 100);
+  assert.equal(stats.outputTokens, 50);
+  assert.equal(stats.cacheReadTokens, 40);
+  assert.equal(stats.llmMs, 3200);
+  assert.equal(stats.ttftSteps, 1);
+  assert.equal(stats.ttftMsTotal, 800);
+});
+
+test("deriveSessionStats aggregates multiple runs", () => {
+  const steps = [
+    step({ step: 1, runId: "run-a", runStats: { inputTokens: 200, outputTokens: 60, cacheReadInputTokens: 150, elapsedSeconds: 2, ttftMs: 500 } }),
+    step({ step: 2, runId: "run-b", runStats: { inputTokens: 300, outputTokens: 90, cacheReadInputTokens: 100, elapsedSeconds: 4, ttftMs: 1100 } }),
+  ];
+
+  const stats = deriveSessionStats(steps);
+
+  assert.equal(stats.turns, 2);
+  assert.equal(stats.inputTokens, 500);
+  assert.equal(stats.outputTokens, 150);
+  assert.equal(stats.cacheReadTokens, 250);
+  assert.equal(stats.llmMs, 6000);
+  assert.equal(stats.ttftSteps, 2);
+  assert.equal(stats.ttftMsTotal, 1600);
+});
+
+test("deriveSessionStats sums only settled tool call durations", () => {
+  const steps = [
+    step({
+      runId: "run-a",
+      toolCalls: [
+        { id: "t1", name: "read", params: {}, status: "done", elapsedMs: 1200 },
+        { id: "t2", name: "write", params: {}, status: "failed", elapsedMs: 800 },
+        { id: "t3", name: "bash", params: {}, status: "running", elapsedMs: 900 },
+      ],
+    }),
+  ];
+
+  assert.equal(deriveSessionStats(steps).toolMs, 2000);
+});
+
+test("formatTokens uses compact K/M notation", () => {
+  assert.equal(formatTokens(0), "0");
+  assert.equal(formatTokens(517), "517");
+  assert.equal(formatTokens(12_200), "12.2K");
+  assert.equal(formatTokens(517_000), "517K");
+  assert.equal(formatTokens(1_200_000), "1.2M");
+});
+
+test("formatDuration renders seconds and minutes", () => {
+  assert.equal(formatDuration(0.3), "300ms");
+  assert.equal(formatDuration(45.2), "45.2s");
+  assert.equal(formatDuration(162), "2m42s");
+  assert.equal(formatDuration(120), "2m");
+});
+
+test("formatTokensPerSecond keeps one decimal below ten", () => {
+  assert.equal(formatTokensPerSecond(4.56), "4.6");
+  assert.equal(formatTokensPerSecond(45.6), "46");
+});

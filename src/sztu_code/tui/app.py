@@ -25,6 +25,9 @@ from sztu_code.core.trust import add_trusted, is_trusted
 
 log = logging.getLogger(__name__)
 
+# 日志视图保留的最大子 widget 数，超出后裁剪最旧行以控制长会话的渲染成本
+_MAX_LOG_CHILDREN = 600
+
 
 def _preview(s: str, n: int) -> str:
     return s[:n] + "…" if len(s) > n else s
@@ -57,17 +60,42 @@ class LLMStreamBlock(Static):
 
     DEFAULT_CSS = "LLMStreamBlock { padding: 0 2; color: $text; }"
 
+    # 流式刷新最小间隔：高频 token 按节流刷新，避免每个 token 都触发整块重渲染
+    _MIN_FLUSH_INTERVAL = 0.03
+
     # 初始化为空文本块
     def __init__(self) -> None:
         super().__init__("")
         self._text = ""
         self._finalized = False
+        self._last_flush = 0.0
+        self._flush_pending = False
 
-    # 追加一个 token 并刷新显示
+    # 追加一个 token；达到节流间隔才刷新，未刷新的文本由定时器兜底
     def append_token(self, token: str) -> None:
         if self._finalized:
             return
         self._text += token
+        now = time.monotonic()
+        if now - self._last_flush >= self._MIN_FLUSH_INTERVAL:
+            self._last_flush = now
+            self._flush_pending = False
+            self.update(self._text)
+        elif not self._flush_pending:
+            self._flush_pending = True
+            if self.is_attached:
+                self.set_timer(self._MIN_FLUSH_INTERVAL, self._flush)
+            else:
+                # 未挂载（如测试直调）时直接刷新，避免文本滞留
+                self._flush_pending = False
+                self.update(self._text)
+
+    # 定时器兜底：补刷节流窗口内滞留的文本
+    def _flush(self) -> None:
+        self._flush_pending = False
+        if self._finalized:
+            return
+        self._last_flush = time.monotonic()
         self.update(self._text)
 
     # 将累积文本渲染为 Markdown，供流式块结束后显示
@@ -75,6 +103,7 @@ class LLMStreamBlock(Static):
         if self._finalized:
             return
         self._finalized = True
+        self._flush_pending = False
         if self._text.strip():
             self.update(Markdown(self._text, code_theme="monokai"))
 
@@ -742,7 +771,11 @@ class KamaTuiApp(App[None]):
         yield ChatTextArea(id="prompt", show_line_numbers=False)
 
     def on_mount(self) -> None:
-        self._slash_items = self._build_slash_items()
+        self._slash_items = self._builtin_slash_items()
+        # 独立 group：避免被 socket 循环的 exclusive worker 取消
+        self.run_worker(
+            self._load_slash_items(), name="slash_items", group="slash", exclusive=False
+        )
         self._append(Static(self._BANNER, id="banner"))
         prompt = self.query_one("#prompt", ChatTextArea)
         prompt.disabled = True
@@ -781,9 +814,9 @@ class KamaTuiApp(App[None]):
         label = labels.get(self._mode, self._mode.upper())
         return f"[bold #111315 on {color}] {label} [/bold #111315 on {color}]"
 
-    # 构建斜杠命令候选列表：内建命令 + 所有已注册 skill
-    def _build_slash_items(self) -> list[tuple[str, str]]:
-        items: list[tuple[str, str]] = [
+    # 返回内建斜杠命令（不依赖技能扫描，首帧立即可用）
+    def _builtin_slash_items(self) -> list[tuple[str, str]]:
+        return [
             ("compact", "compress context window"),
             ("new", "start a fresh task"),
             ("workspace", "open a local repository"),
@@ -792,6 +825,10 @@ class KamaTuiApp(App[None]):
             ("changes", "show uncommitted changes"),
             ("diff", "inspect a file diff"),
         ]
+
+    # 构建斜杠命令候选列表：内建命令 + 所有已注册 skill
+    def _build_slash_items(self) -> list[tuple[str, str]]:
+        items = self._builtin_slash_items()
         try:
             loader = SkillLoader()
             for skill in loader.list_all_skills():
@@ -802,6 +839,13 @@ class KamaTuiApp(App[None]):
         except Exception:
             pass
         return items
+
+    # 后台加载技能斜杠命令：技能扫描是同步 CPU 工作，用线程执行避免阻塞首帧
+    async def _load_slash_items(self) -> None:
+        try:
+            self._slash_items = await asyncio.to_thread(self._build_slash_items)
+        except Exception:
+            log.exception("failed to load slash items")
 
     # 根据 / 前缀查询字符串挂载、更新或移除自动补全弹窗
     def on_chat_text_area_slash_changed(self, event: ChatTextArea.SlashChanged) -> None:
@@ -900,7 +944,6 @@ class KamaTuiApp(App[None]):
             result = await self._client.send_command("permission.set_mode", {"mode": mode})
             if result.get("ok"):
                 self._mode = mode
-                self._update_header("ready")
                 self._update_header("ready")
             else:
                 log.warning(
@@ -1224,7 +1267,32 @@ class KamaTuiApp(App[None]):
             self._run_block.mount(widget)
         else:
             log_view.mount(widget)
+        self._trim_log(log_view)
         log_view.scroll_end(animate=False)
+
+    # 裁剪最旧的历史行，防止 widget 无限增长拖慢渲染；活动 run 块、流式块与未决工具/权限块受保护
+    def _trim_log(self, log_view: VerticalScroll) -> None:
+        overflow = len(log_view.children) - _MAX_LOG_CHILDREN
+        if overflow <= 0:
+            return
+        protected: set[Widget] = set()
+        if self._run_block is not None:
+            protected.add(self._run_block)
+        if self._current_llm is not None:
+            protected.add(self._current_llm)
+        protected.update(self._pending_tool_blocks.values())
+        protected.update(self._pending_permission_blocks.values())
+        removed = 0
+        for child in list(log_view.children):
+            if removed >= overflow:
+                break
+            if child in protected:
+                continue
+            try:
+                child.remove()
+            except Exception:
+                continue
+            removed += 1
 
     # 结束当前 LLM 流式块（下一个 token 将开启新块）
     def _break_llm(self) -> None:
@@ -1717,7 +1785,6 @@ class KamaTuiApp(App[None]):
         elif t == "permission.mode_changed":
             new_mode = str(event.get("new_mode", "normal"))
             self._mode = new_mode
-            self._update_header("ready")
             self._update_header("ready")
 
         elif t == "log.line":

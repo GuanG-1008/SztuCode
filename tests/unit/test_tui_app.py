@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from rich.markdown import Markdown
+from textual.containers import VerticalScroll
 from textual.widget import Widget
+from textual.widgets import Static
 
 from sztu_code.tui.app import (
+    _MAX_LOG_CHILDREN,
     KamaTuiApp,
     LLMStreamBlock,
     PermissionBlock,
@@ -329,3 +333,78 @@ def test_unknown_event_silently_ignored() -> None:
 
     app._handle_event({"type": "some.unknown.type", "run_id": "r", "ts": "t"})
     assert appended == []
+
+
+# 功能：验证日志视图子 widget 数被上限裁剪，且活动 run 块不受裁剪影响
+# 设计：run_test 挂载真实 DOM，先追加超过上限的行断言 children 封顶；再启动 run 块并继续追加，
+#       确认 run 块仍挂载且数量不超上限，覆盖裁剪与保护两条路径
+async def test_log_view_caps_children_and_keeps_run_block(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("SZTU_TRUSTED_PROJECTS", str(tmp_path / "trusted.json"))
+    monkeypatch.setattr(KamaTuiApp, "_start_socket_loop", lambda self: None)
+    app = KamaTuiApp("127.0.0.1", 9999, project_path=str(tmp_path / "proj"), trust=True)
+    async with app.run_test() as pilot:
+        for i in range(800):
+            app._append(Static(f"line {i}"))
+        await pilot.pause()
+        log_view = app.query_one("#log-view", VerticalScroll)
+        assert len(log_view.children) == _MAX_LOG_CHILDREN
+        app._handle_event({"type": "run.started", "run_id": "r1", "goal": "g", "ts": "t"})
+        await pilot.pause()
+        for i in range(700):
+            app._append(Static(f"x {i}"))
+        await pilot.pause()
+        run_block = app.query_one(RunBlock)
+        assert run_block.is_attached
+        assert len(log_view.children) == _MAX_LOG_CHILDREN
+
+
+# 功能：验证高频 token 被节流刷新：文本完整累积，但 update 调用数远小于 token 数
+# 设计：挂载 LLMStreamBlock 并计数 update 调用，连续追加 200 个 token 后断言刷新次数受节流限制、
+#       _text 仍完整累积，覆盖节流路径与定时器兜底；finalize 后内容为 Markdown
+async def test_llm_stream_throttles_high_frequency_tokens(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("SZTU_TRUSTED_PROJECTS", str(tmp_path / "trusted.json"))
+    monkeypatch.setattr(KamaTuiApp, "_start_socket_loop", lambda self: None)
+    app = KamaTuiApp("127.0.0.1", 9999, project_path=str(tmp_path / "proj"), trust=True)
+    async with app.run_test() as pilot:
+        block = LLMStreamBlock()
+        app._append(block)
+        await pilot.pause()
+        updates = 0
+        original_update = block.update
+
+        def counting(value: object) -> None:
+            nonlocal updates
+            updates += 1
+            original_update(value)
+
+        block.update = counting  # type: ignore[method-assign]
+        for _ in range(200):
+            block.append_token("tok ")
+        await pilot.pause()
+        await asyncio.sleep(0.1)
+        await pilot.pause()
+        assert updates < 200
+        assert block._text == "tok " * 200  # type: ignore[attr-defined]
+        block.finalize_markdown()
+        assert isinstance(block.content, Markdown)
+
+
+# 功能：验证技能斜杠命令由后台加载填充候选列表
+# 设计：monkeypatch _build_slash_items 返回带技能的列表并直接 await _load_slash_items，
+#       断言 _slash_items 被替换，避免依赖真实技能扫描和定时等待的不确定性
+async def test_slash_items_load_async(monkeypatch) -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    monkeypatch.setattr(
+        app,
+        "_build_slash_items",
+        lambda: app._builtin_slash_items() + [("my-skill", "desc")],
+    )
+
+    await app._load_slash_items()
+
+    assert ("my-skill", "desc") in app._slash_items
+    assert app._builtin_slash_items()[0] in app._slash_items

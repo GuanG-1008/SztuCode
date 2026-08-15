@@ -15,10 +15,7 @@
 .turn-history-actions .tool-call-event.failed > button > span { color: #b34c52; }
 .turn-history-actions .tool-call-event__details { margin-left: 18px; }
 .turn-history-actions + .turn-history-actions { margin-top: -7px; }
-.turn-usage { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 11px 0 3px; color: #7d838a; font: 11px/1.4 "Cascadia Mono", Consolas, monospace; }
-.turn-usage span, .turn-usage b { padding: 4px 7px; background: #f3f4f4; border: 1px solid #e8e9ea; border-radius: 5px; font-weight: 400; }
-.turn-usage b { color: #4d535a; background: #eef1f2; }
-.turn-copy { display: grid; width: 27px; height: 27px; margin-left: auto; padding: 0; place-items: center; color: #737a82; background: #f3f4f4; border: 1px solid #e8e9ea; border-radius: 5px; }
+.turn-copy { display: grid; width: 27px; height: 27px; margin-left: auto; padding: 0; flex: 0 0 auto; place-items: center; color: #737a82; background: #f3f4f4; border: 1px solid #e8e9ea; border-radius: 5px; }
 .turn-copy:hover { color: #34393f; background: #e9ebec; }
 .turn-copy:focus-visible { outline: 2px solid #9299a1; outline-offset: 1px; }
 .timeline-step { position: relative; padding: 0 0 28px; }
@@ -119,15 +116,36 @@
 .timeline-step:last-child { padding-bottom: 4px; }
 .timeline-user-message { margin-bottom: 8px; padding: 7px 10px; font-size: 12px; line-height: 1.5; }
 .token-stream { min-height: 15px; font-size: 14px; line-height: 1.4; }
-.turn-result { margin-bottom: 8px; }
-.turn-result .token-stream { font-size: 15px; line-height: 1.55; }
+.turn-result { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.turn-result .token-stream { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 1.55; }
+/* 底部统计栏（借鉴 dsh StatsLine）：composer 上方一行 | 分隔的全局会话统计 */
+.session-stats-line {
+  display: block;
+  max-width: 735px;
+  margin: 0 auto;
+  padding: 2px 24px 0;
+  color: #9aa0a7;
+  font: 11px/1.6 var(--font-ui, "Microsoft YaHei UI"), sans-serif;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-stats-line__sep { color: #c6cbd1; margin: 0 8px; }
+/* 上下文占用（借鉴 dsh ContextMeter 警示色）：80% 起琥珀、95% 起红 */
+.session-stats-line__ctx { border-radius: 4px; padding: 0 4px; }
+.session-stats-line__ctx.ctx-ok { color: #9aa0a7; }
+.session-stats-line__ctx.ctx-warn { color: #b07a2a; background: rgb(210 146 37 / 10%); }
+.session-stats-line__ctx.ctx-critical { color: #b3402f; background: rgb(179 64 47 / 12%); }
+/* turn 页脚时序指标（借鉴 dsh 8.6 turn-tail）：每轮首 token 延迟与吞吐 */
+.turn-tail-metrics { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 2px 0 0; padding: 4px 0 2px; color: #9aa0a7; font-size: 10px; line-height: 1.5; }
+.turn-tail-metrics span { white-space: nowrap; }
+.turn-tail-metrics b { color: #7c8288; font-weight: 500; }
 .turn-status { min-height: 23px; gap: 6px; margin-bottom: 5px; }
 .turn-status b { font-size: 13px; }
 .thinking-panel { margin-bottom: 3px; }
 .thinking-panel button { padding: 4px 0; font-size: 12px; }
 .thinking-panel__details { margin-bottom: 3px; padding: 2px 0 2px 14px; font-size: 11px; line-height: 1.5; }
-.turn-usage { gap: 3px; margin: 7px 0 2px; font-size: 11px; }
-.turn-usage span, .turn-usage b { padding: 3px 5px; }
 .evidence-strip { gap: 4px; margin: 6px 0 6px; padding-top: 7px; }
 .permission-badge { gap: 6px; margin-top: 5px; padding: 6px; }
 .permission-badge b { font-size: 12px; }
