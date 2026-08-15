@@ -527,3 +527,40 @@ def test_status_bar_renders_session_and_bg_info() -> None:
     assert "out=340" in status.value
     assert "bg 1/1" in status.value
     assert "theme" in status.value
+
+
+# 功能：验证鼠标点击补全项选中对应条目并发布 Selected（Static 默认不响应点击）
+# 设计：挂载 SlashCompleteWidget 后直接调用 on_click 模拟点击第二行，
+#       断言宿主 App 收到对应 skill 名，覆盖行号换算与消息路由
+async def test_slash_widget_click_selects_item() -> None:
+    from textual.app import App as TextualApp, ComposeResult
+
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    class _Click:
+        y = 1
+
+        def stop(self) -> None:
+            pass
+
+    class _Host(TextualApp[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.selected: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield SlashCompleteWidget([
+                ("settings", "open settings dialog"),
+                ("theme", "switch theme"),
+            ])
+
+        def on_slash_complete_widget_selected(self, event: SlashCompleteWidget.Selected) -> None:
+            self.selected.append(event.skill_name)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        popup = host.query_one(SlashCompleteWidget)
+        popup.on_click(_Click())  # type: ignore[arg-type]
+        await pilot.pause()
+        assert host.selected == ["theme"]

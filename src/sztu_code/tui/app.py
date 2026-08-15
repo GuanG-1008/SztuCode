@@ -466,6 +466,15 @@ class SlashCompleteWidget(Static):
     def has_selection(self) -> bool:
         return len(self._filtered) > 0
 
+    # 鼠标点击补全项时选中该条目（Static 默认不响应点击，按内容行号换算）
+    def on_click(self, event: events.Click) -> None:
+        row = event.y + self.scroll_offset.y
+        if 0 <= row < len(self._filtered):
+            event.stop()
+            self._cursor = row
+            self._redraw()
+            self.post_message(self.Selected(self._filtered[row][0]))
+
     def on_mount(self) -> None:
         self._redraw()
 
