@@ -74,13 +74,6 @@ const tokenBatcher = createTokenFrameBatcher(
   (callback) => window.requestAnimationFrame(callback),
   (handle) => window.cancelAnimationFrame(handle),
 );
-// 思考块帧合并批处理器（借鉴 dsh animation-frame publication）：
-// 一帧内 N 个 llm.thinking 合并为一次快照更新，渲染频率封顶屏幕刷新率
-const thinkingBatcher = createTokenFrameBatcher(
-  ({ runId, step, tokens }) => setStep(step, (current) => appendThinkingBatch({ ...current, runId }, tokens)),
-  (callback) => window.requestAnimationFrame(callback),
-  (handle) => window.cancelAnimationFrame(handle),
-);
 const activeRunId = ref<string | null>(null);
 // 当前会话是否正在执行 run（区别于 activeRunId：加载历史任务时 activeRunId 可能是已结束的 run）
 const runActive = ref(false);
@@ -484,7 +477,6 @@ function addUserMessage(content: string) {
 }
 function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {}) {
   tokenBatcher.clear();
-  thinkingBatcher.clear();
   discardPendingTimeline();
   const next = new Map<number, TimelineStep>();
   let step = 0;
@@ -575,7 +567,6 @@ function applyRuntimeEvent(event: RuntimeEvent) {
   const relatedRunId = String(event.parent_run_id ?? runId);
   const timelineEvent = event.parent_run_id ? { ...event, run_id: relatedRunId } : event;
   if (type !== "llm.token" && relatedRunId) tokenBatcher.flushRun(relatedRunId);
-  if (type !== "llm.thinking" && relatedRunId) thinkingBatcher.flushRun(relatedRunId);
   if (type === "run.started" && !activeRunId.value && sending.value) activeRunId.value = runId;
   if (type === "session.created" || type === "session.closed" || type === "session.waiting_for_input") {
     void refreshIndex();
@@ -658,8 +649,8 @@ function applyRuntimeEvent(event: RuntimeEvent) {
   }
   if (type === "llm.thinking") {
     const step = stepFor(timelineEvent);
-    // 帧合并入队（借鉴 dsh 7.3 合帧发布）：一帧内多个思考块合并为一次渲染
-    thinkingBatcher.enqueue(relatedRunId, step, String(event.thinking ?? ""));
+    const thinking = String(event.thinking ?? "");
+    if (thinking) setStep(step, (current) => appendThinkingBatch({ ...current, runId: relatedRunId }, [thinking]));
     return;
   }
   if (type === "llm.usage") {
@@ -1246,7 +1237,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); thinkingBatcher.clear(); discardPendingTimeline(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
+function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); discardPendingTimeline(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function applyPermissionMode(value: RuntimeSettings["permission_mode"]) {
   permissionSaving.value = true;
   permissionSettingsError.value = "";
@@ -1472,7 +1463,6 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   tokenBatcher.clear();
-  thinkingBatcher.clear();
   stopSidebarDragListeners?.();
   stopMacTitlebandDragArm?.();
   window.clearTimeout(sidebarAnimTimer);
