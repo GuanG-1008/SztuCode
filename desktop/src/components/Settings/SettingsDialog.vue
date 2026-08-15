@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { getVersion } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, onMounted, ref, watch } from "vue";
 import {
-  Bot, Check, Coffee, Cpu, Download, Globe2, Image, Monitor, Moon, Palette,
-  Plus, Power, Settings2, SlidersHorizontal, Sun, Trash2, Type, Upload, X,
+  Bot, Check, Coffee, Cpu, Download, ExternalLink, GitFork, Globe2, Image, Info,
+  Monitor, Moon, Palette, Plus, Power, Settings2, SlidersHorizontal, Sun, Trash2,
+  Type, Upload, X,
 } from "@lucide/vue";
+import appPackage from "../../../package.json";
 import { useFocusTrap } from "../../composables/useFocusTrap";
 import {
   applyCcswitchProvider, getNativeSettings, listCcswitchProviders, setNativeSettings,
@@ -15,7 +20,9 @@ import {
   type WallpaperStyle, uiFontOptions,
 } from "../../services/appearance";
 
-type SettingsSection = "appearance" | "general" | "agent" | "integrations";
+type SettingsSection = "appearance" | "general" | "agent" | "integrations" | "about";
+
+const PROJECT_URL = "https://github.com/rojim666/SztuCode";
 
 const props = defineProps<{
   appearance: AppearanceSettings;
@@ -47,6 +54,8 @@ const ccswitchLoading = ref(false);
 const ccswitchApplying = ref<string | null>(null);
 const ccswitchError = ref("");
 const ccswitchProviders = ref<CcswitchProvider[]>([]);
+const appVersion = ref(appPackage.version);
+const aboutError = ref("");
 const { setInitialFocus, trapTab } = useFocusTrap();
 
 const fontSizeLabel = computed(() => `${localAppearance.value.fontSize}px`);
@@ -60,6 +69,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 onMounted(() => {
   void setInitialFocus(dialog);
   void loadNativeSettings();
+  void loadAppVersion();
 });
 
 function close() {
@@ -84,6 +94,25 @@ async function loadNativeSettings() {
     nativeSettingsError.value = "";
   } catch {
     nativeSettingsAvailable.value = false;
+  }
+}
+
+async function loadAppVersion() {
+  if (!isTauri()) return;
+  try {
+    appVersion.value = await getVersion();
+  } catch {
+    appVersion.value = appPackage.version;
+  }
+}
+
+async function openProjectLink() {
+  aboutError.value = "";
+  try {
+    if (isTauri()) await openUrl(PROJECT_URL);
+    else window.open(PROJECT_URL, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    aboutError.value = error instanceof Error ? error.message : "无法打开项目链接";
   }
 }
 
@@ -217,6 +246,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: typeof Palette
   { id: "general", label: "通用", icon: SlidersHorizontal },
   { id: "agent", label: "Agent", icon: Bot },
   { id: "integrations", label: "连接", icon: Globe2 },
+  { id: "about", label: "关于", icon: Info },
 ];
 
 const themes: Array<{ id: ThemePreference; label: string; icon: typeof Sun }> = [
@@ -394,12 +424,30 @@ const accents: Array<{ id: AccentColor; label: string }> = [
             </section>
           </template>
 
-          <template v-else>
+          <template v-else-if="activeSection === 'integrations'">
             <header class="settings-pane-title"><div><h2>连接</h2><p>浏览器与本机服务</p></div><Globe2 :size="20" /></header>
             <section class="settings-block">
               <div class="integration-row"><span><Globe2 :size="18" /></span><div><b>浏览器连接</b><p>连接状态与网站操作权限</p></div><em>未连接</em></div>
               <div class="integration-row"><span><Power :size="18" /></span><div><b>本地运行时</b><p>Agent、终端与项目文件服务</p></div><em class="online">已启用</em></div>
               <div class="integration-row"><span><Coffee :size="18" /></span><div><b>后台任务</b><p>关闭设置后继续执行当前任务</p></div><em class="online">可用</em></div>
+            </section>
+          </template>
+
+          <template v-else>
+            <header class="settings-pane-title"><div><h2>关于</h2><p>SztuCode Desktop 项目信息</p></div><Info :size="20" /></header>
+            <section class="settings-block about-product">
+              <div class="about-product__identity">
+                <span class="about-product__mark" aria-hidden="true">SZ</span>
+                <div><h3>SztuCode Desktop</h3><p>本地优先的智能编码工作台</p></div>
+              </div>
+              <dl class="about-details">
+                <div><dt>项目版本</dt><dd><code>v{{ appVersion }}</code></dd></div>
+                <div>
+                  <dt>项目链接</dt>
+                  <dd><button type="button" aria-label="打开项目链接" title="在浏览器中打开项目" @click="openProjectLink"><GitFork :size="16" /><span>github.com/rojim666/SztuCode</span><ExternalLink :size="14" /></button></dd>
+                </div>
+              </dl>
+              <p v-if="aboutError" class="settings-error" role="alert">{{ aboutError }}</p>
             </section>
           </template>
         </main>
@@ -534,6 +582,23 @@ const accents: Array<{ id: AccentColor; label: string }> = [
 .integration-row:first-child { border-top: 0; }
 .integration-row > span { display: grid; flex: 0 0 auto; width: 34px; height: 34px; place-items: center; color: var(--accent); background: var(--accent-soft); border-radius: 7px; }
 .integration-row em { color: var(--text-faint); font-size: 11px; font-style: normal; }.integration-row em.online { color: #36825a; }
+.about-product { padding: 0; overflow: hidden; }
+.about-product__identity { display: flex; min-height: 112px; padding: 22px; align-items: center; gap: 15px; background: color-mix(in srgb, var(--surface) 68%, transparent); border-bottom: 1px solid var(--border); }
+.about-product__mark { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; color: var(--accent-contrast); background: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 74%, var(--border)); border-radius: 8px; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 9%); font-size: 14px; font-weight: 750; }
+.about-product__identity h3 { margin: 0; color: var(--text); font-size: var(--text-section-title); font-weight: 650; }
+.about-product__identity p { margin: 6px 0 0; color: var(--text-faint); font-size: var(--text-caption); }
+.about-details { margin: 0; padding: 4px 22px 8px; }
+.about-details > div { display: grid; min-height: 62px; grid-template-columns: 116px minmax(0, 1fr); align-items: center; gap: 14px; border-top: 1px solid var(--border); }
+.about-details > div:first-child { border-top: 0; }
+.about-details dt { color: var(--text-muted); font-size: var(--text-control); }
+.about-details dd { min-width: 0; margin: 0; color: var(--text); }
+.about-details code { color: var(--text); font-family: var(--font-code); font-size: var(--text-caption); }
+.about-details button { display: flex; max-width: 100%; min-height: 34px; padding: 0 9px; align-items: center; gap: 7px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: var(--text-caption); }
+.about-details button:hover { background: var(--surface-soft); border-color: var(--border-strong); }
+.about-details button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about-details button svg:first-child { flex: 0 0 auto; color: var(--text-muted); }
+.about-details button svg:last-child { flex: 0 0 auto; color: var(--text-faint); }
+.about-product > .settings-error { margin: 0 22px 14px; }
 .settings-error { margin: 9px 0 0; color: var(--danger); font-size: 11px; line-height: 1.5; }
 @keyframes settings-fade { from { opacity: 0; } }
 @keyframes settings-rise { from { opacity: 0; transform: translateY(8px) scale(.99); } }

@@ -61,6 +61,7 @@ class ExecutionContext:
     total_output_tokens: int = 0  # 已累计 output tokens
     total_cache_read_input_tokens: int = 0  # 已累计命中提示词缓存的 input tokens
     total_cache_creation_input_tokens: int = 0  # 已累计写入提示词缓存的 input tokens
+    last_context_pct: float = 0.0  # 最近一次 LLM 调用的上下文占用百分比（用于 run 级结算透传）
     started_at: float = 0.0       # run 开始墙钟（time.monotonic()），loop 惰性初始化
     max_budget_usd: float = 0.0   # USD 成本上限（0 = 不限制）
     # --- Claude Code 风格终止/继续系统 ---

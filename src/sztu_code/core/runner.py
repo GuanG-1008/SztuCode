@@ -401,6 +401,7 @@ class AgentRunner:
                 output_tokens=context.total_output_tokens,
                 cache_read_input_tokens=context.total_cache_read_input_tokens,
                 elapsed_s=context.elapsed_s(),
+                context_pct=context.last_context_pct,
             )
             if session is not None and store is not None:
                 session.run_stats[run_id] = final_stats
@@ -415,6 +416,7 @@ class AgentRunner:
                     total_output_tokens=final_stats.output_tokens,
                     cache_read_input_tokens=final_stats.cache_read_input_tokens,
                     elapsed_s=final_stats.elapsed_s,
+                    context_pct=final_stats.context_pct,
                     ts=_now(),
                 )
             )

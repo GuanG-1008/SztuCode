@@ -292,6 +292,7 @@ class AgentLoop:
                 context.total_input_tokens += response.usage.input_tokens
                 context.total_output_tokens += response.usage.output_tokens
                 context.total_cache_read_input_tokens += response.usage.cache_read_input_tokens
+                context.last_context_pct = response.usage.context_pct
 
             # 在写入历史前补齐工具调用标题，确保回放与实时事件使用同一份参数
             for tool_call in response.tool_calls:
@@ -669,6 +670,7 @@ class AgentLoop:
         if response.usage is not None:
             context.total_input_tokens += response.usage.input_tokens
             context.total_output_tokens += response.usage.output_tokens
+            context.last_context_pct = response.usage.context_pct
         summary = (response.text or "").strip()
         # 保持消息配对：无论有无文本都追加 assistant 消息
         context.messages.append(
@@ -717,6 +719,7 @@ class AgentLoop:
         if response.usage is not None:
             context.total_input_tokens += response.usage.input_tokens
             context.total_output_tokens += response.usage.output_tokens
+            context.last_context_pct = response.usage.context_pct
         text = (response.text or "").strip()
         # 保持消息配对：无论有无文本都追加 assistant 消息
         context.messages.append(

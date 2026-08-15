@@ -110,7 +110,9 @@ class SessionStore:
     def backfill_run_stats(self, session: Session) -> bool:
         changed = False
         for run_id in session.run_ids:
-            if run_id in session.run_stats:
+            existing = session.run_stats.get(run_id)
+            # 已有非零 context_pct 的统计视为完整，跳过；否则尝试从事件补全
+            if existing is not None and existing.context_pct > 0:
                 continue
             events_path = self.runs_dir(session.id) / run_id / "events.jsonl"
             if not events_path.exists():
@@ -119,21 +121,34 @@ class SessionStore:
                 lines = events_path.read_text(encoding="utf-8").splitlines()
             except OSError:
                 continue
+            context_pct = 0.0
             for line in reversed(lines):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") != "run.finished":
-                    continue
-                session.run_stats[run_id] = RunStats(
-                    input_tokens=max(0, int(event.get("total_input_tokens", 0))),
-                    output_tokens=max(0, int(event.get("total_output_tokens", 0))),
-                    cache_read_input_tokens=max(0, int(event.get("cache_read_input_tokens", 0))),
-                    elapsed_s=max(0.0, float(event.get("elapsed_s", 0.0))),
-                )
+                etype = event.get("type")
+                if etype == "run.finished":
+                    if existing is None:
+                        session.run_stats[run_id] = RunStats(
+                            input_tokens=max(0, int(event.get("total_input_tokens", 0))),
+                            output_tokens=max(0, int(event.get("total_output_tokens", 0))),
+                            cache_read_input_tokens=max(0, int(event.get("cache_read_input_tokens", 0))),
+                            elapsed_s=max(0.0, float(event.get("elapsed_s", 0.0))),
+                            context_pct=max(0.0, float(event.get("context_pct", 0.0))),
+                        )
+                        changed = True
+                    # 事件缺 context_pct（旧版本）时继续向前找 llm.usage 兜底
+                    context_pct = max(0.0, float(event.get("context_pct", 0.0)))
+                    if context_pct > 0:
+                        break
+                elif etype == "llm.usage" and context_pct == 0:
+                    context_pct = max(0.0, float(event.get("context_pct", 0.0)))
+                    if context_pct > 0:
+                        break
+            if existing is not None and existing.context_pct == 0 and context_pct > 0:
+                existing.context_pct = context_pct
                 changed = True
-                break
         if changed:
             self.write_meta(session)
         return changed

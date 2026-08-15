@@ -13,7 +13,7 @@ export type SessionStats = {
   inputTokens: number;    // 输入 token 合计（未缓存部分，不含命中）
   outputTokens: number;   // 输出 token 合计
   cacheReadTokens: number; // 缓存命中读 token 合计
-  contextPct?: number;    // 上下文占用百分比（最新样本，借鉴 dsh contextPressure）
+  contextPct?: number;    // 上下文占用比例 0～1（最新样本，借鉴 dsh contextPressure）
   contextBreakdown?: { system: number; summary: number; conversation: number; tool: number };
 };
 
@@ -32,7 +32,16 @@ export function deriveSessionStats(steps: readonly TimelineStep[]): SessionStats
       runIds.add(step.runId);
       if (step.runStats) runStatsByRun.set(step.runId, step.runStats);
     }
-    if (step.usage) latestUsage = step.usage;
+    if (step.usage) {
+      latestUsage = step.usage;
+    } else if (step.runStats?.contextPct) {
+      // 历史恢复路径：usage 未持久化，从 runStats 补 contextPct（breakdown 样本不可得，置 0）
+      latestUsage = {
+        inputTokens: 0, outputTokens: 0, contextPct: step.runStats.contextPct, model: "",
+        contextWindow: 0, availableTokens: 0, reservedOutputTokens: 0,
+        systemTokens: 0, summaryTokens: 0, conversationTokens: 0, toolTokens: 0,
+      };
+    }
     for (const call of step.toolCalls ?? []) toolCalls.set(call.id, call);
   }
 
@@ -88,19 +97,29 @@ export function cacheHitPercent(stats: SessionStats): number | null {
   const cacheRead = Number(stats.cacheReadTokens) || 0;
   const billedInput = input + cacheRead;
   if (billedInput <= 0) return null;
-  return Math.round((cacheRead / billedInput) * 100);
+  return Math.round((cacheRead / billedInput) * 1000) / 10;
 }
 
-// 紧凑 token 格式（517 / 12.2K / 517K / 1.2M，千以下一位小数、整千去 .0）
+// 将后端 0～1 的上下文占用比例格式化为固定两位小数的百分比。
+export function formatContextPercent(contextRatio: number): string {
+  const ratio = Number(contextRatio);
+  const percent = Number.isFinite(ratio) ? Math.min(100, Math.max(0, ratio * 100)) : 0;
+  return percent.toFixed(2);
+}
+
+// 紧凑 token 格式：超过 100K 后切换为 M，百万以下最多保留两位小数。
 export function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${trimDecimalZero((tokens / 1_000_000).toFixed(1))}M`;
-  if (tokens >= 1000) return `${trimDecimalZero((tokens / 1000).toFixed(1))}K`;
+  if (tokens > 100_000) {
+    const precision = tokens < 1_000_000 ? 2 : 1;
+    return `${trimDecimalZeros((tokens / 1_000_000).toFixed(precision))}M`;
+  }
+  if (tokens >= 1000) return `${trimDecimalZeros((tokens / 1000).toFixed(1))}K`;
   return String(tokens);
 }
 
-// 去掉一位小数的尾零（12.0 → 12），保持紧凑格式
-function trimDecimalZero(value: string): string {
-  return value.endsWith(".0") ? value.slice(0, -2) : value;
+// 去掉小数部分的尾零（0.50 → 0.5、1.00 → 1），保持紧凑格式。
+function trimDecimalZeros(value: string): string {
+  return value.replace(/0+$/, "").replace(/\.$/, "");
 }
 
 // 时长格式（45.2s / 2m42s / 300ms）

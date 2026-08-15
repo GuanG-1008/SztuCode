@@ -1,6 +1,6 @@
 export type TimelineStatus = "thinking" | "acting" | "observing" | "done" | "failed";
 export type RunOutcome = { status: "success" | "failed" | "interrupted"; reason?: string };
-export type RunStats = { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; elapsedSeconds: number; ttftMs?: number };
+export type RunStats = { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; elapsedSeconds: number; ttftMs?: number; contextPct?: number };
 
 export type ToolCallEntry = {
   id: string;

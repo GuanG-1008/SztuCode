@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SessionStats } from "../../utils/sessionStats";
-import { cacheHitPercent, formatDuration, formatTokens, formatTokensPerSecond } from "../../utils/sessionStats";
+import { cacheHitPercent, formatContextPercent, formatDuration, formatTokens, formatTokensPerSecond } from "../../utils/sessionStats";
 
 const props = defineProps<{ stats: SessionStats }>();
 
@@ -30,7 +30,7 @@ const groups = computed<string[]>(() => {
   // 高命中时 cacheRead 会远超 inputTokens，必须同口径否则命中率超 100%；有计费输入即显示
   const hitPercent = cacheHitPercent(stats);
   if (hitPercent !== null) {
-    g.push(`缓存命中 ${hitPercent}%`);
+    g.push(`缓存命中 ${hitPercent.toFixed(1)}%`);
   }
 
   if (stats.inputTokens + stats.outputTokens > 0) {
@@ -40,8 +40,7 @@ const groups = computed<string[]>(() => {
   // 上下文占用（借鉴 dsh 8.7 ContextMeter）：最新样本的占用百分比 + 分段 breakdown 提示；
   // 无样本不渲染
   if (stats.contextPct !== undefined) {
-    const pct = Math.min(100, Math.max(0, Math.round(stats.contextPct)));
-    g.push(`上下文 ${pct}%`);
+    g.push(`上下文 ${formatContextPercent(stats.contextPct)}%`);
   }
 
   return g;
@@ -51,15 +50,15 @@ const line = computed(() => groups.value.join(" | "));
 // 上下文占用等级（借鉴 dsh ContextMeter 警示色）：80% 起警示、95% 起告急
 const contextLevel = computed(() => {
   const pct = props.stats.contextPct ?? 0;
-  if (pct >= 95) return "critical";
-  if (pct >= 80) return "warn";
+  if (pct >= .95) return "critical";
+  if (pct >= .8) return "warn";
   return "ok";
 });
 // breakdown 提示（system/tools/messages 三段启发式，对应 dsh contextBreakdown）
 const contextTip = computed(() => {
   const breakdown = props.stats.contextBreakdown;
   if (!breakdown) return "上下文占用";
-  return `上下文占用 ${Math.round(props.stats.contextPct ?? 0)}%\n系统 ${formatTokens(breakdown.system)} · 摘要 ${formatTokens(breakdown.summary)} · 会话 ${formatTokens(breakdown.conversation)} · 工具 ${formatTokens(breakdown.tool)}`;
+  return `上下文占用 ${formatContextPercent(props.stats.contextPct ?? 0)}%\n系统 ${formatTokens(breakdown.system)} · 摘要 ${formatTokens(breakdown.summary)} · 会话 ${formatTokens(breakdown.conversation)} · 工具 ${formatTokens(breakdown.tool)}`;
 });
 </script>
 

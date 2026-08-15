@@ -9,6 +9,7 @@ import ToolCallCard from "./ToolCallCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import PermissionBadge from "./PermissionBadge.vue";
 import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
+import { formatTokens } from "../../utils/sessionStats";
 
 const props = defineProps<{ steps: TimelineStep[]; workspaceId?: string }>();
 // 共享空数组：v-memo 依赖要求引用稳定，避免无注入时每次重算都触发全列表更新
@@ -140,10 +141,6 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.round(seconds % 60);
   return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
-}
-
-function formatTokens(tokens: number): string {
-  return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k` : String(tokens);
 }
 
 function formatTokensPerSecond(tokensPerSecond: number): string {

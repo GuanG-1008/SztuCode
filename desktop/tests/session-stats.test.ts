@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TimelineStep } from "../src/components/timeline/types";
-import { cacheHitPercent, deriveSessionStats, formatDuration, formatTokens, formatTokensPerSecond } from "../src/utils/sessionStats";
+import { cacheHitPercent, deriveSessionStats, formatContextPercent, formatDuration, formatTokens, formatTokensPerSecond } from "../src/utils/sessionStats";
 
 function step(overrides: Partial<TimelineStep>): TimelineStep {
   return { step: 1, status: "done", tokens: [], toolCalls: [], ...overrides };
@@ -17,7 +17,7 @@ test("cacheHitPercent stays within 0-100 even when cacheRead exceeds inputTokens
       runStats: { inputTokens: 18, outputTokens: 5, cacheReadInputTokens: 90, elapsedSeconds: 1 },
     }),
   ]);
-  assert.equal(cacheHitPercent(stats), 83); // 90 / (18 + 90)
+  assert.equal(cacheHitPercent(stats), 83.3); // 90 / (18 + 90)
 });
 
 // 功能：无命中时显示 0%
@@ -63,7 +63,7 @@ test("deriveSessionStats picks the latest usage sample for context occupancy", (
     step({
       runId: "run-1",
       usage: {
-        inputTokens: 1, outputTokens: 1, contextPct: 40, model: "m",
+        inputTokens: 1, outputTokens: 1, contextPct: .4, model: "m",
         contextWindow: 100, availableTokens: 60, reservedOutputTokens: 10,
         systemTokens: 10, summaryTokens: 5, conversationTokens: 20, toolTokens: 5,
       },
@@ -71,7 +71,7 @@ test("deriveSessionStats picks the latest usage sample for context occupancy", (
     step({
       runId: "run-1",
       usage: {
-        inputTokens: 1, outputTokens: 1, contextPct: 72, model: "m",
+        inputTokens: 1, outputTokens: 1, contextPct: .72, model: "m",
         contextWindow: 100, availableTokens: 28, reservedOutputTokens: 10,
         systemTokens: 12, summaryTokens: 8, conversationTokens: 40, toolTokens: 12,
       },
@@ -80,7 +80,7 @@ test("deriveSessionStats picks the latest usage sample for context occupancy", (
 
   const stats = deriveSessionStats(steps);
 
-  assert.equal(stats.contextPct, 72);
+  assert.equal(stats.contextPct, .72);
   assert.deepEqual(stats.contextBreakdown, { system: 12, summary: 8, conversation: 40, tool: 12 });
 });
 
@@ -142,7 +142,10 @@ test("formatTokens uses compact K/M notation", () => {
   assert.equal(formatTokens(0), "0");
   assert.equal(formatTokens(517), "517");
   assert.equal(formatTokens(12_200), "12.2K");
-  assert.equal(formatTokens(517_000), "517K");
+  assert.equal(formatTokens(100_000), "100K");
+  assert.equal(formatTokens(100_001), "0.1M");
+  assert.equal(formatTokens(120_000), "0.12M");
+  assert.equal(formatTokens(517_000), "0.52M");
   assert.equal(formatTokens(1_200_000), "1.2M");
 });
 
@@ -156,4 +159,10 @@ test("formatDuration renders seconds and minutes", () => {
 test("formatTokensPerSecond keeps one decimal below ten", () => {
   assert.equal(formatTokensPerSecond(4.56), "4.6");
   assert.equal(formatTokensPerSecond(45.6), "46");
+});
+
+test("formatContextPercent converts ratios to a two-decimal percentage", () => {
+  assert.equal(formatContextPercent(.37654), "37.65");
+  assert.equal(formatContextPercent(0), "0.00");
+  assert.equal(formatContextPercent(1.2), "100.00");
 });
