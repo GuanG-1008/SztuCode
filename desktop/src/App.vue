@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, ArrowLeft, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  AlertTriangle, Archive, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
   GitBranch, Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
   Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
@@ -9,7 +9,6 @@ import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ProjectInspector from "./components/Inspector/ProjectInspector.vue";
-import TaskSummaryPopup from "./components/Inspector/TaskSummaryPopup.vue";
 import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
 import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
@@ -17,20 +16,24 @@ import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
 import DiffReview from "./components/Diff/DiffReview.vue";
 import BottomDiffPreview from "./components/Diff/BottomDiffPreview.vue";
 import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
+import SessionStatsLine from "./components/timeline/SessionStatsLine.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
+import SettingsDialog from "./components/Settings/SettingsDialog.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
-import type { PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
+import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
-import { appendTokenBatch, createTokenFrameBatcher } from "./utils/timelineStream";
+import { appendThinkingBatch, appendTokenBatch, createTokenFrameBatcher } from "./utils/timelineStream";
+import { deriveSessionStats } from "./utils/sessionStats";
+import { loadAppearanceSettings, type AppearanceSettings } from "./services/appearance";
 import {
-  applyCcswitchProvider, cancelRun, connectRuntime, createSession, deleteWorkspace, getNativeSettings, getProviderStatus, getRuntimeSettings, listCcswitchProviders, listSessions,
+  cancelRun, connectRuntime, createSession, deleteWorkspace, getProviderStatus, getRuntimeSettings, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
-  resumeWorkspace, sendPrompt, sessionHistory, setNativeSettings, setRuntimeSettings, workspaceStatus,
-  type Attachment, type CcswitchProvider, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
+  resumeWorkspace, sendPrompt, sessionHistory, setRuntimeSettings, workspaceStatus,
+  type Attachment, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
 } from "./services/sztu-runtime";
 
-type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "settings" | "diff";
+type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "diff";
 type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
 type RuntimeEvent = Record<string, unknown>;
 const FULL_SIDEBAR_MIN_WIDTH = 952;
@@ -116,15 +119,15 @@ type PendingAttachment = {
 const attachedFiles = ref<PendingAttachment[]>([]);
 const providerStatus = ref<ProviderStatus | null>(null);
 const runtimeSettings = ref<RuntimeSettings | null>(null);
-const notifications = ref(localStorage.getItem("sztu.notifications") !== "false");
-const autostart = ref(false);
-const stayAwake = ref(false);
-const nativeSettingsAvailable = ref(false);
-const nativeSettingsError = ref("");
-const webBridgeAllowed = ref(false);
+const settingsOpen = ref(false);
+const settingsButton = ref<HTMLButtonElement | null>(null);
+const appearanceSettings = ref<AppearanceSettings>(loadAppearanceSettings());
 const currentStepByRun = new Map<string, number>();
 const runStepBase = new Map<string, number>(); // 每个 run 的 step 起点偏移，避免跨 run 步号冲突
 const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens: number }>();
+// 首 token 延迟追踪（借鉴 dsh assistant-timing）：run 起点 → 首个 token 的时间差
+const runStartedAtByRun = new Map<string, number>();
+const firstTokenByRun = new Map<string, number>();
 let historyLoadSeq = 0;
 const reviewCtx = ref<ReviewContext | null>(null);
 // 切换会话加载动画：超过 260ms 未返回时显示终端图标动效，避免快加载闪屏
@@ -132,11 +135,6 @@ const sessionLoading = ref(false);
 let sessionLoadingTimer: ReturnType<typeof setTimeout> | undefined;
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
 const pendingPermissions = ref<Array<{ toolUseId: string; toolName: string; preview: string; runId: string }>>([]);
-const ccswitchOpen = ref(false);
-const ccswitchLoading = ref(false);
-const ccswitchApplying = ref<string | null>(null);
-const ccswitchError = ref("");
-const ccswitchProviders = ref<CcswitchProvider[]>([]);
 const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
@@ -165,6 +163,9 @@ const filteredLauncherWorkspaces = computed(() => {
   return activeWorkspaces.value.filter((item) => `${item.name} ${item.path}`.toLocaleLowerCase().includes(query)).slice(0, 8);
 });
 const orderedTimeline = computed(() => [...timeline.value.values()].sort((left, right) => left.step - right.step));
+// 全局会话统计（借鉴 dsh sessionStats 投影）：按 runId 去重的会话级 token/用时/轮步数，
+// 由底部统计栏展示；数据源与时间线同源，翻页与压缩不改变数字
+const sessionStats = computed(() => deriveSessionStats(orderedTimeline.value));
 // 聚合出最近一个已完成且有文件改动的 run，供会话区底部常驻 diff 预览使用（分组规则与时间线一致：新用户消息开新组，组内最后一步非末态视为运行中）
 const latestChangedRun = computed(() => {
   let group: { runId?: string; paths: string[]; lastStatus?: TimelineStep["status"] } | null = null;
@@ -399,11 +400,27 @@ function isHiddenHistoryBlock(block: HistoryBlock): boolean {
   const type = String(block.type ?? block.role ?? "").toLowerCase();
   return type === "system" || type === "developer" || type === "system_prompt" || type === "developer_prompt";
 }
-function isInternalHistoryMessage(blocks: HistoryBlock[]): boolean {
+// 识别内部上下文注入消息并归类为可折叠上下文行。
+// 会话压缩作为「模型实际收到的注入」展示；任务进度画布不进入会话区。
+function contextInjectionOf(blocks: HistoryBlock[]): ContextInjectionEntry | null {
   const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
-  return /^\[Task progress\]\s+step_\d+/i.test(text)
-    || /^This session is being continued from a previous conversation that ran out of context\.[\s\S]*\n\nSummary:\n/i.test(text)
-    || /^Understood, I'll continue from this summary\.$/i.test(text);
+  if (/^This session is being continued from a previous conversation that ran out of context\.[\s\S]*\n\nSummary:\n/i.test(text)) {
+    const summary = text.replace(/^This session is being continued from a previous conversation that ran out of context\.[\s\S]*?\n\nSummary:\n/i, "").trim();
+    return {
+      id: `ctx-compaction-${crypto.randomUUID()}`,
+      source: "compaction",
+      label: "会话压缩",
+      chars: text.length,
+      preview: summary.slice(0, 90),
+      text: summary,
+    };
+  }
+  if (/^Understood, I'll continue from this summary\.$/i.test(text)) return null;  // 摘要确认无信息量
+  return null;
+}
+function isTaskProgressInjection(blocks: HistoryBlock[]): boolean {
+  const text = blocks.filter((block) => String(block.type) === "text").map(blockText).join("\n").trim();
+  return /^\[Task progress\]\s+step_\d+/i.test(text);
 }
 function blockOutput(block: HistoryBlock): string {
   if (typeof block.content === "string") return block.content;
@@ -418,10 +435,30 @@ function appendTimelineEvent(step: TimelineStep, event: TimelineEvent): Timeline
   else events.push(event);
   return { ...step, events };
 }
+// 结构事件微任务批处理（借鉴 dsh web GUI Notifier.markDirty）：同一 tick 内的多个事件
+// （如 run.finished 收尾的 N 步）合并为一次快照替换；流式 token 仍走 RAF 帧级批处理
+const pendingTimeline = new Map<number, TimelineStep>();
+let timelineFlushScheduled = false;
+function scheduleTimelineFlush() {
+  if (timelineFlushScheduled) return;
+  timelineFlushScheduled = true;
+  queueMicrotask(() => {
+    timelineFlushScheduled = false;
+    if (!pendingTimeline.size) return;
+    const next = new Map(timeline.value);
+    for (const [step, item] of pendingTimeline) next.set(step, item);
+    pendingTimeline.clear();
+    timeline.value = next;
+  });
+}
+function discardPendingTimeline() {
+  pendingTimeline.clear();
+  timelineFlushScheduled = false;
+}
 function setStep(step: number, updater: (current: TimelineStep) => TimelineStep) {
-  const next = new Map(timeline.value);
-  next.set(step, updater(next.get(step) ?? emptyStep(step)));
-  timeline.value = next;
+  const base = pendingTimeline.get(step) ?? timeline.value.get(step) ?? emptyStep(step);
+  pendingTimeline.set(step, updater(base));
+  scheduleTimelineFlush();
 }
 function stepFor(event: RuntimeEvent): number {
   const runId = String(event.run_id ?? activeRunId.value ?? "");
@@ -438,9 +475,15 @@ function addUserMessage(content: string) {
   setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: startedAt, runStartedAt: startedAt }));
   return step;
 }
-function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {}) {
+function hydrateTimeline(
+  messages: unknown[],
+  runStats: Record<string, { input_tokens: number; output_tokens: number; elapsed_s: number }> = {},
+  contextInjections: Array<Record<string, unknown>> = [],
+) {
   tokenBatcher.clear();
+  discardPendingTimeline();
   const next = new Map<number, TimelineStep>();
+  const stepByRunId = new Map<string, number>();
   let step = 0;
   for (const message of messages) {
     const role = entryRole(message);
@@ -451,9 +494,16 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     if (role === "system" || role === "developer") continue;
     const visibleBlocks = blocks.filter((block) => !isHiddenHistoryBlock(block));
     if (!visibleBlocks.length) continue;
-    // Canvas progress summaries are persisted as user messages for the model's
-    // context, but they are internal bookkeeping and must not become chat turns.
-    if (isInternalHistoryMessage(blocks)) continue;
+    // 任务进度是内部画布信息，不在会话区展示。
+    if (isTaskProgressInjection(blocks)) continue;
+    // 其余内部上下文注入折叠为上下文行挂到当前 turn，不占对话位。
+    const injected = contextInjectionOf(blocks);
+    if (injected) {
+      if (!step) step = 1;
+      const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
+      next.set(step, { ...current, contextInjections: [...(current.contextInjections ?? []), injected] });
+      continue;
+    }
     const text = visibleBlocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
     const toolResults = visibleBlocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {
@@ -469,6 +519,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
     }
     if (role === "user") {
       step += 1;
+      if (messageRunId) stepByRunId.set(messageRunId, step);
       next.set(step, {
         ...emptyStep(step),
         status: "done",
@@ -485,6 +536,7 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       continue;
     }
     if (!step) step = 1;
+    if (messageRunId) stepByRunId.set(messageRunId, step);
     const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
     const thinking = visibleBlocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
     const calls: ToolCallEntry[] = visibleBlocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
@@ -512,6 +564,25 @@ function hydrateTimeline(messages: unknown[], runStats: Record<string, { input_t
       finalText: [current.finalText, text].filter(Boolean).join("\n\n") || undefined,
       toolCalls: [...current.toolCalls, ...calls],
       events: [...(current.events ?? []), ...events],
+    });
+  }
+  for (const injection of contextInjections) {
+    const runId = String(injection.run_id ?? "");
+    const injectionStep = stepByRunId.get(runId);
+    if (!injectionStep) continue;
+    const current = next.get(injectionStep) ?? { ...emptyStep(injectionStep), status: "done" };
+    const text = String(injection.text ?? injection.preview ?? "");
+    const entry: ContextInjectionEntry = {
+      id: `ctx-history-${runId}-${current.contextInjections?.length ?? 0}`,
+      source: "system",
+      label: String(injection.label ?? "上下文注入"),
+      chars: Number(injection.chars ?? text.length),
+      preview: String(injection.preview ?? ""),
+      text,
+    };
+    next.set(injectionStep, {
+      ...current,
+      contextInjections: [...(current.contextInjections ?? []), entry],
     });
   }
   timeline.value = next;
@@ -555,6 +626,37 @@ function applyRuntimeEvent(event: RuntimeEvent) {
     const messageStep = Math.max(0, ...timeline.value.keys());
     setStep(messageStep || 1, (current) => ({ ...current, status: "thinking", runId, runStartedAt: String(event.ts ?? new Date().toISOString()) }));
     liveRunUsage.set(runId, { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0 });
+    runStartedAtByRun.set(runId, Date.now());
+    firstTokenByRun.delete(runId);
+    return;
+  }
+  // 上下文注入：模型实际收到的完整 system 内容 → 可折叠上下文行
+  if (type === "context.injected") {
+    if (String(event.source ?? "system") === "canvas") return;
+    const step = stepFor(timelineEvent);
+    const entry: ContextInjectionEntry = {
+      id: `ctx-${runId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      source: String(event.source ?? "system") as ContextInjectionEntry["source"],
+      label: String(event.label ?? "上下文注入"),
+      chars: Number(event.chars ?? 0),
+      preview: String(event.preview ?? ""),
+      text: String(event.text ?? event.preview ?? ""),
+    };
+    setStep(step, (current) => ({ ...current, contextInjections: [...(current.contextInjections ?? []), entry] }));
+    return;
+  }
+  // 策略干预（权限熔断/卡死干预）：把注入给 LLM 的干预消息展示为上下文行
+  if (type === "denial.intervention" || type === "stuck.loop") {
+    const step = stepFor(timelineEvent);
+    const entry: ContextInjectionEntry = {
+      id: `ctx-${type}-${runId}-${Date.now()}`,
+      source: "intervention",
+      label: type === "denial.intervention" ? "权限熔断干预" : "卡死干预",
+      chars: String(event.message ?? "").length,
+      preview: String(event.message ?? "").slice(0, 90),
+      text: String(event.message ?? ""),
+    };
+    setStep(step, (current) => ({ ...current, contextInjections: [...(current.contextInjections ?? []), entry] }));
     return;
   }
   if (type === "step.started") {
@@ -566,20 +668,16 @@ function applyRuntimeEvent(event: RuntimeEvent) {
     return;
   }
   if (type === "llm.token") {
+    // 首个 token 打时间戳（TTFT），只记录一次
+    if (!firstTokenByRun.has(relatedRunId)) firstTokenByRun.set(relatedRunId, Date.now());
     const step = stepFor(timelineEvent);
     tokenBatcher.enqueue(relatedRunId, step, String(event.token ?? ""));
     return;
   }
   if (type === "llm.thinking") {
     const step = stepFor(timelineEvent);
-    setStep(step, (current) => {
-      const thinking = String(event.thinking ?? "");
-      const events = [...(current.events ?? [])];
-      const last = events[events.length - 1];
-      if (last?.kind === "thinking") last.text = `${last.text ?? ""}${thinking}`;
-      else events.push({ id: `thinking-live-${runId}-${Date.now()}`, kind: "thinking", text: thinking });
-      return { ...current, thinking: `${current.thinking ?? ""}${thinking}`, events };
-    });
+    const thinking = String(event.thinking ?? "");
+    if (thinking) setStep(step, (current) => appendThinkingBatch({ ...current, runId: relatedRunId }, [thinking]));
     return;
   }
   if (type === "llm.usage") {
@@ -594,6 +692,12 @@ function applyRuntimeEvent(event: RuntimeEvent) {
       cacheReadInputTokens: previous.cacheReadInputTokens + cacheReadInputTokens,
     };
     liveRunUsage.set(relatedRunId, cumulative);
+    // 首 token 延迟：首个 llm.token 与 run.started 的时间差（借鉴 dsh assistant-timing）
+    const startedAt = runStartedAtByRun.get(relatedRunId);
+    const firstTokenAt = firstTokenByRun.get(relatedRunId);
+    const ttftMs = startedAt !== undefined && firstTokenAt !== undefined
+      ? Math.max(0, firstTokenAt - startedAt)
+      : undefined;
     setStep(step, (current) => ({
       ...current,
       runId: relatedRunId,
@@ -604,7 +708,7 @@ function applyRuntimeEvent(event: RuntimeEvent) {
         summaryTokens: Number(event.summary_tokens ?? 0), conversationTokens: Number(event.conversation_tokens ?? 0),
         toolTokens: Number(event.tool_tokens ?? 0),
       },
-      runStats: { ...cumulative, elapsedSeconds: 0 },
+      runStats: { ...cumulative, elapsedSeconds: 0, ttftMs },
     }));
     return;
   }
@@ -624,7 +728,7 @@ function applyRuntimeEvent(event: RuntimeEvent) {
   }
   if (type === "tool.call_started") {
     const step = stepFor(timelineEvent);
-    const call: ToolCallEntry = { id: String(event.tool_use_id), name: String(event.tool_name), params: (event.params as Record<string, unknown>) ?? {}, status: "running" };
+    const call: ToolCallEntry = { id: String(event.tool_use_id), name: String(event.tool_name), params: (event.params as Record<string, unknown>) ?? {}, status: "running", startedAt: String(event.started_at ?? "") };
     setStep(step, (current) => appendTimelineEvent({ ...current, status: "acting", toolCalls: [...current.toolCalls.filter((item) => item.id !== call.id), call] }, { id: `tool-${call.id}`, kind: "tool", toolCallId: call.id }));
     return;
   }
@@ -763,12 +867,15 @@ function applyRuntimeEvent(event: RuntimeEvent) {
           outputTokens: Number(event.total_output_tokens ?? 0),
           cacheReadInputTokens: Number(event.cache_read_input_tokens ?? 0),
           elapsedSeconds: Number(event.elapsed_s ?? 0),
+          ttftMs: current.runStats?.ttftMs,
         },
       } : current);
     }
     if (runId === activeRunId.value) activeRunId.value = null;
     runActive.value = false;
     liveRunUsage.delete(relatedRunId);
+    runStartedAtByRun.delete(relatedRunId);
+    firstTokenByRun.delete(relatedRunId);
     void refreshIndex(false);
     return;
   }
@@ -783,7 +890,7 @@ async function refreshIndex(loadHistory = false) {
   activeId.value ??= nextSessions.find((item) => !item.archived)?.session_id ?? null;
   if (loadHistory && activeId.value) {
     const history = await sessionHistory(activeId.value);
-    hydrateTimeline(history.messages, history.run_stats);
+    hydrateTimeline(history.messages, history.run_stats, history.context_injections);
   }
   loading.value = false;
 }
@@ -796,6 +903,9 @@ function beginTask(project: Workspace | null = workspace.value) {
   currentStepByRun.clear();
   runStepBase.clear();
   liveRunUsage.clear();
+  runStartedAtByRun.clear();
+  firstTokenByRun.clear();
+  discardPendingTimeline();
   timeline.value = new Map();
   activeRunId.value = null;
   runActive.value = false;
@@ -817,6 +927,9 @@ async function submitTask(content: string, project: Workspace | null = workspace
       currentStepByRun.clear();
       runStepBase.clear();
       liveRunUsage.clear();
+      runStartedAtByRun.clear();
+      firstTokenByRun.clear();
+      discardPendingTimeline();
       timeline.value = new Map();
       activeRunId.value = null;
       page.value = "work";
@@ -871,9 +984,11 @@ async function chooseTask(id: string) {
   currentStepByRun.clear();
   runStepBase.clear();
   liveRunUsage.clear();
+  runStartedAtByRun.clear();
+  firstTokenByRun.clear();
   activeRunId.value = null;
   runActive.value = false;
-  hydrateTimeline(history.messages, history.run_stats);
+  hydrateTimeline(history.messages, history.run_stats, history.context_injections);
   activeRunId.value = latestRunId;
   // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
   runActive.value = !!latestRunId && sessions.value.find((item) => item.session_id === id)?.status === "active";
@@ -907,6 +1022,10 @@ async function showProjectFiles(item: Workspace) {
     activeId.value = sessionId;
     currentStepByRun.clear();
     runStepBase.clear();
+    liveRunUsage.clear();
+    runStartedAtByRun.clear();
+    firstTokenByRun.clear();
+    discardPendingTimeline();
     timeline.value = new Map();
     page.value = "work";
     await refreshIndex(false);
@@ -927,6 +1046,7 @@ async function deleteProject(item: Workspace) {
   if (workspace.value?.workspace_id === item.workspace_id) {
     workspace.value = workspaces.value[0] ?? null;
     activeId.value = null;
+    discardPendingTimeline();
     timeline.value = new Map();
   }
   await refreshIndex(false);
@@ -985,6 +1105,7 @@ function onComposerKeydown(event: KeyboardEvent) {
 async function decidePermission(toolUseId: string, decision: PermissionDecision) { await respondPermission(toolUseId, decision); }
 // 撤销后清除该 run 的全部改动，使变更卡片随之消失
 function handleReverted(runId: string) {
+  discardPendingTimeline();
   const next = new Map(timeline.value);
   for (const [step, item] of next) {
     if (item.runId === runId) next.set(step, { ...item, changes: [] });
@@ -1143,40 +1264,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
-async function loadNativeSettings() {
-  try {
-    const settings = await getNativeSettings();
-    autostart.value = settings.autostart;
-    stayAwake.value = settings.stay_awake;
-    nativeSettingsAvailable.value = settings.supported;
-    nativeSettingsError.value = "";
-  } catch {
-    nativeSettingsAvailable.value = false;
-  }
-}
-async function toggleAutostart(event: Event) {
-  const enabled = (event.target as HTMLInputElement).checked;
-  try {
-    const settings = await setNativeSettings({ autostart: enabled });
-    autostart.value = settings.autostart;
-    nativeSettingsError.value = "";
-  } catch (error) {
-    nativeSettingsError.value = error instanceof Error ? error.message : String(error);
-    (event.target as HTMLInputElement).checked = autostart.value;
-  }
-}
-async function toggleStayAwake(event: Event) {
-  const enabled = (event.target as HTMLInputElement).checked;
-  try {
-    const settings = await setNativeSettings({ stayAwake: enabled });
-    stayAwake.value = settings.stay_awake;
-    nativeSettingsError.value = "";
-  } catch (error) {
-    nativeSettingsError.value = error instanceof Error ? error.message : String(error);
-    (event.target as HTMLInputElement).checked = stayAwake.value;
-  }
-}
+function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); discardPendingTimeline(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
 async function applyPermissionMode(value: RuntimeSettings["permission_mode"]) {
   permissionSaving.value = true;
   permissionSettingsError.value = "";
@@ -1207,32 +1295,17 @@ function handleModelConfigUpdated(settings: RuntimeSettings, status: ProviderSta
   providerStatus.value = status;
 }
 function openModelManager() { modelManagerOpen.value = true; }
-// 加载本机 cc-switch 中可导入的供应商列表并展开面板
-async function loadCcswitchProviders() {
-  ccswitchLoading.value = true;
-  ccswitchError.value = "";
-  try {
-    ccswitchProviders.value = await listCcswitchProviders();
-    ccswitchOpen.value = true;
-  } catch (error) {
-    ccswitchError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    ccswitchLoading.value = false;
-  }
+function openSettings() {
+  settingsOpen.value = true;
+  projectMenuOpen.value = false;
+  closeLauncherMenus();
 }
-// 应用选中的 cc-switch 供应商并刷新运行时设置与状态
-async function useCcswitchProvider(providerId: string) {
-  ccswitchApplying.value = providerId;
-  ccswitchError.value = "";
-  try {
-    const settings = await applyCcswitchProvider(providerId);
-    if (settings) runtimeSettings.value = settings;
-    providerStatus.value = await getProviderStatus();
-  } catch (error) {
-    ccswitchError.value = error instanceof Error ? error.message : String(error);
-  } finally {
-    ccswitchApplying.value = null;
-  }
+function closeSettings() {
+  settingsOpen.value = false;
+  void nextTick(() => settingsButton.value?.focus());
+}
+function handleAppearanceChange(settings: AppearanceSettings) {
+  appearanceSettings.value = settings;
 }
 function openPage(next: Page) { page.value = next; projectMenuOpen.value = false; closeLauncherMenus(); if (next === "chat") chatView.value = "home"; }
 async function submitChat(content: string) {
@@ -1413,7 +1486,6 @@ onMounted(() => {
   handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
-  void loadNativeSettings();
   void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
 });
 onBeforeUnmount(() => {
@@ -1433,8 +1505,7 @@ onBeforeUnmount(() => {
   stopEvents?.();
   stopDisconnect?.();
 });
-watch(page, (next) => { if (next === "skills" || next === "settings") void refreshIndex(false); });
-watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", String(enabled)));
+watch(page, (next) => { if (next === "skills") void refreshIndex(false); });
 </script>
 
 <template>
@@ -1564,7 +1635,7 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
 
       <footer class="sidebar-footer">
         <div class="service-status"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : '未连接' }}</small></span></div>
-        <button class="settings-link" title="设置" aria-label="设置" @click="openPage('settings')"><Settings :size="16" :stroke-width="1.8" /></button>
+        <button ref="settingsButton" class="settings-link" title="设置" aria-label="设置" :aria-expanded="settingsOpen" @click="openSettings"><Settings :size="16" :stroke-width="1.8" /></button>
       </footer>
       </aside>
     </div>
@@ -1605,7 +1676,6 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                 <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
                 <div class="work-header__tools">
                   <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
-                  <TaskSummaryPopup :workspace-id="activeWorkspace?.workspace_id ?? null" :run-id="active?.latest_run_id ?? null" :steps="orderedTimeline" :attachments="attachedFiles.map((item) => item.path)" :workspace-name="activeWorkspace?.name" :workspace-path="activeWorkspace?.path" @review="handleReview" />
                   <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
                 </div>
               </header>
@@ -1621,6 +1691,8 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>开启「{{ activeWorkspace?.name || '当前项目' }}」的构筑之路。</b></div>
                   <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
                 </div>
+                <!-- 底部统计栏（借鉴 dsh StatsLine）：composer 上方一行全局会话统计 -->
+                <SessionStatsLine v-if="sessionStats.steps" :stats="sessionStats" />
                 <BottomDiffPreview
                   v-if="bottomDiffRun"
                   :workspace-id="activeWorkspace?.workspace_id ?? null"
@@ -1727,9 +1799,19 @@ watch(notifications, (enabled) => localStorage.setItem("sztu.notifications", Str
       <section v-else-if="page === 'skills'" class="chat-main"><SkillCenter :connected="connected" :workspace-id="activeWorkspace?.workspace_id ?? null" :workspace-name="activeWorkspace?.name ?? null" /></section>
 
       <section v-else-if="page === 'webbridge'" class="simple-page"><header><div><h1>浏览器连接</h1><p>连接浏览器，让 Agent 在授权范围内协助网页操作</p></div></header><div class="bridge-card"><Globe2 :size="24" /><div><h2>连接状态</h2><p>当前未连接。此功能需要浏览器扩展与本地服务支持。</p></div><span class="status-pill">未连接</span></div></section>
-
-      <section v-else class="settings-screen"><header class="settings-top"><button title="返回工作区" aria-label="返回工作区" @click="openPage('work')"><ArrowLeft :size="19" /></button><h1>设置</h1></header><div class="settings-layout"><aside><span>SztuCode</span><button class="active">SztuCode Work</button></aside><main><section><span class="settings-section-label">系统设置</span><div class="setting-group"><label><div><b>开机自启动</b><p>登录系统时自动启动 SztuCode。</p></div><input :checked="autostart" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleAutostart" /></label><label><div><b>系统通知</b><p>允许 SztuCode 发送任务结果与重要提醒。</p></div><input v-model="notifications" type="checkbox" /></label><label><div><b>保持电脑唤醒</b><p>任务运行期间阻止电脑进入睡眠。</p></div><input :checked="stayAwake" type="checkbox" :disabled="!nativeSettingsAvailable" @change="toggleStayAwake" /></label><p v-if="nativeSettingsError" class="native-settings-error">{{ nativeSettingsError }}</p></div></section><section><span class="settings-section-label">任务审批</span><div class="setting-group"><label class="stack"><b>权限模式</b><select :value="runtimeSettings?.permission_mode" @change="choosePermissionMode(($event.target as HTMLSelectElement).value as RuntimeSettings['permission_mode'])"><option value="normal">标准审批</option><option value="plan">计划模式</option><option value="accept_edits">允许编辑</option><option value="auto">全部允许</option></select></label></div></section><section><span class="settings-section-label">模型管理</span><div class="setting-group ccswitch-mgr"><div class="ccswitch-current-row"><div><b>当前模型</b><p>{{ runtimeSettings?.model || '未配置模型' }}<template v-if="runtimeSettings?.base_url"><br />{{ runtimeSettings.base_url }}</template></p></div><div class="model-management-actions"><button type="button" class="ccswitch-import-btn primary" @click="openModelManager"><Plus :size="14" />添加和管理模型</button><button type="button" class="ccswitch-import-btn" :disabled="ccswitchLoading" @click="ccswitchOpen ? (ccswitchOpen = false) : loadCcswitchProviders()">{{ ccswitchLoading ? '加载中…' : (ccswitchOpen ? '收起' : '从 cc-switch 导入') }}</button></div></div><div v-if="ccswitchOpen" class="ccswitch-list"><div v-for="item in ccswitchProviders" :key="item.id" class="ccswitch-card"><span class="ccswitch-card__dot" :class="{ has: item.has_api_key }" /><div class="ccswitch-card__info"><b>{{ item.name }}<em v-if="item.is_current">当前</em></b><span>{{ item.base_url }}</span><small>{{ item.model }}</small></div><button type="button" :disabled="ccswitchApplying === item.id" @click="useCcswitchProvider(item.id)">{{ ccswitchApplying === item.id ? '应用中…' : '使用此配置' }}</button></div><p v-if="!ccswitchProviders.length && !ccswitchLoading" class="ccswitch-empty">本机未发现可导入的 cc-switch 供应商，请确认已安装 CC Switch</p></div><p v-if="ccswitchError" class="native-settings-error">{{ ccswitchError }}</p></div></section><section><span class="settings-section-label">WebBridge</span><div class="setting-group"><label><div><b>允许网站所有操作</b><p>允许 Agent 在浏览器中执行已授权的网页动作。</p></div><input v-model="webBridgeAllowed" type="checkbox" disabled /></label><label><div><b>浏览器连接</b><p>显示 SztuCode 与本地浏览器扩展的连接状态。</p></div><em>未连接</em></label></div></section></main></div></section>
     </main>
+
+    <SettingsDialog
+      v-if="settingsOpen"
+      :appearance="appearanceSettings"
+      :runtime-settings="runtimeSettings"
+      :permission-error="permissionSettingsError"
+      @close="closeSettings"
+      @appearance-change="handleAppearanceChange"
+      @permission-change="choosePermissionMode"
+      @manage-model="openModelManager"
+      @runtime-updated="runtimeSettings = $event"
+    />
 
     <div v-if="modelManagerOpen" class="model-manager-backdrop"><ModelManager @close="modelManagerOpen = false" @updated="handleModelConfigUpdated" /></div>
 

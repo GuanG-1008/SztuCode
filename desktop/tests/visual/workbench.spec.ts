@@ -92,6 +92,99 @@ test("task conversation scrolls against the workspace divider while controls sta
   expect(geometry.summaryScrollable).toBe(true);
 });
 
+test("conversation text column uses the wider desktop layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator(".kimi-main").evaluate((main) => {
+    main.innerHTML = `
+      <section class="work-page">
+        <div class="work-layout no-inspector">
+          <section class="task-canvas">
+            <header class="work-header">agent-learning</header>
+            <div class="task-conversation">
+              <div class="task-stream">
+                <div class="execution-timeline">
+                  <article class="timeline-step">
+                    <div class="timeline-user-message">${"一段用于验证会话文字展示宽度的长消息。".repeat(30)}</div>
+                    <div class="timeline-assistant"><div class="timeline-step__content"><div class="token-stream">回答正文</div></div></div>
+                  </article>
+                </div>
+              </div>
+              <form class="kimi-composer"><textarea></textarea></form>
+            </div>
+          </section>
+          <div class="layout-divider"></div>
+        </div>
+      </section>`;
+  });
+
+  const geometry = await page.evaluate(() => {
+    const timeline = document.querySelector<HTMLElement>(".execution-timeline")!;
+    const message = document.querySelector<HTMLElement>(".timeline-user-message")!;
+    return {
+      timelineWidth: timeline.getBoundingClientRect().width,
+      timelineMaxWidth: getComputedStyle(timeline).maxWidth,
+      messageWidth: message.getBoundingClientRect().width,
+      messageMaxWidth: getComputedStyle(message).maxWidth,
+    };
+  });
+
+  expect(geometry.timelineMaxWidth).toBe("860px");
+  expect(geometry.timelineWidth).toBeCloseTo(860, 0);
+  expect(geometry.messageMaxWidth).toBe("min(82%, 720px)");
+  expect(geometry.messageWidth).toBeGreaterThan(640);
+});
+
+test("narrow conversation text aligns with the composer edges", async ({ page }) => {
+  await page.setViewportSize({ width: 431, height: 900 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator(".kimi-main").evaluate((main) => {
+    main.innerHTML = `
+      <section class="work-page">
+        <div class="work-layout no-inspector">
+          <section class="task-canvas">
+            <header class="work-header">agent-learning</header>
+            <div class="task-conversation">
+              <div class="task-stream">
+                <div class="execution-timeline">
+                  <article class="timeline-step">
+                    <div class="timeline-user-message">${"窄窗口下保持右侧对齐。".repeat(20)}</div>
+                    <div class="timeline-assistant"><div class="timeline-step__content"><div class="token-stream">窄窗口下正文左侧应与输入框对齐。</div></div></div>
+                  </article>
+                </div>
+              </div>
+              <form class="kimi-composer"><textarea></textarea></form>
+            </div>
+          </section>
+          <div class="layout-divider"></div>
+        </div>
+      </section>`;
+  });
+
+  const geometry = await page.evaluate(() => {
+    const stream = document.querySelector<HTMLElement>(".task-stream")!;
+    const message = document.querySelector<HTMLElement>(".timeline-user-message")!;
+    const assistantText = document.querySelector<HTMLElement>(".token-stream")!;
+    const composer = document.querySelector<HTMLElement>(".kimi-composer")!;
+    const streamRect = stream.getBoundingClientRect();
+    const messageRect = message.getBoundingClientRect();
+    const assistantRect = assistantText.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
+    return {
+      streamLeftGap: streamRect.left,
+      streamRightGap: window.innerWidth - streamRect.right,
+      assistantLeft: assistantRect.left,
+      composerLeft: composerRect.left,
+      messageRight: messageRect.right,
+      composerRight: composerRect.right,
+    };
+  });
+
+  expect(geometry.streamLeftGap).toBeCloseTo(geometry.streamRightGap, 0);
+  expect(geometry.assistantLeft).toBeCloseTo(geometry.composerLeft, 0);
+  expect(geometry.messageRight).toBeCloseTo(geometry.composerRight, 0);
+});
+
 test("task conversation slash menu opens above the composer without clipping", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -545,12 +638,907 @@ test("sidebar resizer clamps its range and collapses after an intentional over-p
   await expect(page.getByRole("button", { name: "展开导航" })).toHaveAttribute("aria-expanded", "false");
 });
 
-test("settings remains available from the workbench footer", async ({ page }) => {
+test("settings opens as an appearance dialog from the workbench footer", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "设置" }).click();
-  await expect(page.getByRole("heading", { name: "设置" })).toBeVisible();
-  await expect(page.getByText("系统设置")).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "外观" })).toBeVisible();
+  await expect(dialog.getByRole("radio", { name: "跟随系统" })).toBeVisible();
+  await dialog.getByRole("button", { name: "通用" }).click();
+  await expect(dialog.getByText("系统设置")).toBeVisible();
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+  await expect(dialog).toBeHidden();
+});
+
+test("appearance settings offer distinct interface font previews", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  const fontGroup = dialog.getByRole("radiogroup", { name: "界面字体" });
+
+  await expect(fontGroup.getByRole("radio")).toHaveCount(9);
+  await fontGroup.getByRole("radio", { name: "思源黑体" }).click();
+  expect(await page.locator("html").evaluate((root) => root.style.getPropertyValue("--font-ui"))).toContain("Noto Sans SC");
+  await expect(fontGroup.getByRole("radio", { name: "思源黑体" })).toHaveAttribute("aria-checked", "true");
+
+  await fontGroup.getByRole("radio", { name: "楷体" }).click();
+  expect(await page.locator("html").evaluate((root) => root.style.getPropertyValue("--font-ui"))).toContain("KaiTi");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("sztu.appearance") || "{}").uiFont)).toBe("kaiti");
+});
+
+test("interface font size updates the full typography scale and persists", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+
+  const readFontSizes = () => page.evaluate(() => ({
+    brand: parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".sidebar-brand h1")!).fontSize),
+    launcher: parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".launcher-heading h1")!).fontSize),
+    newTask: parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".new-task-button")!).fontSize),
+    textarea: parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".landing-composer textarea")!).fontSize),
+    settingsTitle: parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".settings-pane-title h2")!).fontSize),
+  }));
+
+  const before = await readFontSizes();
+  await dialog.getByRole("button", { name: "增大字号" }).click();
+  await dialog.getByRole("button", { name: "增大字号" }).click();
+  await expect(dialog.locator(".stepper output")).toHaveText("16px");
+
+  const after = await readFontSizes();
+  expect(after.brand).toBeGreaterThan(before.brand);
+  expect(after.launcher).toBeGreaterThan(before.launcher);
+  expect(after.newTask).toBeGreaterThan(before.newTask);
+  expect(after.textarea).toBeGreaterThan(before.textarea);
+  expect(after.settingsTitle).toBeGreaterThan(before.settingsTitle);
+  expect(await page.locator("html").evaluate((root) => root.style.getPropertyValue("--text-body"))).toBe("16px");
+
+  await dialog.getByRole("button", { name: "增大字号" }).click();
+  await dialog.getByRole("button", { name: "增大字号" }).click();
+  await expect(dialog.locator(".stepper output")).toHaveText("18px");
+  await expect(dialog.getByRole("button", { name: "增大字号" })).toBeDisabled();
+  const overflow = await page.evaluate(() => Object.fromEntries(
+    [".settings-dialog__content", ".agent-sidebar", ".starter-tasks"].map((selector) => {
+      const element = document.querySelector<HTMLElement>(selector)!;
+      return [selector, element.scrollWidth - element.clientWidth];
+    }),
+  ));
+  expect(overflow).toEqual({
+    ".settings-dialog__content": 0,
+    ".agent-sidebar": 0,
+    ".starter-tasks": 0,
+  });
+
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  expect(await page.locator("html").evaluate((root) => root.style.getPropertyValue("--text-body"))).toBe("18px");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("sztu.appearance") || "{}").fontSize)).toBe(18);
+});
+
+test("regional transparency controls update each workspace surface independently", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await expect(dialog.getByRole("slider", { name: "侧栏与顶部栏透明度" })).toBeDisabled();
+  await dialog.getByRole("radio", { name: "网格" }).click();
+  await expect(dialog.getByRole("slider", { name: "侧栏与顶部栏透明度" })).toBeEnabled();
+  await page.locator(".kimi-shell").evaluate((shell) => {
+    const fixture = document.createElement("aside");
+    fixture.className = "project-inspector file-rail";
+    fixture.dataset.transparencyFixture = "inspector";
+    fixture.style.cssText = "position:fixed;left:-100px;top:-100px;width:10px;height:10px;display:block";
+    shell.append(fixture);
+  });
+
+  const setSlider = async (name: string, value: number) => {
+    await dialog.getByRole("slider", { name }).evaluate((input, nextValue) => {
+      const slider = input as HTMLInputElement;
+      slider.value = String(nextValue);
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    }, value);
+  };
+  await setSlider("侧栏与顶部栏透明度", 60);
+  await setSlider("会话区透明度", 50);
+  await setSlider("输入框透明度", 40);
+  await setSlider("右侧功能栏透明度", 30);
+
+  const result = await page.evaluate(() => {
+    const alpha = (selector: string) => {
+      const color = getComputedStyle(document.querySelector<HTMLElement>(selector)!).backgroundColor;
+      const modernColorAlpha = color.match(/\/\s*([\d.]+)\s*\)$/);
+      if (modernColorAlpha) return Math.round(Number(modernColorAlpha[1]) * 255);
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return context.getImageData(0, 0, 1, 1).data[3];
+    };
+    const root = document.documentElement;
+    return {
+      variables: {
+        chrome: root.style.getPropertyValue("--chrome-surface-opacity"),
+        conversation: root.style.getPropertyValue("--conversation-surface-opacity"),
+        composer: root.style.getPropertyValue("--composer-surface-opacity"),
+        inspector: root.style.getPropertyValue("--inspector-surface-opacity"),
+      },
+      alpha: {
+        chrome: alpha(".kimi-titlebar"),
+        conversation: alpha(".kimi-main"),
+        composer: alpha(".landing-composer textarea"),
+        inspector: alpha('[data-transparency-fixture="inspector"]'),
+      },
+      persisted: JSON.parse(localStorage.getItem("sztu.appearance") || "{}"),
+    };
+  });
+
+  expect(result.variables).toEqual({ chrome: "40%", conversation: "50%", composer: "60%", inspector: "70%" });
+  expect(result.alpha.chrome).toBeCloseTo(102, 0);
+  expect(result.alpha.conversation).toBeCloseTo(128, 0);
+  expect(result.alpha.composer).toBeCloseTo(153, 0);
+  expect(result.alpha.inspector).toBeCloseTo(179, 0);
+  expect(result.persisted).toMatchObject({
+    chromeTransparency: 60,
+    conversationTransparency: 50,
+    composerTransparency: 40,
+    inspectorTransparency: 30,
+  });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  expect(await page.locator("html").evaluate((root) => ({
+    chrome: root.style.getPropertyValue("--chrome-surface-opacity"),
+    conversation: root.style.getPropertyValue("--conversation-surface-opacity"),
+    composer: root.style.getPropertyValue("--composer-surface-opacity"),
+    inspector: root.style.getPropertyValue("--inspector-surface-opacity"),
+  }))).toEqual({ chrome: "40%", conversation: "50%", composer: "60%", inspector: "70%" });
+});
+
+test("preset wallpaper is visible through the workspace surfaces", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await dialog.getByRole("radio", { name: "网格" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-wallpaper", "grid");
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+
+  const wallpaper = await page.evaluate(() => {
+    const alpha = (selector: string) => {
+      const color = getComputedStyle(document.querySelector<HTMLElement>(selector)!).backgroundColor;
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return context.getImageData(0, 0, 1, 1).data[3];
+    };
+    const shell = document.querySelector<HTMLElement>(".kimi-shell")!;
+    return {
+      texture: getComputedStyle(shell, "::before").backgroundImage,
+      titlebarAlpha: alpha(".kimi-titlebar"),
+      sidebarViewportAlpha: alpha(".sidebar-viewport"),
+      sidebarAlpha: alpha(".kimi-sidebar"),
+      mainAlpha: alpha(".kimi-main"),
+    };
+  });
+
+  expect(wallpaper.texture).not.toBe("none");
+  expect(wallpaper.titlebarAlpha).toBeLessThanOrEqual(175);
+  expect(wallpaper.sidebarViewportAlpha).toBeLessThanOrEqual(175);
+  expect(wallpaper.sidebarAlpha).toBe(0);
+  expect(wallpaper.mainAlpha).toBeLessThanOrEqual(165);
+});
+
+test("dark appearance keeps the wallpaper visible and launcher surfaces readable", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await dialog.getByRole("radio", { name: "深色" }).click();
+  await dialog.getByRole("radio", { name: "网格" }).click();
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+  await expect.poll(() => page.locator(".kimi-shell").evaluate((shell) => (
+    Number(getComputedStyle(shell, "::before").opacity)
+  ))).toBeGreaterThanOrEqual(0.69);
+
+  const appearance = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const shell = document.querySelector<HTMLElement>(".kimi-shell")!;
+    const heading = document.querySelector<HTMLElement>(".launcher-heading h1")!;
+    const starter = document.querySelector<HTMLElement>(".starter-tasks button")!;
+    const textColorProbe = document.createElement("span");
+    textColorProbe.style.color = "var(--text)";
+    document.body.append(textColorProbe);
+    const expectedTextColor = getComputedStyle(textColorProbe).color;
+    textColorProbe.remove();
+    return {
+      theme: document.documentElement.dataset.appTheme,
+      wallpaper: document.documentElement.dataset.wallpaper,
+      texture: getComputedStyle(shell, "::before").backgroundImage,
+      wallpaperOpacity: Number(getComputedStyle(shell, "::before").opacity),
+      lightWallpaperOpacity: Number(root.getPropertyValue("--wallpaper-opacity")),
+      headingColor: getComputedStyle(heading).color,
+      expectedTextColor,
+      starterBackground: getComputedStyle(starter).backgroundColor,
+    };
+  });
+
+  expect(appearance.theme).toBe("dark");
+  expect(appearance.wallpaper).toBe("grid");
+  expect(appearance.texture).not.toBe("none");
+  expect(appearance.wallpaperOpacity).toBeGreaterThan(appearance.lightWallpaperOpacity);
+  expect(appearance.wallpaperOpacity).toBeGreaterThanOrEqual(0.46);
+  expect(appearance.headingColor).toBe(appearance.expectedTextColor);
+  expect(appearance.starterBackground).not.toBe("rgb(255, 255, 255)");
+});
+
+test("dark workspace keeps enough wallpaper visible through the conversation surface", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("html").evaluate((root) => {
+    root.dataset.appTheme = "dark";
+    root.dataset.wallpaper = "grid";
+  });
+  await page.locator(".kimi-main").evaluate((main) => {
+    main.innerHTML = `
+      <section class="work-page">
+        <div class="work-layout no-inspector">
+          <section class="task-canvas">
+            <header class="work-header">SztuCode</header>
+            <div class="task-conversation">
+              <div class="task-stream">背景可见性</div>
+              <form class="kimi-composer"><textarea></textarea></form>
+            </div>
+          </section>
+        </div>
+      </section>`;
+  });
+  await expect.poll(() => page.locator(".kimi-shell").evaluate((shell) => (
+    Number(getComputedStyle(shell, "::before").opacity)
+  ))).toBeGreaterThanOrEqual(0.69);
+
+  const result = await page.evaluate(() => {
+    const alpha = (selector: string) => {
+      const color = getComputedStyle(document.querySelector<HTMLElement>(selector)!).backgroundColor;
+      const modernColorAlpha = color.match(/\/\s*([\d.]+)\s*\)$/);
+      if (modernColorAlpha) return Math.round(Number(modernColorAlpha[1]) * 255);
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return context.getImageData(0, 0, 1, 1).data[3];
+    };
+    const shell = document.querySelector<HTMLElement>(".kimi-shell")!;
+    const wallpaperOpacity = Number(getComputedStyle(shell, "::before").opacity);
+    const canvasAlpha = alpha(".task-canvas");
+    return {
+      mainAlpha: alpha(".kimi-main"),
+      canvasAlpha,
+      headerAlpha: alpha(".work-header"),
+      composerAlpha: alpha(".kimi-composer"),
+      wallpaperOpacity,
+      effectiveWallpaperReveal: wallpaperOpacity * (1 - canvasAlpha / 255),
+    };
+  });
+  expect(result.mainAlpha).toBe(0);
+  expect(result.canvasAlpha).toBeLessThanOrEqual(165);
+  expect(result.headerAlpha).toBe(0);
+  expect(result.composerAlpha).toBeLessThan(255);
+  expect(result.wallpaperOpacity).toBeGreaterThanOrEqual(0.69);
+  expect(result.effectiveWallpaperReveal).toBeGreaterThanOrEqual(0.24);
+});
+
+test("dark files inspector uses readable controls, selection, and syntax colors", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("html").evaluate((root) => {
+    root.dataset.appTheme = "dark";
+    root.dataset.wallpaper = "grid";
+  });
+  await page.locator(".kimi-main").evaluate((main) => {
+    main.innerHTML = `
+      <aside class="project-inspector file-rail" style="width:760px;height:620px">
+        <header class="workspace-tab-strip">
+          <div class="workspace-open-tab active"><button><span class="workspace-tab-icon"></span><span>文件</span></button></div>
+        </header>
+        <main class="files-workspace">
+          <div class="file-tree-view" style="grid-template-columns:minmax(0,1fr) 6px 220px">
+            <section class="file-preview file-preview--files">
+              <header><b>appearance.ts</b><small>src/services/appearance.ts</small></header>
+              <div class="code-preview">
+                <div class="code-preview-meta"><span class="format-badge">TypeScript</span><span>UTF-8</span></div>
+                <div class="preview-breadcrumb"><span>src <i>/</i> services <i>/</i> appearance.ts</span></div>
+                <div class="code-preview-scroll">
+                  <div class="code-line"><span class="line-number">1</span><code><span class="hljs-comment">// theme</span></code></div>
+                  <div class="code-line"><span class="line-number">2</span><code><span class="hljs-keyword">const</span> theme = <span class="hljs-string">"dark"</span>;</code></div>
+                  <div class="code-line"><span class="line-number">3</span><code><span class="hljs-title function_">applyTheme</span>(<span class="hljs-number">2</span>);</code></div>
+                </div>
+              </div>
+            </section>
+            <div class="file-tree-divider"></div>
+            <div class="files-body">
+              <div class="file-row dir"><span class="row-icon">D</span><span class="row-name">src</span></div>
+              <div class="file-row active"><span class="row-icon">F</span><span class="row-name">appearance.ts</span></div>
+            </div>
+          </div>
+        </main>
+      </aside>`;
+  });
+
+  const colors = await page.evaluate(() => {
+    const style = (selector: string) => getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+    const channelMax = (color: string) => Math.max(...(color.match(/[\d.]+/g) || []).slice(0, 3).map(Number));
+    return {
+      tab: style(".workspace-open-tab.active").backgroundColor,
+      activeRow: style(".file-row.active").backgroundColor,
+      rowText: channelMax(style(".file-row.active .row-name").color),
+      folderIcon: channelMax(style(".file-row.dir .row-icon").color),
+      codeText: channelMax(style(".code-preview-scroll").color),
+      comment: channelMax(style(".hljs-comment").color),
+      keyword: channelMax(style(".hljs-keyword").color),
+      string: channelMax(style(".hljs-string").color),
+      number: channelMax(style(".hljs-number").color),
+      overflow: document.querySelector<HTMLElement>(".project-inspector.file-rail")!.scrollWidth
+        - document.querySelector<HTMLElement>(".project-inspector.file-rail")!.clientWidth,
+    };
+  });
+
+  expect(colors.tab).not.toBe("rgb(244, 244, 244)");
+  expect(colors.activeRow).not.toBe("rgb(233, 241, 236)");
+  expect(colors.activeRow).not.toBe("rgb(255, 255, 255)");
+  expect(colors.rowText).toBeGreaterThan(150);
+  expect(colors.folderIcon).toBeGreaterThan(150);
+  expect(colors.codeText).toBeGreaterThan(180);
+  expect(colors.comment).toBeGreaterThan(150);
+  expect(colors.keyword).toBeGreaterThan(180);
+  expect(colors.string).toBeGreaterThan(180);
+  expect(colors.number).toBeGreaterThan(180);
+  expect(colors.overflow).toBe(0);
+});
+
+test("switching preset textures updates the wallpaper layer immediately", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  const textures = [
+    { label: "薄雾", value: "mist" },
+    { label: "网格", value: "grid" },
+    { label: "纸纹", value: "paper" },
+  ];
+  const backgrounds: string[] = [];
+
+  for (const texture of textures) {
+    await dialog.getByRole("radio", { name: texture.label }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-wallpaper", texture.value);
+    backgrounds.push(await page.locator(".kimi-shell").evaluate((shell) => getComputedStyle(shell, "::before").backgroundImage));
+  }
+
+  expect(backgrounds.every((background) => background !== "none")).toBe(true);
+  expect(new Set(backgrounds).size).toBe(textures.length);
+});
+
+test("mist wallpaper stays visible beneath the workspace surfaces", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await dialog.getByRole("radio", { name: "薄雾" }).click();
+  await dialog.getByRole("button", { name: "关闭设置" }).click();
+
+  const chrome = await page.evaluate(() => {
+    const titlebar = getComputedStyle(document.querySelector<HTMLElement>(".kimi-titlebar")!);
+    const sidebar = getComputedStyle(document.querySelector<HTMLElement>(".sidebar-viewport")!);
+    const main = document.querySelector<HTMLElement>(".kimi-main")!;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = getComputedStyle(main).backgroundColor;
+    context.fillRect(0, 0, 1, 1);
+    return {
+      wallpaper: document.documentElement.dataset.wallpaper,
+      titlebarImage: titlebar.backgroundImage,
+      titlebarAnimation: titlebar.animationName,
+      titlebarAttachment: titlebar.backgroundAttachment,
+      sidebarImage: sidebar.backgroundImage,
+      sidebarAnimation: sidebar.animationName,
+      sidebarAttachment: sidebar.backgroundAttachment,
+      mainAlpha: context.getImageData(0, 0, 1, 1).data[3],
+    };
+  });
+
+  expect(chrome.wallpaper).toBe("mist");
+  expect(chrome.titlebarImage).toContain("linear-gradient");
+  expect(chrome.sidebarImage).toContain("linear-gradient");
+  expect(chrome.titlebarAnimation).toBe("mist-chrome-flow");
+  expect(chrome.sidebarAnimation).toBe("mist-chrome-flow");
+  expect(chrome.titlebarAttachment).toBe("fixed");
+  expect(chrome.sidebarAttachment).toBe("fixed");
+  expect(chrome.mainAlpha).toBeLessThanOrEqual(165);
+});
+
+test("wallpaper flows through the files inspector surfaces", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("html").evaluate((root) => { root.dataset.wallpaper = "grid"; });
+  await page.locator(".kimi-main").evaluate((main) => {
+    main.innerHTML = `
+      <aside class="project-inspector file-rail">
+        <header class="workspace-tab-strip">文件</header>
+        <main class="files-workspace">
+          <div class="file-tree-view">
+            <section class="file-preview file-preview--files empty">
+              <div class="files-empty files-preview-placeholder">打开文件</div>
+              <div class="code-preview"><div class="code-preview-meta"></div><div class="preview-breadcrumb"></div><div class="code-preview-scroll"></div></div>
+            </section>
+            <div class="file-tree-divider"></div>
+            <div class="files-body">项目文件</div>
+          </div>
+        </main>
+      </aside>`;
+  });
+
+  const surfaces = await page.evaluate(() => {
+    const alpha = (selector: string) => {
+      const color = getComputedStyle(document.querySelector<HTMLElement>(selector)!).backgroundColor;
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      return context.getImageData(0, 0, 1, 1).data[3];
+    };
+    return {
+      inspector: alpha(".project-inspector.file-rail"),
+      workspace: alpha(".files-workspace"),
+      preview: alpha(".file-preview--files"),
+      tree: alpha(".files-body"),
+      code: alpha(".code-preview"),
+      codeScroll: alpha(".code-preview-scroll"),
+    };
+  });
+
+  expect(surfaces.inspector).toBeLessThanOrEqual(165);
+  expect(surfaces.workspace).toBe(0);
+  expect(surfaces.preview).toBe(0);
+  expect(surfaces.tree).toBe(0);
+  expect(surfaces.code).toBeLessThanOrEqual(210);
+  expect(surfaces.codeScroll).toBe(0);
+});
+
+test("appearance settings can upload and remove a custom wallpaper", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "设置" }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACNklEQVR42mNhQAIGBgYCX378yWf8zxDwH8hloCJgZGC48J+RYQMPB8vECxcufEAShwBVDd2E//8Z+hkY/gsw0BQwfmBkZCi8fePyAhCPGWH5//lAJgcD7QHIjgBhUfGH7968usAIDvbvf+/T3ueYIcHDyazIzCMgUgHkeTDQH3D8+vvvJxMwwfkzDBAA2c1C7dROCgDZzcIwwGDAHcCET1JGWppBU1Nj4Bywcf0qhk3rVzMEBfoPTBQwMkIKys72FjC9bv1GqjuAWUhErAGX5KEjRxl8vD0Z2NnZGVxdnBj4eHkZDgPF6BYF16/fYIiOS2L4/PkzmJ8QH8vQ0d5MvxAAgTdv3oBDws7WhoGPj5dBC5gopaWlGPbs3U/7EEAOCb/AUIbrN26C+cGBAeDQoHs5AKwx6ZsNYQBUFoCypBa0TADlhgULF9MnBECWL1k4Fxj/fHDLyytr6FMOoFu+cNEShpa2Trici7MjXsMXLlrK8OnTJ/IdgGw5yNfIBVFNZTmDmZkJgXYgI8OkKdPITwOwkhDdchBYu34Dw9Onz3DqBcnt3ruPcJtARV3nP77KiBeY90HZcEDqgidPnwK9MszbAwPfIAEms4sD1igF2s0E6i4NWKMUaDcTsK82AeiWjwPg/48gu5lfvHjxA9hNegHqLtE17pkYI69euXQB3DcE9dFAfTWgqxxp3z9k/Aiy/Nb1yxvgnVOYI+RkpWaAukvAxCEIFJKgdoIDEjN5OFkiQD6HSQAA0hu+tsnl1ZkAAAAASUVORK5CYII=",
+    "base64",
+  );
+
+  await dialog.locator('input[type="file"][accept*="image/png"]').setInputFiles({
+    name: "workspace-background.png",
+    mimeType: "image/png",
+    buffer: png,
+  });
+
+  await expect(dialog.locator(".settings-error")).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute("data-wallpaper", "custom");
+  await expect(dialog.getByText("workspace-background.png")).toBeVisible();
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("sztu.appearance") || "{}"));
+  expect(persisted.customWallpaper).toMatch(/^data:image\/webp/);
+  expect(persisted.customWallpaperName).toBe("workspace-background.png");
+  expect(await page.locator(".kimi-shell").evaluate((shell) => getComputedStyle(shell, "::before").backgroundImage)).not.toBe("none");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("data-wallpaper", "custom");
+  await page.getByRole("button", { name: "设置" }).click();
+  const reopenedDialog = page.getByRole("dialog", { name: "设置" });
+  await expect(reopenedDialog.getByText("workspace-background.png")).toBeVisible();
+
+  await reopenedDialog.getByRole("button", { name: "移除背景图" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-wallpaper", "none");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("sztu.appearance") || "{}").customWallpaper)).toBe("");
+});
+
+test("conversation stays flat with a gray workspace boundary", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("#app").evaluate((root) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const workspace = { workspace_id: "workspace-fixture", name: "Fixture", path: "F:/fixture", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [{
+      session_id: "session-fixture", title: "Fixture task", status: "active", updated_at: "",
+      archived: false, pinned: false, workspace_id: "workspace-fixture",
+      total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+    }];
+    state.activeId = "session-fixture";
+    state.inspectorOpen = true;
+    state.inspectorRendered = true;
+  });
+
+  const geometry = await page.locator(".work-layout").evaluate((layout) => {
+    const main = document.querySelector<HTMLElement>(".kimi-main")!;
+    const titlebar = document.querySelector<HTMLElement>(".kimi-titlebar")!;
+    const sidebarViewport = document.querySelector<HTMLElement>(".sidebar-viewport")!;
+    const sidebar = document.querySelector<HTMLElement>(".kimi-sidebar")!;
+    const sidebarFooter = document.querySelector<HTMLElement>(".sidebar-footer")!;
+    const workHeader = layout.closest(".work-page")!.querySelector<HTMLElement>(".work-header")!;
+    const conversation = layout.querySelector<HTMLElement>(".task-canvas")!;
+    const inspector = layout.querySelector<HTMLElement>(".project-inspector.file-rail")!;
+    const inspectorHeader = inspector.querySelector<HTMLElement>(".workspace-tab-strip")!;
+    const divider = layout.querySelector<HTMLElement>(".layout-divider")!;
+    const mainStyle = getComputedStyle(main);
+    const titlebarStyle = getComputedStyle(titlebar);
+    const sidebarViewportStyle = getComputedStyle(sidebarViewport);
+    const sidebarStyle = getComputedStyle(sidebar);
+    const sidebarFooterStyle = getComputedStyle(sidebarFooter);
+    const workHeaderStyle = getComputedStyle(workHeader);
+    const conversationStyle = getComputedStyle(conversation);
+    const inspectorStyle = getComputedStyle(inspector);
+    const inspectorHeaderStyle = getComputedStyle(inspectorHeader);
+    const dividerStyle = getComputedStyle(divider);
+    const conversationRect = conversation.getBoundingClientRect();
+    const inspectorRect = inspector.getBoundingClientRect();
+    const dividerRect = divider.getBoundingClientRect();
+    return {
+      mainMarginRight: mainStyle.marginRight,
+      mainMarginBottom: mainStyle.marginBottom,
+      mainShadow: mainStyle.boxShadow,
+      titlebarBackground: titlebarStyle.backgroundColor,
+      titlebarBorder: titlebarStyle.borderBottomWidth,
+      sidebarShadow: sidebarViewportStyle.boxShadow,
+      sidebarViewportBackground: sidebarViewportStyle.backgroundColor,
+      sidebarBackground: sidebarStyle.backgroundColor,
+      sidebarBorder: sidebarStyle.borderRightWidth,
+      sidebarFooterBorder: sidebarFooterStyle.borderTopWidth,
+      workHeaderBorder: workHeaderStyle.borderBottomWidth,
+      mainTopLeftRadius: mainStyle.borderTopLeftRadius,
+      mainTopRightRadius: mainStyle.borderTopRightRadius,
+      mainBottomRightRadius: mainStyle.borderBottomRightRadius,
+      mainBottomLeftRadius: mainStyle.borderBottomLeftRadius,
+      conversationTopLeftRadius: conversationStyle.borderTopLeftRadius,
+      conversationTopRightRadius: conversationStyle.borderTopRightRadius,
+      conversationBottomRightRadius: conversationStyle.borderBottomRightRadius,
+      conversationBottomLeftRadius: conversationStyle.borderBottomLeftRadius,
+      conversationShadow: conversationStyle.boxShadow,
+      conversationBorder: conversationStyle.borderTopWidth,
+      inspectorRadius: inspectorStyle.borderRadius,
+      inspectorShadow: inspectorStyle.boxShadow,
+      inspectorBorder: inspectorStyle.borderTopWidth,
+      inspectorHeaderBorder: inspectorHeaderStyle.borderBottomWidth,
+      dividerBackground: dividerStyle.backgroundColor,
+      panelGap: inspectorRect.left - conversationRect.right,
+      dividerWidth: dividerRect.width,
+      inspectorRightGap: window.innerWidth - inspectorRect.right,
+      inspectorBottomGap: window.innerHeight - inspectorRect.bottom,
+    };
+  });
+
+  expect(geometry.mainMarginRight).toBe("0px");
+  expect(geometry.mainMarginBottom).toBe("0px");
+  expect(geometry.titlebarBackground).toBe("rgb(249, 250, 251)");
+  expect(geometry.titlebarBorder).toBe("0px");
+  expect(geometry.mainShadow).toBe("none");
+  expect(geometry.sidebarShadow).toBe("none");
+  expect(geometry.sidebarViewportBackground).toBe(geometry.titlebarBackground);
+  expect(geometry.sidebarBackground).toBe("rgb(249, 250, 251)");
+  expect(geometry.sidebarBackground).toBe(geometry.titlebarBackground);
+  expect(geometry.sidebarBorder).toBe("0px");
+  expect(geometry.sidebarFooterBorder).toBe("0px");
+  expect(geometry.workHeaderBorder).toBe("0px");
+  expect(geometry.mainTopLeftRadius).toBe("0px");
+  expect(geometry.mainTopRightRadius).toBe("0px");
+  expect(geometry.mainBottomRightRadius).toBe("0px");
+  expect(geometry.mainBottomLeftRadius).toBe("0px");
+  expect(geometry.conversationTopLeftRadius).toBe("0px");
+  expect(geometry.conversationTopRightRadius).toBe("0px");
+  expect(geometry.conversationBottomRightRadius).toBe("0px");
+  expect(geometry.conversationBottomLeftRadius).toBe("0px");
+  expect(geometry.conversationShadow).toBe("none");
+  expect(geometry.conversationBorder).toBe("0px");
+  expect(geometry.inspectorRadius).toBe("0px");
+  expect(geometry.inspectorShadow).toBe("none");
+  expect(geometry.inspectorBorder).toBe("0px");
+  expect(geometry.inspectorHeaderBorder).toBe("0px");
+  expect(geometry.dividerBackground).toBe("rgb(229, 231, 235)");
+  expect(geometry.panelGap).toBe(1);
+  expect(geometry.dividerWidth).toBe(1);
+  expect(geometry.inspectorRightGap).toBeLessThanOrEqual(1);
+  expect(geometry.inspectorBottomGap).toBeLessThanOrEqual(1);
+
+  const darkChromeBackgrounds = await page.locator("html").evaluate((root) => {
+    root.dataset.appTheme = "dark";
+    return [".kimi-titlebar", ".sidebar-viewport", ".kimi-sidebar"].map((selector) =>
+      getComputedStyle(document.querySelector<HTMLElement>(selector)!).backgroundColor,
+    );
+  });
+  expect(new Set(darkChromeBackgrounds).size).toBe(1);
+  expect(darkChromeBackgrounds[0]).toBe("rgb(40, 45, 47)");
+});
+
+test("navigation toggle blends into the sidebar chrome at rest", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const readChrome = () => page.evaluate(() => {
+    const background = (selector: string) =>
+      getComputedStyle(document.querySelector<HTMLElement>(selector)!).backgroundColor;
+    const border = getComputedStyle(document.querySelector<HTMLElement>(".nav-toggle")!).borderTopColor;
+    return {
+      titlebar: background(".kimi-titlebar"),
+      sidebar: background(".sidebar-viewport"),
+      toggleWrap: background(".nav-toggle-wrap"),
+      toggle: background(".nav-toggle"),
+      toggleBorder: border,
+    };
+  });
+
+  expect(await readChrome()).toEqual({
+    titlebar: "rgb(249, 250, 251)",
+    sidebar: "rgb(249, 250, 251)",
+    toggleWrap: "rgba(0, 0, 0, 0)",
+    toggle: "rgba(0, 0, 0, 0)",
+    toggleBorder: "rgba(0, 0, 0, 0)",
+  });
+
+  await page.locator("html").evaluate((root) => { root.dataset.appTheme = "dark"; });
+  await page.waitForTimeout(180);
+  expect(await readChrome()).toEqual({
+    titlebar: "rgb(40, 45, 47)",
+    sidebar: "rgb(40, 45, 47)",
+    toggleWrap: "rgba(0, 0, 0, 0)",
+    toggle: "rgba(0, 0, 0, 0)",
+    toggleBorder: "rgba(0, 0, 0, 0)",
+  });
+});
+
+test("dark theme keeps sidebar and conversation content readable", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("#app").evaluate((root) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const workspace = { workspace_id: "workspace-dark", name: "Dark theme", path: "F:/dark", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [{
+      session_id: "session-dark", title: "深色主题会话", status: "active", updated_at: "",
+      archived: false, pinned: false, workspace_id: "workspace-dark",
+      total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+    }];
+    state.activeId = "session-dark";
+  });
+  await expect(page.locator(".sidebar-session:has(.project-task.active)")).toBeVisible();
+  await page.locator("html").evaluate((root) => { root.dataset.appTheme = "dark"; });
+  await page.waitForTimeout(180);
+
+  const darkConversationTheme = await page.locator(".execution-timeline").evaluate((timeline) => {
+    timeline.innerHTML = `
+      <article class="timeline-step">
+        <div class="thinking-panel"><button><span class="thinking-panel__preview">分析项目结构与关键模块</span></button></div>
+        <div class="token-stream markdown-body"><hr><pre><code>用户目标 -> 项目上下文 -> Agent 规划</code></pre></div>
+      </article>`;
+    const style = (selector: string) => getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+    return {
+      selectedBackground: style(".sidebar-session:has(.project-task.active)").backgroundColor,
+      sidebarToolColor: style(".sidebar-tools button").color,
+      thinkingColor: style(".thinking-panel__preview").color,
+      codeBackground: style(".markdown-body pre").backgroundColor,
+      codeColor: style(".markdown-body pre").color,
+      codeBorder: style(".markdown-body pre").borderTopColor,
+      dividerBackground: style(".markdown-body hr").backgroundColor,
+    };
+  });
+  expect(darkConversationTheme).toEqual({
+    selectedBackground: "rgb(58, 65, 68)",
+    sidebarToolColor: "rgb(168, 176, 179)",
+    thinkingColor: "rgb(168, 176, 179)",
+    codeBackground: "rgb(40, 45, 47)",
+    codeColor: "rgb(237, 240, 241)",
+    codeBorder: "rgb(55, 61, 63)",
+    dividerBackground: "rgb(74, 82, 85)",
+  });
+});
+
+test("Think replays a large thinking chunk from start to finish", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const target = "先检查项目结构，再定位事件链路，然后逐项验证增量发布与界面更新，最后确认所有思考文字都按顺序出现。";
+  const observed = await page.locator("#app").evaluate(async (root, thinkingText) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState as {
+      timeline: Map<number, unknown>;
+      workspace: Record<string, unknown> | null;
+      workspaces: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+      activeId: string | null;
+      activeRunId: string | null;
+      runActive: boolean;
+      applyRuntimeEvent: (event: Record<string, unknown>) => void;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+
+    const values: string[] = [];
+    const observer = new MutationObserver(() => {
+      const value = document.querySelector<HTMLElement>(".thinking-panel__preview")?.textContent ?? "";
+      if (value && values.at(-1) !== value) values.push(value);
+    });
+    observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+
+    const runId = "run-thinking-playback";
+    const workspace = { workspace_id: "workspace-thinking", name: "Think playback", path: "F:/thinking", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [{
+      session_id: "session-thinking", title: "Think playback", status: "active", updated_at: "",
+      archived: false, pinned: false, workspace_id: "workspace-thinking",
+      total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+    }];
+    state.activeId = "session-thinking";
+    state.timeline = new Map([[1, { step: 1, status: "thinking", tokens: [], toolCalls: [], runId }]]);
+    state.activeRunId = runId;
+    state.runActive = true;
+    state.applyRuntimeEvent({ type: "llm.thinking", run_id: runId, step: 1, thinking: thinkingText });
+    await Promise.resolve();
+    state.applyRuntimeEvent({ type: "run.finished", run_id: runId, status: "success" });
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error("Think playback did not finish")), 3000);
+      const check = () => {
+        const panel = document.querySelector<HTMLElement>(".thinking-panel");
+        const value = panel?.querySelector<HTMLElement>(".thinking-panel__preview")?.textContent ?? "";
+        if (value === thinkingText && panel?.dataset.state === "ok") {
+          window.clearTimeout(timeout);
+          resolve();
+          return;
+        }
+        requestAnimationFrame(check);
+      };
+      requestAnimationFrame(check);
+    });
+    observer.disconnect();
+    return values;
+  }, target);
+
+  expect(observed.length).toBeGreaterThan(3);
+  expect(observed.at(-1)).toBe(target);
+  expect(observed.every((value) => target.startsWith(value))).toBe(true);
+  const lengths = observed.map((value) => Array.from(value).length);
+  expect(lengths.every((length, index) => index === 0 || length > lengths[index - 1])).toBe(true);
+  expect(Math.max(...lengths.map((length, index) => index === 0 ? length : length - lengths[index - 1]))).toBeLessThanOrEqual(12);
+});
+
+test("context injection expands to the complete live and restored text", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const liveTail = "LIVE_CONTEXT_TAIL";
+  await page.locator("#app").evaluate((root, tail) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState as {
+      timeline: Map<number, unknown>;
+      workspace: Record<string, unknown> | null;
+      workspaces: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+      activeId: string | null;
+      activeRunId: string | null;
+      runActive: boolean;
+      applyRuntimeEvent: (event: Record<string, unknown>) => void;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+
+    const runId = "run-context-live";
+    const workspace = { workspace_id: "workspace-context", name: "Context", path: "F:/context", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [{
+      session_id: "session-context", title: "Context injection", status: "active", updated_at: "",
+      archived: false, pinned: false, workspace_id: "workspace-context",
+      total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+    }];
+    state.activeId = "session-context";
+    state.timeline = new Map([[1, {
+      step: 1, status: "thinking", tokens: [], toolCalls: [], runId,
+      userMessage: "检查上下文",
+    }]]);
+    state.activeRunId = runId;
+    state.runActive = true;
+    const text = `# Base context\n\n## Project Context\n${tail}`;
+    state.applyRuntimeEvent({
+      type: "context.injected", run_id: runId, source: "system", label: "上下文注入",
+      chars: text.length, preview: "# Base context", text,
+    });
+  }, liveTail);
+
+  const liveRow = page.locator(".context-injection-row");
+  await expect(liveRow.getByText("上下文注入", { exact: true })).toBeVisible();
+  await liveRow.getByRole("button").click();
+  await expect(liveRow.locator("pre")).toContainText(liveTail);
+
+  const restoredTail = "RESTORED_CONTEXT_TAIL";
+  await page.locator("#app").evaluate((root, tail) => {
+    const app = (root as HTMLElement & { __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } } }).__vue_app__;
+    const state = app?._instance?.setupState as {
+      hydrateTimeline: (
+        messages: unknown[],
+        runStats: Record<string, unknown>,
+        contextInjections: Array<Record<string, unknown>>,
+      ) => void;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const text = `# Restored base\n\n## Session Notes\n${tail}`;
+    state.hydrateTimeline(
+      [
+        { role: "user", content: "恢复历史", run_id: "run-context-history" },
+        { role: "assistant", content: "历史回答", run_id: "run-context-history" },
+      ],
+      {},
+      [{
+        run_id: "run-context-history", source: "system", label: "上下文注入",
+        chars: text.length, preview: "# Restored base", text,
+      }],
+    );
+  }, restoredTail);
+
+  const restoredRow = page.locator(".context-injection-row");
+  await expect(restoredRow).toHaveCount(1);
+  await restoredRow.getByRole("button").click();
+  await expect(restoredRow.locator("pre")).toContainText(restoredTail);
+});
+
+test("high-risk permission dialog follows the dark theme", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator("html").evaluate((root) => { root.dataset.appTheme = "dark"; });
+  await page.waitForTimeout(180);
+  await page.getByRole("button", { name: "标准审批", exact: true }).click();
+  await page.getByRole("menuitemcheckbox", { name: /允许全部权限/ }).click();
+
+  const dialog = page.getByRole("alertdialog", { name: "高风险权限提示" });
+  await expect(dialog).toBeVisible();
+  const theme = await dialog.evaluate((element) => {
+    const style = (selector: string) => getComputedStyle(element.querySelector<HTMLElement>(selector)!);
+    return {
+      dialogBackground: getComputedStyle(element).backgroundColor,
+      titleColor: style("h2").color,
+      descriptionColor: style("header p").color,
+      listColor: style(".permission-confirm__body ul").color,
+      warningBackground: style(".permission-confirm__body > p").backgroundColor,
+      warningColor: style(".permission-confirm__body > p").color,
+      footerBackground: style("footer").backgroundColor,
+      cancelBackground: style("footer button:not(.danger)").backgroundColor,
+      cancelColor: style("footer button:not(.danger)").color,
+    };
+  });
+  expect(theme).toEqual({
+    dialogBackground: "rgb(32, 36, 37)",
+    titleColor: "rgb(237, 240, 241)",
+    descriptionColor: "rgb(168, 176, 179)",
+    listColor: "rgb(168, 176, 179)",
+    warningBackground: "rgb(63, 52, 36)",
+    warningColor: "rgb(240, 194, 122)",
+    footerBackground: "rgb(40, 45, 47)",
+    cancelBackground: "rgb(43, 48, 50)",
+    cancelColor: "rgb(237, 240, 241)",
+  });
 });
 
 // 功能：验证右侧功能区"全屏"是真正的全屏——其余窗口功能全部隐藏，功能区独占整个视口，而非浮层遮挡

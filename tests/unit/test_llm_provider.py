@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -43,8 +44,26 @@ def _make_final(
 class FakeStream:
     """Minimal async context manager that fakes the anthropic streaming interface."""
 
-    def __init__(self, texts: list[str], final: MagicMock) -> None:
-        self._texts = texts
+    def __init__(
+        self,
+        texts: list[str],
+        final: MagicMock,
+        thinking_deltas: list[str] | None = None,
+    ) -> None:
+        self._events = [
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text=text),
+            )
+            for text in texts
+        ]
+        self._events.extend(
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="thinking_delta", thinking=thinking),
+            )
+            for thinking in thinking_deltas or []
+        )
         self._final = final
 
     async def __aenter__(self) -> FakeStream:
@@ -53,11 +72,10 @@ class FakeStream:
     async def __aexit__(self, *args: object) -> None:
         pass
 
-    @property
-    def text_stream(self):  # type: ignore[return]
+    def __aiter__(self):  # type: ignore[return]
         async def _gen():
-            for t in self._texts:
-                yield t
+            for event in self._events:
+                yield event
 
         return _gen()
 
@@ -72,10 +90,11 @@ def _make_provider(
     input_tokens: int = 100,
     output_tokens: int = 50,
     cache_read: int = 0,
+    thinking_deltas: list[str] | None = None,
 ) -> tuple[AnthropicProvider, MagicMock]:
     final = _make_final(stop_reason, content, input_tokens, output_tokens, cache_read)
     client = MagicMock()
-    client.messages.stream.return_value = FakeStream(texts or [], final)
+    client.messages.stream.return_value = FakeStream(texts or [], final, thinking_deltas)
     return AnthropicProvider(model="test-model", client=client), client
 
 
@@ -216,4 +235,27 @@ async def test_thinking_block_published_to_timeline() -> None:
     assert thinking_events[0].run_id == "r1"  # type: ignore[attr-defined]
     assert thinking_events[0].step == 0  # type: ignore[attr-defined]
     assert thinking_events[0].thinking == "inspect project structure"  # type: ignore[attr-defined]
+    assert result.thinking_blocks[0]["thinking"] == "inspect project structure"
+
+
+# 功能：验证 Anthropic thinking_delta 到达时逐增量发布，而不是等待完整思考块结束。
+# 设计：最终消息仍保存完整 thinking block，但实时事件必须保持 SDK 增量的数量、内容和顺序。
+async def test_thinking_deltas_are_published_immediately() -> None:
+    thinking_block = MagicMock()
+    thinking_block.type = "thinking"
+    thinking_block.thinking = "inspect project structure"
+    thinking_block.signature = "signature-1"
+    provider, _ = _make_provider(
+        content=[thinking_block],
+        thinking_deltas=["inspect ", "project ", "structure"],
+    )
+
+    result, events = await _chat(provider)
+
+    thinking_events = [event for event in events if event.type == "llm.thinking"]  # type: ignore[attr-defined]
+    assert [event.thinking for event in thinking_events] == [  # type: ignore[attr-defined]
+        "inspect ",
+        "project ",
+        "structure",
+    ]
     assert result.thinking_blocks[0]["thinking"] == "inspect project structure"

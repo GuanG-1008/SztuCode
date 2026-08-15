@@ -2,14 +2,17 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Check, CheckCircle2, ChevronDown, CircleAlert, Copy, FileDiff, LoaderCircle, Play, TerminalSquare } from "@lucide/vue";
 import ActivityDetails from "./ActivityDetails.vue";
+import ContextInjectionRow from "./ContextInjectionRow.vue";
 import ThinkingPanel from "./ThinkingPanel.vue";
 import TokenStream from "./TokenStream.vue";
 import ToolCallCard from "./ToolCallCard.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import PermissionBadge from "./PermissionBadge.vue";
-import type { PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
+import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, RunStats, TimelineEvent, TimelineStep, ToolCallEntry } from "./types";
 
 const props = defineProps<{ steps: TimelineStep[]; workspaceId?: string }>();
+// 共享空数组：v-memo 依赖要求引用稳定，避免无注入时每次重算都触发全列表更新
+const EMPTY_CONTEXT: ContextInjectionEntry[] = [];
 defineEmits<{
   decide: [toolUseId: string, decision: PermissionDecision];
   reverted: [runId: string];
@@ -37,6 +40,7 @@ type TurnView = {
   aggregatedStep: TimelineStep;
   steps: TimelineStep[];
   events: Array<TimelineEvent & { tool?: ToolCallEntry }>;
+  contextInjections: ContextInjectionEntry[];
   state: TurnState;
   stateLabel: string;
   failureReason?: string;
@@ -79,6 +83,7 @@ function aggregateStep(steps: TimelineStep[]): TimelineStep {
     subagents: steps.flatMap((step) => step.subagents ?? []),
     skills: steps.flatMap((step) => step.skills ?? []),
     logs: steps.flatMap((step) => step.logs ?? []),
+    contextInjections: steps.flatMap((step) => step.contextInjections ?? []),
     workflowTasks: [...steps].reverse().find((step) => step.workflowTasks?.length)?.workflowTasks ?? [],
     workflowHandoffs: steps.flatMap((step) => step.workflowHandoffs ?? []),
     workflowReviews: steps.flatMap((step) => step.workflowReviews ?? []),
@@ -139,6 +144,24 @@ function formatDuration(seconds: number): string {
 
 function formatTokens(tokens: number): string {
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k` : String(tokens);
+}
+
+function formatTokensPerSecond(tokensPerSecond: number): string {
+  return tokensPerSecond < 10 ? tokensPerSecond.toFixed(1) : String(Math.round(tokensPerSecond));
+}
+
+// 每轮时序指标（借鉴 dsh 8.6 turn-tail）：首 token 延迟 + 吞吐；
+// 吞吐 = Σ输出 token / decode 墙钟（LLM 用时扣除首 token 前的等待，只计双有步）
+function turnTailMetrics(turn: TurnView): { ttft?: string; throughput?: string } | null {
+  const stats = turn.runStats;
+  if (!stats) return null;
+  const out: { ttft?: string; throughput?: string } = {};
+  if (stats.ttftMs !== undefined) out.ttft = formatDuration(stats.ttftMs / 1000);
+  if (stats.outputTokens > 0 && stats.elapsedSeconds > 0) {
+    const decodeSeconds = Math.max(0.001, stats.elapsedSeconds - (stats.ttftMs ?? 0) / 1000);
+    out.throughput = `${formatTokensPerSecond(stats.outputTokens / decodeSeconds)} tok/s`;
+  }
+  return out.ttft || out.throughput ? out : null;
 }
 
 function liveStatsLabel(turn: TurnView): string {
@@ -293,6 +316,7 @@ const turns = computed<TurnView[]>(() => {
       aggregatedStep,
       steps,
       events,
+      contextInjections: aggregatedStep.contextInjections?.filter((entry) => entry.source !== "canvas") ?? EMPTY_CONTEXT,
       state: status.state,
       stateLabel: status.label,
       failureReason: status.reason,
@@ -308,13 +332,20 @@ const turns = computed<TurnView[]>(() => {
 
 <template>
   <section class="execution-timeline" aria-live="polite">
-    <article v-for="turn in turns" :key="turn.key" class="timeline-step">
+    <article
+      v-for="turn in turns"
+      :key="turn.key"
+      v-memo="[turn.key, turn.state, turn.summaryText, turn.thinkingText, turn.runStats, turn.pending, turn.hasContent, turn.contextInjections, isTurnExpanded(turn), turn.state === 'running' ? now : null]"
+      class="timeline-step"
+    >
       <div v-if="turn.userMessage" class="timeline-user-message">
         {{ turn.userMessage }}
         <span v-if="turn.model || turn.userMessageTime" class="timeline-user-message__meta">{{ turn.model || "未记录模型" }} · {{ formatTime(turn.userMessageTime) }}</span>
       </div>
       <div v-if="turn.hasContent" class="timeline-assistant">
         <div class="timeline-step__content">
+          <!-- 上下文注入行：压缩/干预/系统注入；任务进度画布不进入会话区。 -->
+          <ContextInjectionRow v-for="entry in turn.contextInjections" :key="entry.id" :entry="entry" />
           <button
             v-if="turn.hasActivity || turn.runStats"
             type="button"
@@ -343,6 +374,14 @@ const turns = computed<TurnView[]>(() => {
             <LoaderCircle v-if="turn.state === 'running'" class="spin" :size="12" />
           </div>
 
+          <!-- 折叠态思考行：运行中跟随增量输出；结算后继续保留到历史区展开，
+               让一次到达的大块 thinking 也能按顺序播放完，不会在 run.finished 时被直接卸载。 -->
+          <ThinkingPanel
+            v-if="turn.thinkingText && !isTurnExpanded(turn)"
+            :text="turn.thinkingText"
+            :completed="turn.state !== 'running'"
+          />
+
           <PermissionBadge v-if="turn.pending" :permission="turn.pending" @decide="$emit('decide', turn.pending?.toolUseId ?? '', $event)" />
 
           <section v-if="isTurnExpanded(turn)" class="turn-history" aria-label="历史输出与调用">
@@ -361,21 +400,14 @@ const turns = computed<TurnView[]>(() => {
 
           <section v-if="turn.summaryText" class="turn-result" aria-label="任务结果">
             <TokenStream :tokens="[]" :final-text="turn.summaryText" />
-          </section>
-
-          <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
-            <b>{{ turn.stateLabel }}</b>
-          </div>
-
-          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮 Token 消耗与缓存命中">
-            <span>命中缓存 {{ formatTokens(turn.runStats.cacheReadInputTokens) }}</span>
-            <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
-            <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
-            <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
             <button v-if="turn.text || turn.summaryText" type="button" class="turn-copy" :title="copiedTurn === turn.key ? '已复制' : '复制整段总结'" :aria-label="copiedTurn === turn.key ? '已复制总结' : '复制整段总结'" @click="copyTurnSummary(turn)">
               <Check v-if="copiedTurn === turn.key" :size="15" :stroke-width="1.8" />
               <Copy v-else :size="15" :stroke-width="1.8" />
             </button>
+          </section>
+
+          <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
+            <b>{{ turn.stateLabel }}</b>
           </div>
 
           <section v-if="isTurnExpanded(turn) && (turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason))" class="evidence-strip" aria-label="验证与变更">
@@ -388,6 +420,12 @@ const turns = computed<TurnView[]>(() => {
           <button v-if="isTurnExpanded(turn) && turn.state === 'interrupted'" class="continue-button" type="button" title="从中断处继续执行" @click="$emit('continue', turn.runId)">
             <Play :size="14" />继续执行
           </button>
+
+          <!-- turn 页脚时序指标（借鉴 dsh 8.6 turn-tail）：每轮首字延迟与吞吐，无读数不渲染 -->
+          <div v-if="isTurnExpanded(turn) && turnTailMetrics(turn)" class="turn-tail-metrics" aria-label="本轮时序指标">
+            <span v-if="turnTailMetrics(turn)?.ttft"><b>首字</b> {{ turnTailMetrics(turn)?.ttft }}</span>
+            <span v-if="turnTailMetrics(turn)?.throughput"><b>吞吐</b> {{ turnTailMetrics(turn)?.throughput }}</span>
+          </div>
         </div>
       </div>
     </article>

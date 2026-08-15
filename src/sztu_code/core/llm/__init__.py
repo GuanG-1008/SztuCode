@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sztu_code.core.llm.base import LLMProvider
-from sztu_code.core.llm.openai_provider import OpenAIProvider
-from sztu_code.core.llm.provider import AnthropicProvider
 from sztu_code.core.llm.types import LlmResponse, ToolCallBlock, UsageStats
 
 if TYPE_CHECKING:
     from sztu_code.core.config import SztuConfig
+    from sztu_code.core.llm.openai_provider import OpenAIProvider
+    from sztu_code.core.llm.provider import AnthropicProvider
 
 
 # 将配置里的自定义端点与凭证注入环境变量供 provider 读取；空值不覆盖已有环境
@@ -36,6 +36,8 @@ def create_provider(config: SztuConfig) -> LLMProvider:
         )
     if config.llm.provider == "openai":
         _apply_endpoint_env("OPENAI_", config.llm)
+        from sztu_code.core.llm.openai_provider import OpenAIProvider
+
         return OpenAIProvider(
             config.llm.default_model,
             context_window=config.llm.context_window,
@@ -48,6 +50,8 @@ def create_provider(config: SztuConfig) -> LLMProvider:
             cache_control=config.llm.cache_control,
         )
     _apply_endpoint_env("ANTHROPIC_", config.llm)
+    from sztu_code.core.llm.provider import AnthropicProvider
+
     return AnthropicProvider(
         config.llm.default_model,
         context_window=config.llm.context_window,
@@ -59,6 +63,19 @@ def create_provider(config: SztuConfig) -> LLMProvider:
         max_retries=config.llm.max_retries,
         cache_control=config.llm.cache_control,
     )
+
+
+# 惰性加载 SDK 依赖的 provider 类：客户端或 daemon 未真正创建 provider 时不加载 openai/anthropic SDK
+def __getattr__(name: str) -> Any:
+    if name == "OpenAIProvider":
+        from sztu_code.core.llm.openai_provider import OpenAIProvider
+
+        return OpenAIProvider
+    if name == "AnthropicProvider":
+        from sztu_code.core.llm.provider import AnthropicProvider
+
+        return AnthropicProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [

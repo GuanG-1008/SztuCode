@@ -8,5 +8,9 @@ import "./timeline.css";
 import "./workbench.css";
 import "./file-rail.css";
 import "./typography.css";
+import "./appearance.css";
+import { initializeAppearance } from "./services/appearance";
+
+initializeAppearance();
 
 createApp(App).mount("#app");

@@ -18,12 +18,24 @@ from textual.screen import Screen
 from textual.widget import Widget
 from textual.widgets import Label, Static, TextArea
 
-from sztu_code.core.config import SztuConfig
+from sztu_code.core.config import SztuConfig, save_tui_settings
 from sztu_code.core.skills.loader import SkillLoader
 from sztu_code.core.transport.socket_client import IpcError, SocketClient
 from sztu_code.core.trust import add_trusted, is_trusted
+from sztu_code.tui.settings import SettingsModal
+from sztu_code.tui.theme import (
+    THEMES,
+    WALLPAPER_ORDER,
+    c,
+    set_active,
+    textual_theme,
+    wallpaper_markup,
+)
 
 log = logging.getLogger(__name__)
+
+# 日志视图保留的最大子 widget 数，超出后裁剪最旧行以控制长会话的渲染成本
+_MAX_LOG_CHILDREN = 600
 
 
 def _preview(s: str, n: int) -> str:
@@ -57,17 +69,42 @@ class LLMStreamBlock(Static):
 
     DEFAULT_CSS = "LLMStreamBlock { padding: 0 2; color: $text; }"
 
+    # 流式刷新最小间隔：高频 token 按节流刷新，避免每个 token 都触发整块重渲染
+    _MIN_FLUSH_INTERVAL = 0.03
+
     # 初始化为空文本块
     def __init__(self) -> None:
         super().__init__("")
         self._text = ""
         self._finalized = False
+        self._last_flush = 0.0
+        self._flush_pending = False
 
-    # 追加一个 token 并刷新显示
+    # 追加一个 token；达到节流间隔才刷新，未刷新的文本由定时器兜底
     def append_token(self, token: str) -> None:
         if self._finalized:
             return
         self._text += token
+        now = time.monotonic()
+        if now - self._last_flush >= self._MIN_FLUSH_INTERVAL:
+            self._last_flush = now
+            self._flush_pending = False
+            self.update(self._text)
+        elif not self._flush_pending:
+            self._flush_pending = True
+            if self.is_attached:
+                self.set_timer(self._MIN_FLUSH_INTERVAL, self._flush)
+            else:
+                # 未挂载（如测试直调）时直接刷新，避免文本滞留
+                self._flush_pending = False
+                self.update(self._text)
+
+    # 定时器兜底：补刷节流窗口内滞留的文本
+    def _flush(self) -> None:
+        self._flush_pending = False
+        if self._finalized:
+            return
+        self._last_flush = time.monotonic()
         self.update(self._text)
 
     # 将累积文本渲染为 Markdown，供流式块结束后显示
@@ -75,6 +112,7 @@ class LLMStreamBlock(Static):
         if self._finalized:
             return
         self._finalized = True
+        self._flush_pending = False
         if self._text.strip():
             self.update(Markdown(self._text, code_theme="monokai"))
 
@@ -155,12 +193,12 @@ class PermissionSelect(Static):
         height: auto;
         margin: 0 3 1 3;
         padding: 1 2;
-        color: #D7DCE1;
-        background: #181B1F;
-        border: tall #F2BB6C;
+        color: $text;
+        background: $surface;
+        border: tall $accent;
     }
     PermissionSelect:focus {
-        border: tall #F2BB6C;
+        border: tall $accent;
     }
     """
 
@@ -233,15 +271,16 @@ class PermissionSelect(Static):
             else "no parameters"
         )
         lines = [
-            f"[bold #F2BB6C]Permission required[/bold #F2BB6C]  [bold]{self._tool_name}[/bold]",
+            f"[bold {c('accent')}]Permission required[/bold {c('accent')}]  "
+            f"[bold]{self._tool_name}[/bold]",
             f"[dim]└─ {preview}[/dim]",
             "",
         ]
         selected_styles = {
-            "allow_once": "bold #111315 on #76D6C1",
-            "always_allow": "bold #111315 on #84B8FF",
-            "deny_once": "bold #FFFFFF on #A84F55",
-            "always_deny": "bold #FFFFFF on #7A353A",
+            "allow_once": f"bold #111315 on {c('ok')}",
+            "always_allow": f"bold #111315 on {c('info')}",
+            "deny_once": f"bold #FFFFFF on {c('danger')}",
+            "always_deny": f"bold #FFFFFF on {c('danger2')}",
         }
         for i, (decision, label, key_hint) in enumerate(self._CHOICES):
             if i == self._cursor:
@@ -290,9 +329,9 @@ class PermissionBlock(Static):
         height: auto;
         margin: 1 2 0 2;
         padding: 0 1 0 2;
-        background: #1C1A17;
-        border-left: solid #F2BB6C;
-        color: #D7DCE1;
+        background: $surface2;
+        border-left: solid $accent;
+        color: $text;
     }
     """
 
@@ -341,7 +380,8 @@ class PermissionBlock(Static):
             else "no parameters"
         )
         return (
-            f"[bold #F2BB6C]● Approval required[/bold #F2BB6C]  [bold]{action}[/bold]\n"
+            f"[bold {c('accent')}]● Approval required[/bold {c('accent')}]  "
+            f"[bold]{action}[/bold]\n"
             f"[dim]  {self._tool_name}  └─ {preview}[/dim]\n"
             f"[dim]  {impact}[/dim]"
         )
@@ -352,7 +392,10 @@ class PermissionBlock(Static):
             return
         self._resolved = True
         allowed = decision in ("allow_once", "always_allow")
-        icon = "[bold green]✓[/bold green]" if allowed else "[bold red]✗[/bold red]"
+        ok_color, danger_color = c("ok"), c("danger")
+        icon = f"[bold {ok_color}]✓[/bold {ok_color}]" if allowed else (
+            f"[bold {danger_color}]✗[/bold {danger_color}]"
+        )
         label = self._LABEL_MAP.get(decision, decision)
         preview = (
             f"  [dim]{_preview(self._param_preview.strip(), 96)}[/dim]"
@@ -370,9 +413,14 @@ class SlashCompleteWidget(Static):
 
     can_focus = False
 
+    # 每页最多展示的命令条数，超出后通过 PgUp/PgDn 翻页
+    _PAGE_SIZE = 10
+
     DEFAULT_CSS = """
     SlashCompleteWidget {
         height: auto;
+        max-height: 14;
+        overflow-y: auto;
         padding: 0 1;
         margin: 0 2;
         background: $surface;
@@ -393,52 +441,112 @@ class SlashCompleteWidget(Static):
         self._all_items = items
         self._filtered: list[tuple[str, str]] = list(items)
         self._cursor = 0
+        self._page = 0
 
     # 根据查询字符串筛选列表，重置光标并重新渲染
     def set_query(self, query: str) -> None:
         q = query.lower()
         self._filtered = [(n, d) for n, d in self._all_items if not q or q in n.lower()]
+        self._page = 0
         self._cursor = min(self._cursor, max(0, len(self._filtered) - 1))
         if self.is_attached:
             self._redraw()
 
-    # 向上移动光标并重新渲染
-    def move_up(self) -> None:
-        if self._filtered:
-            self._cursor = (self._cursor - 1) % len(self._filtered)
-            self._redraw()
+    # 当前总页数（至少 1 页）
+    def _page_count(self) -> int:
+        return max(1, (len(self._filtered) + self._PAGE_SIZE - 1) // self._PAGE_SIZE)
 
-    # 向下移动光标并重新渲染
+    # 当前页首条在完整列表中的下标
+    def _page_start(self) -> int:
+        return self._page * self._PAGE_SIZE
+
+    # 当前页实际条数（最后一页可能不满一页）
+    def _page_items(self) -> int:
+        return min(self._PAGE_SIZE, len(self._filtered) - self._page_start())
+
+    # 向上移动光标并重新渲染；页首再上翻则回到上一页
+    def move_up(self) -> None:
+        if not self._filtered:
+            return
+        if self._cursor > 0:
+            self._cursor -= 1
+        else:
+            self._page = (self._page - 1) % self._page_count()
+            self._cursor = self._page_items() - 1
+        self._redraw()
+
+    # 向下移动光标并重新渲染；页尾再下翻则进入下一页
     def move_down(self) -> None:
-        if self._filtered:
-            self._cursor = (self._cursor + 1) % len(self._filtered)
-            self._redraw()
+        if not self._filtered:
+            return
+        if self._cursor < self._page_items() - 1:
+            self._cursor += 1
+        else:
+            self._page = (self._page + 1) % self._page_count()
+            self._cursor = 0
+        self._redraw()
+
+    # 向上翻一页，光标保持在页内对应位置
+    def page_up(self) -> None:
+        if not self._filtered:
+            return
+        self._page = (self._page - 1) % self._page_count()
+        self._cursor = min(self._cursor, self._page_items() - 1)
+        self._redraw()
+
+    # 向下翻一页，光标保持在页内对应位置
+    def page_down(self) -> None:
+        if not self._filtered:
+            return
+        self._page = (self._page + 1) % self._page_count()
+        self._cursor = min(self._cursor, self._page_items() - 1)
+        self._redraw()
 
     # 选中当前光标项并发布 Selected 消息
     def select_current(self) -> None:
-        if self._filtered:
-            self.post_message(self.Selected(self._filtered[self._cursor][0]))
+        if not self._filtered:
+            return
+        index = self._page_start() + self._cursor
+        if index < len(self._filtered):
+            self.post_message(self.Selected(self._filtered[index][0]))
 
     # 返回当前是否有可选项
     def has_selection(self) -> bool:
         return len(self._filtered) > 0
 
+    # 鼠标点击补全项时选中该条目（Static 默认不响应点击，按内容行号换算并叠加页偏移）
+    def on_click(self, event: events.Click) -> None:
+        row = event.y + self.scroll_offset.y
+        index = self._page_start() + row
+        if 0 <= index < len(self._filtered):
+            event.stop()
+            self._cursor = row
+            self._redraw()
+            self.post_message(self.Selected(self._filtered[index][0]))
+
     def on_mount(self) -> None:
         self._redraw()
 
-    # 渲染筛选后的命令列表，高亮当前光标项
+    # 渲染当前页的命令列表，高亮光标项，底部显示翻页提示与页码
     def _redraw(self) -> None:
         if not self._filtered:
             self.update("[dim]  no matching commands[/dim]")
             return
+        start = self._page_start()
+        end = min(start + self._PAGE_SIZE, len(self._filtered))
         lines: list[str] = []
-        for i, (name, desc) in enumerate(self._filtered):
+        for i in range(start, end):
+            name, desc = self._filtered[i]
             desc_part = f"  [dim]{desc}[/dim]" if desc else ""
-            if i == self._cursor:
+            if i - start == self._cursor:
                 lines.append(f"  [bold cyan]❯ /{name}[/bold cyan]{desc_part}")
             else:
                 lines.append(f"    [cyan]/{name}[/cyan]{desc_part}")
-        lines.append("[dim]  ↑↓ navigate   tab/enter select   esc dismiss[/dim]")
+        page_info = f"  [dim]{self._page + 1}/{self._page_count()}[/dim]"
+        lines.append(
+            "[dim]  ↑↓ navigate   PgUp/PgDn page   tab/enter select   esc dismiss[/dim]"
+            f"{page_info}"
+        )
         self.update("\n".join(lines))
 
 
@@ -526,6 +634,16 @@ class ChatTextArea(TextArea):
                 event.prevent_default()
                 popup.move_down()
                 return
+            elif key == "pageup":
+                event.stop()
+                event.prevent_default()
+                popup.page_up()
+                return
+            elif key == "pagedown":
+                event.stop()
+                event.prevent_default()
+                popup.page_down()
+                return
             elif key == "escape":
                 event.stop()
                 event.prevent_default()
@@ -542,7 +660,7 @@ class RunBlock(Widget):
         height: auto;
         margin: 1 2 1 2;
         padding: 0 0 1 0;
-        border: round #30353D;
+        border: round $border;
     }
     """
 
@@ -561,12 +679,31 @@ class RunBlock(Widget):
         )
 
 
+class _BgRun:
+    """一次后台任务运行的状态记录（/bg 启动，随 run 事件更新）。"""
+
+    # 初始化后台任务记录：run_id、目标、启动时间与运行状态
+    def __init__(self, run_id: str, goal: str) -> None:
+        self.run_id = run_id
+        self.goal = goal
+        self.started = time.monotonic()
+        self.status = "running"  # running | success | failed | interrupted
+        self.steps = 0
+        self.reason = ""
+        self.finished_at: float | None = None
+
+    # 返回任务已持续的秒数（结束后固定为总时长）
+    def elapsed(self) -> float:
+        end = self.finished_at if self.finished_at is not None else time.monotonic()
+        return end - self.started
+
+
 class TrustScreen(Screen[str]):
     """Claude Code 风格的文件夹信任确认屏，Enter 确认 / Esc 取消。"""
 
     DEFAULT_CSS = """
     TrustScreen { align: center middle; }
-    .trust-panel { width: 74; padding: 1 2; background: #181B1F; border: round #30353D; }
+    .trust-panel { width: 74; padding: 1 2; background: $surface; border: round $border; }
     """
 
     _OPTIONS: tuple[tuple[str, str], ...] = (
@@ -594,24 +731,27 @@ class TrustScreen(Screen[str]):
 
     # 生成安全提示文本与选项列表（当前项高亮）
     def _build_text(self) -> str:
+        text_color, info_color = c("text"), c("info")
         lines = [
-            "[bold #E8EAED]Accessing workspace:[/bold #E8EAED]",
+            f"[bold {text_color}]Accessing workspace:[/bold {text_color}]",
             f"[dim]  {self._path}[/dim]",
             "",
-            "[bold #F1F3F5]Quick safety check:[/bold #F1F3F5] "
+            f"[bold {text_color}]Quick safety check:[/bold {text_color}] "
             "Is this a project you created or one you trust?",
             "[dim](Like your own code, a well-known open source project, "
             "or work from your team).[/dim]",
             "[dim]If not, take a moment to review what's in this folder first.[/dim]",
             "",
-            "[#F1F3F5]SztuCode will be able to [bold]read, edit, and execute[/bold] "
+            f"[{text_color}]SztuCode will be able to [bold]read, edit, and execute[/bold] ",
             "",
             "[dim]Security guide — review the folder contents before trusting[/dim]",
             "",
         ]
         for i, (label, _decision) in enumerate(self._OPTIONS):
             if i == self._cursor:
-                lines.append(f"[bold #111315 on #84B8FF]  {label}  [/bold #111315 on #84B8FF]")
+                lines.append(
+                    f"[bold #111315 on {info_color}]  {label}  [/bold #111315 on {info_color}]"
+                )
             else:
                 lines.append(f"  {label}")
         lines.append("")
@@ -646,6 +786,7 @@ class KamaTuiApp(App[None]):
     TITLE = "SZTUCODE"
     BINDINGS = [
         Binding("ctrl+q", "quit", "quit"),
+        Binding("ctrl+s", "open_settings", "settings"),
         Binding("ctrl+shift+a", "mode_auto", "auto mode"),
         Binding("ctrl+shift+e", "mode_accept_edits", "accept edits"),
         Binding("ctrl+shift+p", "mode_plan", "plan mode"),
@@ -653,36 +794,54 @@ class KamaTuiApp(App[None]):
     ]
     _MODE_CYCLE = ("auto", "accept_edits", "plan")
     CSS = """
-    Screen { background: #111315; }
+    Screen { layers: wallpaper base; background: $background; }
+    #wallpaper { layer: wallpaper; width: 1fr; height: 1fr; }
     #header {
         height: 1;
-        background: #181B1F;
-        color: #F1F3F5;
+        background: $surface;
+        color: $text;
         padding: 0 1;
     }
     #log-view {
         height: 1fr;
         width: 1fr;
-        background: #111315;
+        background: transparent;
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 1;
     }
+    #bg-panel {
+        display: none;
+        height: auto;
+        max-height: 8;
+        background: $surface;
+        border: round $border;
+        margin: 0 1 0 1;
+        padding: 0 1;
+        scrollbar-size-vertical: 1;
+    }
+    #bg-panel.visible { display: block; }
+    #status {
+        height: 1;
+        background: $surface;
+        color: $text-muted;
+        padding: 0 1;
+    }
     #prompt {
         width: 1fr;
-        background: #181B1F;
-        color: #F1F3F5;
-        border: tall #30353D;
+        background: $surface;
+        color: $text;
+        border: tall $border;
         margin: 0 1 1 1;
     }
     #prompt:focus {
-        border: tall #F2BB6C;
+        border: tall $accent;
     }
-    #banner { padding: 2 3 1 3; color: #F1F3F5; }
+    #banner { padding: 2 3 1 3; color: $text; }
     Static.user-turn { color: $text; padding: 1 2 0 2; }
     Static.run-header { color: $text-muted; padding: 1 2 0 2; }
     Static.step-divider { color: $text-muted; padding: 0 2; }
-    Static.run-ok { color: green; padding: 0 2 1 2; }
-    Static.run-err { color: red; padding: 0 2 1 2; }
+    Static.run-ok { color: $ok; padding: 0 2 1 2; }
+    Static.run-err { color: $danger; padding: 0 2 1 2; }
     Static.usage { padding: 0 2; }
     Static.log-line { padding: 0 2; }
     """
@@ -707,8 +866,16 @@ class KamaTuiApp(App[None]):
         read_only: bool = False,
         trust: bool = False,
         replay_run_id: str | None = None,
+        theme: str | None = None,
+        wallpaper: str | None = None,
     ) -> None:
         super().__init__()
+        for name in THEMES:
+            self.register_theme(textual_theme(name))
+        self._theme_name = theme if theme in THEMES else "dark"
+        self._wallpaper_name = wallpaper if wallpaper in WALLPAPER_ORDER else "none"
+        self.theme = textual_theme(self._theme_name).name
+        set_active(self._theme_name)
         self._host = host
         self._port = port
         self._replay_run_id = replay_run_id
@@ -723,6 +890,7 @@ class KamaTuiApp(App[None]):
         self._force_trust = trust
         self._model = "loading…"
         self._busy = False
+        self._state = "connecting"
         self._last_context_pct: float = 0.0
         self._session_tokens: dict[str, int] = {
             "in": 0,
@@ -735,15 +903,28 @@ class KamaTuiApp(App[None]):
         self._subagent_start_times: dict[str, float] = {}  # child run_id -> start time
         self._run_block: RunBlock | None = None  # 当前活动 run 的输出块
         self._mode: str = "plan" if read_only else "auto"  # 只读模式锁定 plan
+        self._bg_run_ids: set[str] = set()  # 后台任务 run_id 集合（事件按此路由）
+        self._bg_runs: dict[str, _BgRun] = {}  # run_id -> 后台任务状态
 
     def compose(self) -> ComposeResult:
-        yield Label("[bold #76D6C1]SZTUCODE[/bold #76D6C1]  [dim]connecting...[/dim]", id="header")
+        yield Static("", id="wallpaper")
+        yield Label(
+            f"[bold {c('ok')}]SZTUCODE[/bold {c('ok')}]  [dim]connecting...[/dim]",
+            id="header",
+        )
         yield VerticalScroll(id="log-view")
+        yield VerticalScroll(id="bg-panel")
+        yield Static("", id="status")
         yield ChatTextArea(id="prompt", show_line_numbers=False)
 
     def on_mount(self) -> None:
-        self._slash_items = self._build_slash_items()
+        self._slash_items = self._builtin_slash_items()
+        # 独立 group：避免被 socket 循环的 exclusive worker 取消
+        self.run_worker(
+            self._load_slash_items(), name="slash_items", group="slash", exclusive=False
+        )
         self._append(Static(self._BANNER, id="banner"))
+        self._render_wallpaper()
         prompt = self.query_one("#prompt", ChatTextArea)
         prompt.disabled = True
         prompt.border_title = "connecting..."
@@ -751,6 +932,25 @@ class KamaTuiApp(App[None]):
             self.push_screen(TrustScreen(self._project_path), self._on_trust_result)
         else:
             self._start_socket_loop()
+
+    # 终端尺寸变化时按新尺寸重新生成背景壁纸
+    def on_resize(self, event: events.Resize) -> None:
+        if self._wallpaper_name != "none":
+            self._render_wallpaper(event.size.width, event.size.height)
+
+    # 生成并刷新背景壁纸层；样式为 none 时清空背景
+    def _render_wallpaper(self, width: int | None = None, height: int | None = None) -> None:
+        try:
+            layer = self.query_one("#wallpaper", Static)
+        except Exception:
+            return
+        if self._wallpaper_name == "none":
+            layer.update("")
+            return
+        w = width if width is not None else self.size.width
+        h = height if height is not None else self.size.height
+        markup = wallpaper_markup(self._wallpaper_name, w, h)
+        layer.update(markup)
 
     # 是否需要在启动前做文件夹信任确认
     def _needs_trust_check(self) -> bool:
@@ -774,16 +974,16 @@ class KamaTuiApp(App[None]):
     # 返回当前模式的富文本标签，用于 header 栏显示
     def _mode_label(self) -> str:
         if self._read_only:
-            return "[bold #111315 on #F2BB6C] READONLY [/bold #111315 on #F2BB6C]"
-        colors = {"auto": "#76D6C1", "accept_edits": "#84B8FF", "plan": "#F2BB6C"}
+            return f"[bold #111315 on {c('accent')}] READONLY [/bold #111315 on {c('accent')}]"
+        colors = {"auto": c("ok"), "accept_edits": c("info"), "plan": c("accent")}
         labels = {"auto": "AUTO", "accept_edits": "EDITS", "plan": "PLAN"}
-        color = colors.get(self._mode, "#76D6C1")
+        color = colors.get(self._mode, c("ok"))
         label = labels.get(self._mode, self._mode.upper())
         return f"[bold #111315 on {color}] {label} [/bold #111315 on {color}]"
 
-    # 构建斜杠命令候选列表：内建命令 + 所有已注册 skill
-    def _build_slash_items(self) -> list[tuple[str, str]]:
-        items: list[tuple[str, str]] = [
+    # 返回内建斜杠命令（不依赖技能扫描，首帧立即可用）
+    def _builtin_slash_items(self) -> list[tuple[str, str]]:
+        return [
             ("compact", "compress context window"),
             ("new", "start a fresh task"),
             ("workspace", "open a local repository"),
@@ -791,7 +991,16 @@ class KamaTuiApp(App[None]):
             ("search", "search files in the workspace"),
             ("changes", "show uncommitted changes"),
             ("diff", "inspect a file diff"),
+            ("bg", "run a task in the background"),
+            ("bgs", "toggle background task list"),
+            ("theme", "switch light/dark theme"),
+            ("wallpaper", "cycle background style"),
+            ("settings", "open settings dialog"),
         ]
+
+    # 构建斜杠命令候选列表：内建命令 + 所有已注册 skill
+    def _build_slash_items(self) -> list[tuple[str, str]]:
+        items = self._builtin_slash_items()
         try:
             loader = SkillLoader()
             for skill in loader.list_all_skills():
@@ -802,6 +1011,13 @@ class KamaTuiApp(App[None]):
         except Exception:
             pass
         return items
+
+    # 后台加载技能斜杠命令：技能扫描是同步 CPU 工作，用线程执行避免阻塞首帧
+    async def _load_slash_items(self) -> None:
+        try:
+            self._slash_items = await asyncio.to_thread(self._build_slash_items)
+        except Exception:
+            log.exception("failed to load slash items")
 
     # 根据 / 前缀查询字符串挂载、更新或移除自动补全弹窗
     def on_chat_text_area_slash_changed(self, event: ChatTextArea.SlashChanged) -> None:
@@ -834,6 +1050,8 @@ class KamaTuiApp(App[None]):
     # 记录按键焦点；当 PermissionSelect 失去焦点后作为兜底处理权限快捷键
     def on_key(self, event: events.Key) -> None:
         log.debug("App.on_key  key=%r  focused=%r", event.key, self.focused)
+        if self._settings_modal_open():
+            return  # 设置弹窗打开时权限快捷键由弹窗自行处理
         if not self._pending_permission_blocks:
             return
         try:
@@ -868,6 +1086,18 @@ class KamaTuiApp(App[None]):
                 self._append(Static("[yellow]warning: failed to close session[/yellow]"))
         self.exit()
 
+    # 打开弹窗式设置界面；已打开时不重复入栈，关闭后焦点还给输入框
+    def action_open_settings(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            return
+        self.push_screen(SettingsModal(), callback=lambda _result: self._refocus_prompt())
+
+    # 设置弹窗关闭后把键盘焦点还给输入框（若其可输入）
+    def _refocus_prompt(self) -> None:
+        prompt = self._prompt()
+        if prompt is not None and not prompt.disabled:
+            prompt.focus()
+
     # 切换到 Auto 模式：自动批准所有工具调用
     async def action_mode_auto(self) -> None:
         await self._set_mode("auto")
@@ -880,8 +1110,17 @@ class KamaTuiApp(App[None]):
     async def action_mode_plan(self) -> None:
         await self._set_mode("plan")
 
-    # Tab 循环 Auto、Accept Edits、Plan；让模式选择不必离开输入框
+    # 设置弹窗是否处于打开状态（未运行的 App 上按未打开处理）
+    def _settings_modal_open(self) -> bool:
+        try:
+            return isinstance(self.screen, SettingsModal)
+        except Exception:
+            return False
+
+    # Tab 循环 Auto、Accept Edits、Plan；设置弹窗打开时不响应
     async def action_cycle_mode(self) -> None:
+        if self._settings_modal_open():
+            return
         try:
             index = self._MODE_CYCLE.index(self._mode)
         except ValueError:
@@ -900,7 +1139,6 @@ class KamaTuiApp(App[None]):
             result = await self._client.send_command("permission.set_mode", {"mode": mode})
             if result.get("ok"):
                 self._mode = mode
-                self._update_header("ready")
                 self._update_header("ready")
             else:
                 log.warning(
@@ -967,6 +1205,37 @@ class KamaTuiApp(App[None]):
                 name="change_diff",
                 exclusive=False,
             )
+            return
+        # 后台任务：/bg <goal> 在独立会话启动，/bgs 切换任务列表面板
+        if content == "/bg":
+            event.text_area.text = ""
+            self._append(Static("[yellow]usage: /bg <goal>[/yellow]", classes="log-line"))
+            return
+        if content.startswith("/bg "):
+            event.text_area.text = ""
+            self.run_worker(
+                self._start_background_run(content.removeprefix("/bg ").strip()),
+                name="bg_run",
+                exclusive=False,
+            )
+            return
+        if content == "/bgs":
+            event.text_area.text = ""
+            self._toggle_bg_panel()
+            return
+        # 明暗主题与背景壁纸切换
+        if content == "/theme":
+            event.text_area.text = ""
+            self._cycle_theme()
+            return
+        if content == "/wallpaper":
+            event.text_area.text = ""
+            self._cycle_wallpaper()
+            return
+        # 打开弹窗式设置界面
+        if content == "/settings":
+            event.text_area.text = ""
+            self.action_open_settings()
             return
         # 检测 /system-prompt 指令
         if content == "/system-prompt":
@@ -1189,6 +1458,151 @@ class KamaTuiApp(App[None]):
             self._update_header("ready")
             self._append(Static(f"[red]send error: {e}[/red]", classes="log-line"))
 
+    # 通过 agent.run 在独立会话中启动一次后台任务，立即返回 run_id 并登记状态
+    async def _start_background_run(self, goal: str) -> None:
+        if self._client is None:
+            self._append(Static("[yellow]not connected[/yellow]", classes="log-line"))
+            return
+        if not goal:
+            self._append(Static("[yellow]usage: /bg <goal>[/yellow]", classes="log-line"))
+            return
+        try:
+            result = await self._client.send_command("agent.run", {"goal": goal})
+            run_id = str(result.get("run_id") or "")
+            if not run_id:
+                raise RuntimeError("daemon returned no run_id")
+            self._bg_run_ids.add(run_id)
+            self._bg_runs[run_id] = _BgRun(run_id, goal)
+            self._append(Static(
+                f"[bold cyan]⏳ background[/bold cyan]  {_preview(goal, 72)}  "
+                f"[dim]{run_id[:8]}[/dim]",
+                classes="log-line",
+            ))
+            self._update_status()
+            self._render_bg_panel()
+        except (IpcError, RuntimeError, OSError) as e:
+            self._append(Static(f"[red]background error: {e}[/red]", classes="log-line"))
+
+    # 处理后台任务的 run 事件：只更新状态面板，不混入主日志流
+    def _handle_bg_event(self, event: dict[str, Any]) -> None:
+        t = event.get("type", "")
+        run = self._bg_runs.get(str(event.get("run_id") or ""))
+        if run is None:
+            return
+        if t == "run.started":
+            run.status = "running"
+        elif t == "step.started":
+            run.steps = int(event.get("step") or 0)
+        elif t == "run.finished":
+            run.status = str(event.get("status") or "failed")
+            run.reason = str(event.get("reason") or "")
+            run.steps = int(event.get("steps") or run.steps)
+            run.finished_at = time.monotonic()
+        else:
+            return
+        if t == "run.finished":
+            # 在主时间线收尾：绿/黄/红区分成功、中断与失败
+            color = "green" if run.status == "success" else (
+                "yellow" if run.status == "interrupted" else "red"
+            )
+            icon = "✓" if run.status == "success" else (
+                "⏸" if run.status == "interrupted" else "✗"
+            )
+            self._append(Static(
+                f"[dim]└─[/dim] [bold {color}]{icon}[/bold {color}] "
+                f"[cyan]bg:[/cyan] {_preview(run.goal, 72)}  "
+                f"[dim]{run.run_id[:8]} · {run.steps} steps · {run.elapsed():.0f}s[/dim]",
+                classes="log-line",
+            ))
+        self._update_status()
+        self._render_bg_panel()
+
+    # 切换后台任务面板的显示/隐藏
+    def _toggle_bg_panel(self) -> None:
+        try:
+            panel = self.query_one("#bg-panel", VerticalScroll)
+        except Exception:
+            return
+        if "visible" in panel.classes:
+            panel.remove_class("visible")
+        else:
+            panel.add_class("visible")
+            self._render_bg_panel()
+
+    # 重绘后台任务面板：每个后台 run 一行状态摘要，无任务时自动收起
+    def _render_bg_panel(self) -> None:
+        try:
+            panel = self.query_one("#bg-panel", VerticalScroll)
+        except Exception:
+            return
+        panel.remove_children()
+        if not self._bg_runs:
+            panel.remove_class("visible")
+            return
+        if any(run.status == "running" for run in self._bg_runs.values()):
+            panel.add_class("visible")
+        for run in list(self._bg_runs.values())[-8:]:
+            icon = {
+                "running": f"[{c('info')}]●[/{c('info')}]",
+                "success": f"[{c('ok')}]✓[/{c('ok')}]",
+                "failed": f"[{c('danger')}]✗[/{c('danger')}]",
+                "interrupted": f"[{c('warn')}]⏸[/{c('warn')}]",
+            }.get(run.status, "○")
+            detail = f"  [dim]{run.reason}[/dim]" if run.reason and run.status != "running" else ""
+            panel.mount(Static(
+                f"{icon} {_preview(run.goal, 56)}  "
+                f"[dim]{run.run_id[:8]} · {run.steps} steps · {run.elapsed():.0f}s[/dim]{detail}",
+                classes="log-line",
+            ))
+        panel.scroll_end(animate=False)
+
+    # 直接应用指定主题并持久化到客户端设置
+    def _apply_theme(self, name: str) -> None:
+        if name not in THEMES:
+            return
+        self._theme_name = name
+        self.theme = textual_theme(name).name
+        set_active(name)
+        self._update_status()
+        self.run_worker(self._persist_tui_settings(), name="persist_tui", exclusive=False)
+
+    # 循环切换明暗主题并追加日志
+    def _cycle_theme(self) -> None:
+        order = tuple(THEMES.keys())
+        self._apply_theme(order[(order.index(self._theme_name) + 1) % len(order)])
+        self._append(Static(
+            f"[bold cyan]theme[/bold cyan]  [bold]{self._theme_name}[/bold]",
+            classes="log-line",
+        ))
+
+    # 直接应用指定壁纸样式并持久化到客户端设置
+    def _apply_wallpaper(self, name: str) -> None:
+        if name not in WALLPAPER_ORDER:
+            return
+        self._wallpaper_name = name
+        self._render_wallpaper()
+        self._update_status()
+        self.run_worker(self._persist_tui_settings(), name="persist_tui", exclusive=False)
+
+    # 循环切换壁纸样式并追加日志
+    def _cycle_wallpaper(self) -> None:
+        self._apply_wallpaper(WALLPAPER_ORDER[
+            (WALLPAPER_ORDER.index(self._wallpaper_name) + 1) % len(WALLPAPER_ORDER)
+        ])
+        self._append(Static(
+            f"[bold cyan]wallpaper[/bold cyan]  [bold]{self._wallpaper_name}[/bold]",
+            classes="log-line",
+        ))
+
+    # 将主题与壁纸选择写入客户端设置（尽力而为，失败仅记日志）
+    async def _persist_tui_settings(self) -> None:
+        try:
+            await asyncio.to_thread(
+                save_tui_settings, theme=self._theme_name, wallpaper=self._wallpaper_name
+            )
+        except Exception:
+            log.exception("failed to persist tui settings")
+
     # 处理内联审批控件的用户决策：发送 IPC 响应并恢复输入框
     async def on_permission_select_decided(self, msg: PermissionSelect.Decided) -> None:
         tool_use_id = msg.tool_use_id
@@ -1224,7 +1638,32 @@ class KamaTuiApp(App[None]):
             self._run_block.mount(widget)
         else:
             log_view.mount(widget)
+        self._trim_log(log_view)
         log_view.scroll_end(animate=False)
+
+    # 裁剪最旧的历史行，防止 widget 无限增长拖慢渲染；活动 run 块、流式块与未决工具/权限块受保护
+    def _trim_log(self, log_view: VerticalScroll) -> None:
+        overflow = len(log_view.children) - _MAX_LOG_CHILDREN
+        if overflow <= 0:
+            return
+        protected: set[Widget] = set()
+        if self._run_block is not None:
+            protected.add(self._run_block)
+        if self._current_llm is not None:
+            protected.add(self._current_llm)
+        protected.update(self._pending_tool_blocks.values())
+        protected.update(self._pending_permission_blocks.values())
+        removed = 0
+        for child in list(log_view.children):
+            if removed >= overflow:
+                break
+            if child in protected:
+                continue
+            try:
+                child.remove()
+            except Exception:
+                continue
+            removed += 1
 
     # 结束当前 LLM 流式块（下一个 token 将开启新块）
     def _break_llm(self) -> None:
@@ -1250,11 +1689,11 @@ class KamaTuiApp(App[None]):
         bar = "█" * filled + "░" * (width - filled)
         label = f"ctx {pct * 100:.0f}%"
         if pct >= 0.90:
-            color = "bold red"
+            color = c("danger")
         elif pct >= 0.75:
-            color = "yellow"
+            color = c("warn")
         elif pct >= 0.50:
-            color = "green"
+            color = c("ok")
         else:
             color = "dim"
         return f"[{color}]{label} {bar}[/{color}]"
@@ -1268,8 +1707,9 @@ class KamaTuiApp(App[None]):
             return f"{n / 1_000:.1f}K"
         return str(n)
 
-    # 根据连接和运行状态刷新顶部标题
+    # 根据连接和运行状态刷新顶部标题，并联动底部状态栏
     def _update_header(self, state: str) -> None:
+        self._state = state
         try:
             header = self.query_one("#header", Label)
         except NoMatches:
@@ -1277,8 +1717,8 @@ class KamaTuiApp(App[None]):
         project_path = self._project_path
         if self._workspace is not None:
             project_path = str(self._workspace.get("path") or project_path)
-        workspace = f"  [dim]·[/dim] [#84B8FF]{project_path}[/#84B8FF]"
-        model = f"  [dim]model[/dim] [#D7DCE1]{self._model}[/#D7DCE1]"
+        workspace = f"  [dim]·[/dim] [{c('info')}]{project_path}[/{c('info')}]"
+        model = f"  [dim]model[/dim] [{c('text-muted')}]{self._model}[/{c('text-muted')}]"
         color = {
             "ready": "green",
             "running": "yellow",
@@ -1286,8 +1726,36 @@ class KamaTuiApp(App[None]):
             "connecting": "dim",
         }.get(state, "dim")
         header.update(
-            f"[bold #76D6C1]SZTUCODE[/bold #76D6C1]  [dim]{self._host}:{self._port}[/dim]"
+            f"[bold {c('ok')}]SZTUCODE[/bold {c('ok')}]  [dim]{self._host}:{self._port}[/dim]"
             f"{model}{workspace}  {self._mode_label()}  [{color}]{state}[/{color}]"
+        )
+        self._update_status()
+
+    # 刷新底部状态栏：会话用量、上下文占用、后台任务数与当前主题
+    def _update_status(self) -> None:
+        try:
+            status = self.query_one("#status", Static)
+        except Exception:
+            return
+        ses = self._session_tokens
+        parts = [f"in={self._fmt_tokens(ses['in'])}", f"out={self._fmt_tokens(ses['out'])}"]
+        if ses["cache_read"]:
+            parts.append(f"cache↗{self._fmt_tokens(ses['cache_read'])}")
+        if ses["cache_write"]:
+            parts.append(f"cache↖{self._fmt_tokens(ses['cache_write'])}")
+        bg_running = sum(1 for run in self._bg_runs.values() if run.status == "running")
+        bg_part = f"bg {bg_running}/{len(self._bg_runs)}" if self._bg_runs else "bg 0"
+        state_color = {
+            "ready": "green",
+            "running": "yellow",
+            "disconnected": "red",
+            "connecting": "dim",
+        }.get(self._state, "dim")
+        status.update(
+            f"[dim]session[/dim] {' '.join(parts)}  "
+            f"{self._render_ctx_bar(self._last_context_pct)}  "
+            f"[{c('info')}]{bg_part}[/{c('info')}]  "
+            f"[dim]theme[/dim] {self._theme_name}  [{state_color}]{self._state}[/{state_color}]"
         )
 
     # 管理 SocketClient 生命周期：连接、订阅事件、断线重连
@@ -1367,7 +1835,7 @@ class KamaTuiApp(App[None]):
                 await loop_task
             except IpcError as e:
                 header.update(
-                    f"[bold #76D6C1]SZTUCODE[/bold #76D6C1]  "
+                    f"[bold {c('ok')}]SZTUCODE[/bold {c('ok')}]  "
                     f"[red]subscribe error: {e}[/red]"
                 )
             finally:
@@ -1395,6 +1863,12 @@ class KamaTuiApp(App[None]):
     # 实际的事件路由逻辑
     def _handle_event_inner(self, event: dict[str, Any]) -> None:
         t = event.get("type", "")
+
+        # 后台任务的 run 事件按 run_id 归属路由到任务面板，不进入主日志流
+        run_id = event.get("run_id")
+        if run_id is not None and run_id in self._bg_run_ids:
+            self._handle_bg_event(event)
+            return
 
         session_id = event.get("session_id")
         if session_id is not None and session_id != self._session_id:
@@ -1654,6 +2128,7 @@ class KamaTuiApp(App[None]):
                 ses_parts.append(f"cache↗{self._fmt_tokens(ses['cache_read'])}")
             ses_line = f"[dim]  session: {'  '.join(ses_parts)}  [bold]{model}[/bold][/dim]"
             self._append(Static(f"{step_line}\n{ses_line}", classes="usage"))
+            self._update_status()
 
         elif t == "context.compacting":
             self._append(Static("[dim]compacting context...[/dim]", classes="log-line"))
@@ -1717,7 +2192,6 @@ class KamaTuiApp(App[None]):
         elif t == "permission.mode_changed":
             new_mode = str(event.get("new_mode", "normal"))
             self._mode = new_mode
-            self._update_header("ready")
             self._update_header("ready")
 
         elif t == "log.line":

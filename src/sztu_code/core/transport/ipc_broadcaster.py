@@ -15,6 +15,11 @@ from sztu_code.core.trace.writer import TraceWriter
 
 logger = logging.getLogger(__name__)
 
+# 高频流式事件（逐 token/逐思考块到达）：跳过逐事件 drain，由事件循环异步发送，
+# 仅当客户端写缓冲超过阈值才等待排空（有界背压），避免 LLM 流式输出被慢客户端拖住
+_DRAIN_THRESHOLD = 64 * 1024
+_STREAM_EVENT_TYPES = frozenset({"llm.token", "llm.thinking"})
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -55,6 +60,10 @@ class IpcEventBroadcaster:
         event_type: str = event_dict.get("type", "")
         run_id: str | None = event_dict.get("run_id")
 
+        # 一次序列化，所有订阅者共享同一字节负载，避免高频事件被重复序列化
+        payload = EventPushEnvelope(event=event_dict).model_dump_json().encode() + b"\n"
+        is_stream = event_type in _STREAM_EVENT_TYPES
+
         dead: list[asyncio.StreamWriter] = []
 
         for sub in list(self._subscriptions):
@@ -63,9 +72,9 @@ class IpcEventBroadcaster:
             if not self._matches_scope(run_id, sub.scope):
                 continue
             try:
-                envelope = EventPushEnvelope(event=event_dict)
-                sub.writer.write(envelope.model_dump_json().encode() + b"\n")
-                await sub.writer.drain()
+                sub.writer.write(payload)
+                if not is_stream or self._buffered_bytes(sub.writer) > _DRAIN_THRESHOLD:
+                    await sub.writer.drain()
                 if self._trace is not None:
                     client_id = str(sub.writer.get_extra_info("peername", "<unknown>"))
                     self._trace.emit(
@@ -85,6 +94,15 @@ class IpcEventBroadcaster:
 
         for writer in dead:
             self.unsubscribe(writer)
+
+    # 读取当前写缓冲字节数；transport 缺失（连接已关闭）或不可用时按 0 处理
+    @staticmethod
+    def _buffered_bytes(writer: asyncio.StreamWriter) -> int:
+        try:
+            buffered = writer.transport.get_write_buffer_size()
+        except (AttributeError, TypeError, OSError):
+            return 0
+        return buffered if isinstance(buffered, int) else 0
 
     # 检查事件类型是否匹配订阅的 topic 列表（支持 fnmatch glob 模式）
     @staticmethod

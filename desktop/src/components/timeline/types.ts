@@ -1,6 +1,6 @@
 export type TimelineStatus = "thinking" | "acting" | "observing" | "done" | "failed";
 export type RunOutcome = { status: "success" | "failed" | "interrupted"; reason?: string };
-export type RunStats = { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; elapsedSeconds: number };
+export type RunStats = { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; elapsedSeconds: number; ttftMs?: number };
 
 export type ToolCallEntry = {
   id: string;
@@ -10,6 +10,17 @@ export type ToolCallEntry = {
   output?: string;
   error?: string;
   elapsedMs?: number;
+  startedAt?: string;  // 工具开始执行的 UTC 时间戳，用于 running 计时
+};
+
+// 上下文注入行：展示模型实际收到的完整 system 上下文及内部干预。
+export type ContextInjectionEntry = {
+  id: string;
+  source: "compaction" | "canvas" | "intervention" | "system";
+  label: string;    // 展示名（如 "上下文注入"、"会话压缩"）
+  chars: number;    // 注入内容字符数
+  preview: string;  // 折叠时摘要（首行/前 100 字符）
+  text?: string;    // 展开时完整正文（缺省用 preview）
 };
 
 export type TimelineEvent = {
@@ -121,6 +132,7 @@ export interface TimelineStep {
   workflowHandoffs?: WorkflowHandoffEntry[];
   workflowReviews?: WorkflowReviewEntry[];
   workflowOutcome?: WorkflowOutcome;
+  contextInjections?: ContextInjectionEntry[];
 }
 
 export function toolSummary(params: Record<string, unknown>): string {

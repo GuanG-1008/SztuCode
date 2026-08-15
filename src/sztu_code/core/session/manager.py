@@ -287,6 +287,10 @@ class SessionManager:
         self._store.backfill_run_stats(session)
         return {run_id: stats.to_dict() for run_id, stats in session.run_stats.items()}
 
+    def get_context_injections(self, sid: str) -> list[dict[str, Any]]:
+        self._get_session(sid)
+        return self._store.read_context_injections(sid)
+
     # 返回稳定排序并支持 cursor 分页的 session 摘要列表
     async def list_sessions(
         self,

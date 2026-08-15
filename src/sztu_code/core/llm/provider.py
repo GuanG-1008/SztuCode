@@ -175,16 +175,40 @@ class AnthropicProvider:
 
         text_parts: list[str] = []
         final_message: Any = None
+        thinking_published = False
 
         for attempt in range(1, _MAX_STREAM_RETRIES + 1):
             text_parts = []
             try:
                 async with self._client.messages.stream(**kwargs) as stream:
-                    async for text in stream.text_stream:
-                        # Only publish token events on the first attempt to avoid TUI duplicates
-                        if attempt == 1:
-                            await bus.publish(LlmTokenEvent(run_id=run_id, token=text, ts=_now()))
-                        text_parts.append(text)
+                    async for event in stream:
+                        if getattr(event, "type", "") != "content_block_delta":
+                            continue
+                        delta = getattr(event, "delta", None)
+                        delta_type = getattr(delta, "type", "")
+                        if delta_type == "text_delta":
+                            text = str(getattr(delta, "text", ""))
+                            if not text:
+                                continue
+                            # Only publish first-attempt events to avoid UI duplicates.
+                            if attempt == 1:
+                                await bus.publish(
+                                    LlmTokenEvent(run_id=run_id, token=text, ts=_now())
+                                )
+                            text_parts.append(text)
+                        elif delta_type == "thinking_delta":
+                            thinking = str(getattr(delta, "thinking", ""))
+                            if not thinking or attempt != 1:
+                                continue
+                            await bus.publish(
+                                LlmThinkingEvent(
+                                    run_id=run_id,
+                                    step=step,
+                                    thinking=thinking,
+                                    ts=_now(),
+                                )
+                            )
+                            thinking_published = True
                     final_message = await stream.get_final_message()
                 break  # success
             except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as exc:
@@ -246,7 +270,9 @@ class AnthropicProvider:
                     }
                 )
 
-        if thinking_blocks:
+        # Older/custom Anthropic-compatible endpoints may not expose thinking_delta.
+        # Fall back to the final block only when no live thinking was published.
+        if thinking_blocks and not thinking_published:
             await bus.publish(
                 LlmThinkingEvent(
                     run_id=run_id,

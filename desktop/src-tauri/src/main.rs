@@ -66,6 +66,50 @@ struct NativeSettingsResult {
     autostart: bool,
     stay_awake: bool,
     supported: bool,
+    theme: String,
+    wallpaper: String,
+}
+
+/// 桌面端外观设置（主题/壁纸），持久化到 ~/.sztu/desktop-settings.json
+#[derive(Serialize, Deserialize)]
+struct DesktopAppearance {
+    theme: String,
+    wallpaper: String,
+}
+
+impl Default for DesktopAppearance {
+    fn default() -> Self {
+        Self {
+            theme: "light".into(),
+            wallpaper: "none".into(),
+        }
+    }
+}
+
+fn desktop_settings_path() -> Result<PathBuf, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| "无法确定用户目录".to_string())?;
+    Ok(PathBuf::from(home)
+        .join(".sztu")
+        .join("desktop-settings.json"))
+}
+
+fn load_appearance() -> DesktopAppearance {
+    desktop_settings_path()
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_appearance(appearance: &DesktopAppearance) -> Result<(), String> {
+    let path = desktop_settings_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(appearance).map_err(|error| error.to_string())?;
+    std::fs::write(path, text).map_err(|error| error.to_string())
 }
 
 #[derive(Deserialize)]
@@ -196,10 +240,13 @@ fn update_autostart(_enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 fn native_settings_get() -> NativeSettingsResult {
+    let appearance = load_appearance();
     NativeSettingsResult {
         autostart: autostart_enabled(),
         stay_awake: STAY_AWAKE.load(Ordering::Relaxed),
         supported: cfg!(windows),
+        theme: appearance.theme,
+        wallpaper: appearance.wallpaper,
     }
 }
 
@@ -207,7 +254,21 @@ fn native_settings_get() -> NativeSettingsResult {
 fn native_settings_update(
     autostart: Option<bool>,
     stay_awake: Option<bool>,
+    theme: Option<String>,
+    wallpaper: Option<String>,
 ) -> Result<NativeSettingsResult, String> {
+    if theme
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "system" | "light" | "dark"))
+    {
+        return Err("unsupported desktop theme".into());
+    }
+    if wallpaper
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "none" | "mist" | "grid" | "paper" | "custom"))
+    {
+        return Err("unsupported desktop wallpaper".into());
+    }
     if let Some(enabled) = autostart {
         update_autostart(enabled)?;
     }
@@ -221,6 +282,16 @@ fn native_settings_update(
             return Err("keep-awake is currently supported on Windows only".into());
         }
         STAY_AWAKE.store(enabled, Ordering::Relaxed);
+    }
+    if theme.is_some() || wallpaper.is_some() {
+        let mut appearance = load_appearance();
+        if let Some(value) = theme {
+            appearance.theme = value;
+        }
+        if let Some(value) = wallpaper {
+            appearance.wallpaper = value;
+        }
+        save_appearance(&appearance)?;
     }
     Ok(native_settings_get())
 }

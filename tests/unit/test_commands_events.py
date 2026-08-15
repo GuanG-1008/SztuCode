@@ -10,7 +10,7 @@ from sztu_code.core.bus.commands import (
     SessionPinCommand,
     SettingsUpdateCommand,
 )
-from sztu_code.core.bus.events import CoreStartedEvent, LlmThinkingEvent
+from sztu_code.core.bus.events import ContextInjectedEvent, CoreStartedEvent, LlmThinkingEvent
 
 
 # 功能：验证 PingCommand 序列化后再反序列化，client 和 type 字段完整保留
@@ -108,3 +108,22 @@ def test_llm_thinking_event_roundtrip() -> None:
     assert restored.run_id == "run-1"
     assert restored.step == 2
     assert restored.thinking == "inspect context"
+
+
+def test_context_injected_event_roundtrip_preserves_full_text() -> None:
+    text = "# Agent context\n\n## Project Context\nUse the workspace conventions."
+    event = ContextInjectedEvent(
+        run_id="run-1",
+        source="system",
+        label="上下文注入",
+        chars=len(text),
+        preview="# Agent context",
+        text=text,
+        ts="2026-08-16T00:00:00Z",
+    )
+
+    restored = ContextInjectedEvent.model_validate_json(event.model_dump_json())
+
+    assert restored.type == "context.injected"
+    assert restored.label == "上下文注入"
+    assert restored.text == text

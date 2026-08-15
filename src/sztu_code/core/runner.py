@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sztu_code.core.bus.events import ChangeAppliedEvent, RunFinishedEvent, RunStartedEvent
+from sztu_code.core.bus.events import (
+    ChangeAppliedEvent,
+    ContextInjectedEvent,
+    RunFinishedEvent,
+    RunStartedEvent,
+)
 from sztu_code.core.changes import WorkspaceChangeTracker
 from sztu_code.core.compact.compactor import Compactor
 from sztu_code.core.compact.offload import OffloadManager
@@ -269,6 +274,23 @@ class AgentRunner:
         async with EventWriter(run_path / "events.jsonl") as writer:
             writer.subscribe(bus)
             await bus.publish(RunStartedEvent(run_id=run_id, goal=goal, ts=_now()))
+            # 与 LLM 调用共用同一组装逻辑，确保展开内容就是本次 run 实际注入的 system 上下文。
+            injected_context = context.system_prompt(context.base_system_prompt)
+            first_line = next(
+                (line.strip() for line in injected_context.splitlines() if line.strip()),
+                "",
+            )[:80]
+            await bus.publish(
+                ContextInjectedEvent(
+                    run_id=run_id,
+                    source="system",
+                    label="上下文注入",
+                    chars=len(injected_context),
+                    preview=first_line,
+                    text=injected_context,
+                    ts=_now(),
+                )
+            )
 
             cancelled = False
             try:
@@ -397,6 +419,19 @@ class AgentRunner:
                 )
             )
 
+        # run 结束注销本次订阅的额外处理器，防止共享 bus 的订阅者随 run 次数无限累积
+        if self._extra_handlers:
+            for h in self._extra_handlers:
+                bus.unsubscribe(h)
+
+        if session is not None and store is not None:
+            # Phase 3a: 等待后台异步压缩完成（compactor 为 None 时跳过）
+            if compactor is not None:
+                await compactor.wait_pending()
+            if context.compacted:
+                store.write_compacted(session.id, context.messages)
+            else:
+                store.append_messages(session.id, context.messages[prefill_len:], run_id=run_id)
 
         if cancelled:
             raise asyncio.CancelledError()

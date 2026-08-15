@@ -1,8 +1,17 @@
 /* Shared typography scale. Keep this stylesheet last so every product surface reads consistently. */
 :root {
+  /* 动效 token（借鉴 dsh ui-theme base.css）：统一缓动曲线 + 三档时长，只用于状态反馈 */
+  --sz-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --sz-duration-fast: 0.1s;
+  --sz-duration: 0.2s;
+  --sz-duration-slow: 0.3s;
+
   --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
   --font-code: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --text-display-title: 42px;
+  --text-hero-title: 26px;
   --text-page-title: 22px;
+  --text-brand-title: 17px;
   --text-section-title: 16px;
   --text-item-title: 14px;
   --text-body: 14px;
@@ -49,6 +58,10 @@ p {
   font-family: var(--font-ui);
 }
 
+.agent-sidebar .sidebar-brand h1 {
+  font-size: var(--text-brand-title);
+}
+
 /* Page-level headings */
 :is(
   .launcher-heading,
@@ -57,6 +70,7 @@ p {
   .capability-view,
   .settings-content,
   .page-head,
+  .task-head,
   .project-create-card,
   .project-success
 ) h1,
@@ -114,7 +128,7 @@ p {
   color: #a2a9ad;                 /* 纯线条灰色终端图标 */
 }
 .task-stream .task-intro b {
-  font-size: 26px;
+  font-size: var(--text-hero-title);
   font-weight: 400;               /* 细字体基础上稍微加粗 */
 }
 
@@ -131,12 +145,17 @@ p {
 .token-stream,
 .turn-result .token-stream,
 .markdown-body,
+.task-conversation > .kimi-composer textarea,
 .chat-composer > textarea,
 .task-launcher .landing-composer textarea {
   font-family: var(--font-ui);
   font-size: var(--text-body);
   font-weight: 400;
   line-height: 1.75;
+}
+
+.task-launcher .launcher-heading h1 {
+  font-size: var(--text-display-title);
 }
 
 /* Navigation and form controls share one compact size. */
@@ -197,7 +216,8 @@ p {
 .work-record > summary,
 .thinking-panel button,
 .tool-call-group__trigger,
-.tool-call-event > button > span {
+.tool-call-event__action,
+.tool-call-event__detail {
   font-size: var(--text-caption);
   line-height: 1.65;
 }
@@ -344,6 +364,10 @@ samp,
 }
 
 @media (max-width: 760px) {
+  .task-launcher .launcher-heading h1 {
+    font-size: calc(var(--text-display-title) - 10px);
+  }
+
   .slash-menu__group button {
     grid-template-columns: 24px minmax(96px, 145px) minmax(0, 1fr) 14px;
     gap: 8px;

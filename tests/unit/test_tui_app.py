@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from rich.markdown import Markdown
+from textual.containers import VerticalScroll
 from textual.widget import Widget
+from textual.widgets import Static
 
 from sztu_code.tui.app import (
+    _MAX_LOG_CHILDREN,
     KamaTuiApp,
     LLMStreamBlock,
     PermissionBlock,
     PermissionSelect,
     RunBlock,
     ToolCallBlock,
+    _BgRun,
     _param_summary,
     _preview,
 )
@@ -329,3 +334,338 @@ def test_unknown_event_silently_ignored() -> None:
 
     app._handle_event({"type": "some.unknown.type", "run_id": "r", "ts": "t"})
     assert appended == []
+
+
+# 功能：验证日志视图子 widget 数被上限裁剪，且活动 run 块不受裁剪影响
+# 设计：run_test 挂载真实 DOM，先追加超过上限的行断言 children 封顶；再启动 run 块并继续追加，
+#       确认 run 块仍挂载且数量不超上限，覆盖裁剪与保护两条路径
+async def test_log_view_caps_children_and_keeps_run_block(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("SZTU_TRUSTED_PROJECTS", str(tmp_path / "trusted.json"))
+    monkeypatch.setattr(KamaTuiApp, "_start_socket_loop", lambda self: None)
+    app = KamaTuiApp("127.0.0.1", 9999, project_path=str(tmp_path / "proj"), trust=True)
+    async with app.run_test() as pilot:
+        for i in range(800):
+            app._append(Static(f"line {i}"))
+        await pilot.pause()
+        log_view = app.query_one("#log-view", VerticalScroll)
+        assert len(log_view.children) == _MAX_LOG_CHILDREN
+        app._handle_event({"type": "run.started", "run_id": "r1", "goal": "g", "ts": "t"})
+        await pilot.pause()
+        for i in range(700):
+            app._append(Static(f"x {i}"))
+        await pilot.pause()
+        run_block = app.query_one(RunBlock)
+        assert run_block.is_attached
+        assert len(log_view.children) == _MAX_LOG_CHILDREN
+
+
+# 功能：验证高频 token 被节流刷新：文本完整累积，但 update 调用数远小于 token 数
+# 设计：挂载 LLMStreamBlock 并计数 update 调用，连续追加 200 个 token 后断言刷新次数受节流限制、
+#       _text 仍完整累积，覆盖节流路径与定时器兜底；finalize 后内容为 Markdown
+async def test_llm_stream_throttles_high_frequency_tokens(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("SZTU_TRUSTED_PROJECTS", str(tmp_path / "trusted.json"))
+    monkeypatch.setattr(KamaTuiApp, "_start_socket_loop", lambda self: None)
+    app = KamaTuiApp("127.0.0.1", 9999, project_path=str(tmp_path / "proj"), trust=True)
+    async with app.run_test() as pilot:
+        block = LLMStreamBlock()
+        app._append(block)
+        await pilot.pause()
+        updates = 0
+        original_update = block.update
+
+        def counting(value: object) -> None:
+            nonlocal updates
+            updates += 1
+            original_update(value)
+
+        block.update = counting  # type: ignore[method-assign]
+        for _ in range(200):
+            block.append_token("tok ")
+        await pilot.pause()
+        await asyncio.sleep(0.1)
+        await pilot.pause()
+        assert updates < 200
+        assert block._text == "tok " * 200  # type: ignore[attr-defined]
+        block.finalize_markdown()
+        assert isinstance(block.content, Markdown)
+
+
+# 功能：验证终端尺寸变化时背景壁纸按新尺寸重新生成
+# 设计：挂载真实 DOM 并 resize_terminal，断言壁纸行数与新高度一致，
+#       覆盖 on_resize → _render_wallpaper(event.size) 的联动路径
+async def test_wallpaper_regenerates_on_resize(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("SZTU_TRUSTED_PROJECTS", str(tmp_path / "trusted.json"))
+    monkeypatch.setattr(KamaTuiApp, "_start_socket_loop", lambda self: None)
+    app = KamaTuiApp(
+        "127.0.0.1", 9999,
+        project_path=str(tmp_path / "proj"), trust=True, wallpaper="ocean",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        rows = str(app.query_one("#wallpaper").render()).splitlines()
+        assert len(rows) == 40
+
+
+# 功能：验证技能斜杠命令由后台加载填充候选列表
+# 设计：monkeypatch _build_slash_items 返回带技能的列表并直接 await _load_slash_items，
+#       断言 _slash_items 被替换，避免依赖真实技能扫描和定时等待的不确定性
+async def test_slash_items_load_async(monkeypatch) -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    monkeypatch.setattr(
+        app,
+        "_build_slash_items",
+        lambda: app._builtin_slash_items() + [("my-skill", "desc")],
+    )
+
+    await app._load_slash_items()
+
+    assert ("my-skill", "desc") in app._slash_items
+    assert app._builtin_slash_items()[0] in app._slash_items
+
+
+# 功能：验证 /theme 按序切换明暗主题并更新 Textual 主题与全局取色
+# 设计：直接调用 _cycle_theme 两次，断言主题名与 textual theme 依次切换，
+#       覆盖循环首尾衔接（light 之后回到 dark）；async 提供事件循环供 run_worker 调度
+async def test_theme_cycle_toggles_dark_and_light() -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+
+    app._cycle_theme()
+    assert app._theme_name == "light"
+    assert app.theme == "sztu-light"
+    app._cycle_theme()
+    assert app._theme_name == "dark"
+    assert app.theme == "sztu-dark"
+    assert len(appended) == 2  # 每次切换追加一条日志
+
+
+# 功能：验证 /wallpaper 循环完整一圈后回到初始样式
+# 设计：调用 _cycle_wallpaper 共 4 次（与 WALLPAPER_ORDER 等长），断言回到 none，
+#       且未挂载壁纸层时 _render_wallpaper 静默跳过不抛异常
+async def test_wallpaper_cycle_returns_to_none() -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+
+    start = app._wallpaper_name
+    for _ in range(4):
+        app._cycle_wallpaper()
+    assert app._wallpaper_name == start
+
+
+# 功能：验证 /bg 通过 agent.run 在独立会话启动后台任务并登记 run_id
+# 设计：注入 fake client 返回 run_id，直接 await _start_background_run，
+#       断言 run_id 登记与目标记录，不依赖真实 daemon
+async def test_bg_command_starts_background_run() -> None:
+    class _FakeClient:
+        async def send_command(self, method: str, params: dict) -> dict:
+            assert method == "agent.run"
+            assert params == {"goal": "summarize repo"}
+            return {"run_id": "bg-42"}
+
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+    app._client = _FakeClient()  # type: ignore[assignment]
+
+    await app._start_background_run("summarize repo")
+
+    assert app._bg_run_ids == {"bg-42"}
+    assert app._bg_runs["bg-42"].goal == "summarize repo"
+
+
+# 功能：验证后台 run 事件按 run_id 路由到任务面板而非主日志 RunBlock
+# 设计：预置后台 run_id，feed run.finished，断言状态与步数更新、
+#       主 _run_block 保持 None（未被 run 事件创建）
+def test_bg_events_route_to_bg_panel_not_main_log() -> None:
+    app = KamaTuiApp("127.0.0.1", 9999)
+    appended: list[Widget] = []
+    app._append = lambda w: appended.append(w)  # type: ignore[method-assign]
+    app._bg_run_ids = {"bg-1"}
+    app._bg_runs["bg-1"] = _BgRun("bg-1", "do it")
+
+    app._handle_event({
+        "type": "run.finished", "run_id": "bg-1", "status": "success",
+        "steps": 3, "reason": "", "ts": "t",
+    })
+
+    assert app._bg_runs["bg-1"].status == "success"
+    assert app._bg_runs["bg-1"].steps == 3
+    assert app._bg_runs["bg-1"].finished_at is not None
+    assert app._run_block is None  # 后台任务不创建主日志 RunBlock
+
+
+# 功能：验证状态栏文本包含会话用量、后台任务数与主题名
+# 设计：注入 fake #status widget 并设置 token 与后台任务状态，
+#       断言关键片段存在，覆盖状态栏的信息聚合
+def test_status_bar_renders_session_and_bg_info() -> None:
+    class _Status:
+        value = ""
+
+        def update(self, value: str) -> None:
+            self.value = value
+
+    app = KamaTuiApp("127.0.0.1", 9999)
+    status = _Status()
+    app.query_one = lambda *_args, **_kwargs: status  # type: ignore[method-assign]
+    app._session_tokens = {"in": 1200, "out": 340, "cache_read": 0, "cache_write": 0}
+    app._state = "ready"
+    app._bg_runs = {"bg-1": _BgRun("bg-1", "g")}
+
+    app._update_status()
+
+    assert "in=1.2K" in status.value
+    assert "out=340" in status.value
+    assert "bg 1/1" in status.value
+    assert "theme" in status.value
+
+
+# 功能：验证鼠标点击补全项选中对应条目并发布 Selected（Static 默认不响应点击）
+# 设计：挂载 SlashCompleteWidget 后直接调用 on_click 模拟点击第二行，
+#       断言宿主 App 收到对应 skill 名，覆盖行号换算与消息路由
+async def test_slash_widget_click_selects_item() -> None:
+    from textual.app import App as TextualApp
+    from textual.app import ComposeResult
+
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    class _Click:
+        y = 1
+
+        def stop(self) -> None:
+            pass
+
+    class _Host(TextualApp[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.selected: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield SlashCompleteWidget([
+                ("settings", "open settings dialog"),
+                ("theme", "switch theme"),
+            ])
+
+        def on_slash_complete_widget_selected(self, event: SlashCompleteWidget.Selected) -> None:
+            self.selected.append(event.skill_name)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        popup = host.query_one(SlashCompleteWidget)
+        popup.on_click(_Click())  # type: ignore[arg-type]
+        await pilot.pause()
+        assert host.selected == ["theme"]
+
+
+
+# 功能：验证斜杠补全弹窗按每页 10 条分页，页数按总数向上取整
+# 设计：构造 25 个候选项，断言页数与各页条数，覆盖最后一页不满一页的情况
+def test_slash_widget_paginates_into_fixed_pages() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", f"desc {i}") for i in range(25)])
+
+    assert popup._page_count() == 3
+    assert popup._page_items() == 10  # 第 1 页满页
+    popup._page = 1
+    assert popup._page_start() == 10
+    popup._page = 2
+    assert popup._page_items() == 5  # 最后一页不满一页
+
+
+# 功能：验证光标跨页导航：页尾下翻进入下一页首项，页首上翻回到上一页末项
+# 设计：move_down 10 次到达页尾再下翻，断言页码与页内光标；再 move_up 回到上一页末项
+def test_slash_widget_navigation_crosses_pages() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", "") for i in range(25)])
+    selected: list[str] = []
+    popup.post_message = lambda m: selected.append(m.skill_name)  # type: ignore[method-assign]
+
+    for _ in range(9):
+        popup.move_down()
+    assert (popup._page, popup._cursor) == (0, 9)
+
+    popup.move_down()  # 第 1 页末尾 → 第 2 页首项
+    assert (popup._page, popup._cursor) == (1, 0)
+    popup.select_current()
+    assert selected == ["cmd10"]
+
+    popup.move_up()  # 第 2 页页首 → 第 1 页末项
+    assert (popup._page, popup._cursor) == (0, 9)
+
+
+# 功能：验证 PgUp/PgDn 直接翻页，光标保持在页内对应位置并在末页钳制
+# 设计：page_down 进入第 2 页，再进入第 3 页（仅 5 项）验证光标钳制，page_up 回退
+def test_slash_widget_pgup_pgdn_switch_pages() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", "") for i in range(25)])
+    popup._cursor = 7
+
+    popup.page_down()
+    assert (popup._page, popup._cursor) == (1, 7)
+    popup.page_down()
+    assert (popup._page, popup._cursor) == (2, 4)  # 末页仅 5 项，光标钳制
+    popup.page_up()
+    assert (popup._page, popup._cursor) == (1, 4)
+
+
+# 功能：验证筛选后回到第 1 页，避免旧页码越界
+# 设计：先翻到第 2 页再 set_query 过滤，断言页码归零且筛选生效
+def test_slash_widget_query_resets_page() -> None:
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    popup = SlashCompleteWidget([(f"cmd{i}", "") for i in range(25)])
+    popup._page = 1
+
+    popup.set_query("cmd2")
+
+    assert popup._page == 0
+    assert all(name.startswith("cmd2") for name, _ in popup._filtered)
+
+
+# 功能：验证非首页点击换算：页内行号叠加页偏移选中完整列表对应项
+# 设计：翻到第 2 页后模拟点击第 3 行，断言选中全局第 13 项
+async def test_slash_widget_click_maps_page_offset() -> None:
+    from textual.app import App as TextualApp
+    from textual.app import ComposeResult
+
+    from sztu_code.tui.app import SlashCompleteWidget
+
+    class _Click:
+        y = 2
+
+        def stop(self) -> None:
+            pass
+
+    class _Host(TextualApp[None]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.selected: list[str] = []
+
+        def compose(self) -> ComposeResult:
+            yield SlashCompleteWidget([(f"cmd{i}", f"desc {i}") for i in range(25)])
+
+        def on_slash_complete_widget_selected(self, event: SlashCompleteWidget.Selected) -> None:
+            self.selected.append(event.skill_name)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        popup = host.query_one(SlashCompleteWidget)
+        popup._page = 1
+        popup._redraw()
+        popup.on_click(_Click())  # type: ignore[arg-type]
+        await pilot.pause()
+        assert host.selected == ["cmd12"]  # 10 + 2

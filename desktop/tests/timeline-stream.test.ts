@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TimelineStep } from "../src/components/timeline/types";
-import { appendTokenBatch, createTokenFrameBatcher } from "../src/utils/timelineStream";
+import { appendThinkingBatch, appendTokenBatch, createTokenFrameBatcher } from "../src/utils/timelineStream";
 
 function emptyStep(): TimelineStep {
   return { step: 1, runId: "run-1", status: "thinking", tokens: [], toolCalls: [] };
@@ -53,4 +53,33 @@ test("flushes pending tokens synchronously before a later run event", () => {
   batcher.flushRun("run-1");
 
   assert.deepEqual(batches, [{ runId: "run-1", step: 2, tokens: ["first"] }]);
+});
+
+test("appends a thinking batch to the step without mutating the previous one", () => {
+  const previous = {
+    ...emptyStep(),
+    thinking: "第一步思考",
+    events: [{ id: "thinking-1", kind: "thinking" as const, text: "第一步思考" }],
+  };
+
+  const next = appendThinkingBatch(previous, ["、", "第二步思考"]);
+
+  assert.equal(next.thinking, "第一步思考、第二步思考");
+  assert.equal(next.events?.at(-1)?.text, "第一步思考、第二步思考");
+  assert.equal(previous.thinking, "第一步思考");
+  assert.equal(previous.events.at(-1)?.text, "第一步思考");
+});
+
+test("appendThinkingBatch creates a thinking event when the tail is not thinking", () => {
+  const previous = {
+    ...emptyStep(),
+    events: [{ id: "text-1", kind: "text" as const, text: "正文" }],
+  };
+
+  const next = appendThinkingBatch(previous, ["思考内容"]);
+
+  assert.equal(next.thinking, "思考内容");
+  assert.equal(next.events?.length, 2);
+  assert.equal(next.events?.at(-1)?.kind, "thinking");
+  assert.equal(next.events?.at(-1)?.text, "思考内容");
 });
