@@ -55,7 +55,7 @@ class ExecutionContext:
     # Mermaid 任务画布（Phase 2）：由 AgentLoop 维护，作为增量状态追加到消息尾部
     canvas: TaskCanvas | None = None
     # ---- agent run 预算 ----
-    max_tokens: int = 0           # 累计 input+output tokens 上限；0=不限
+    max_tokens: int = 0           # 仅保留给显式子任务预算；主 Agent 不设置累计 Token 上限
     max_wall_clock_s: int = 0     # 累计墙钟秒数上限；0=不限
     total_input_tokens: int = 0   # 已累计 input tokens（每步 LLM 调用后累加）
     total_output_tokens: int = 0  # 已累计 output tokens

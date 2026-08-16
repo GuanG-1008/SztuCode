@@ -74,7 +74,7 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | `SZTU_TRACE_ENABLED` | `true` | 是否记录 trace |
 | `SZTU_TRACE_FILE` | `~/.sztu/traces/daemon.jsonl` | trace 文件路径 |
 | `SZTU_TRACE_INCLUDE_LLM_PAYLOAD` | `true` | 是否记录完整 LLM payload |
-| `SZTU_BUDGET_MAX_TOKENS` | `0` | 父运行与工作流聚合 Token 上限；`0` 不限制 |
+| `SZTU_BUDGET_MAX_TOKENS` | `0` | 已废弃；主 Agent 不再按跨轮累计 Token 终止，保留仅为兼容旧配置 |
 | `SZTU_BUDGET_MAX_WALL_CLOCK_S` | `0` | 父运行与工作流墙钟秒数上限；`0` 不限制 |
 | `SZTU_WORKFLOW_MAX_CONCURRENCY` | `4` | 工作流最大并行角色任务数 |
 | `SZTU_WORKFLOW_MAX_DEPTH` | `2` | 工作流与 Subagent 最大嵌套深度 |
@@ -101,6 +101,7 @@ stuck_max_total = 0
 tool_max_concurrency = 4  # 仅当整批工具均明确为 read_only 且无需审批时生效
 
 [budget]
+# max_tokens 已废弃；主 Agent 不再使用累计 Token 预算
 max_tokens = 0
 max_wall_clock_s = 0
 

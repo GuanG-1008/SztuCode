@@ -20,6 +20,7 @@ const vendors = modelVendors;
 
 const models = ref<ModelProfile[]>([]);
 const editorOpen = ref(false);
+const editingModel = ref<ModelProfile | null>(null);
 const selectedVendor = ref<ModelVendor | null>(null);
 const name = ref(""); const model = ref(""); const baseUrl = ref(""); const apiKey = ref("");
 const provider = ref<"anthropic" | "openai">("anthropic");

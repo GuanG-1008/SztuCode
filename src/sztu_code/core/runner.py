@@ -282,7 +282,9 @@ class AgentRunner:
             project_profile_context=project_profile_context,
             base_system_prompt=base_prompt,
             system_prompt_override=system_prompt_override,
-            max_tokens=self._config.budget.max_tokens,
+            # Cumulative Token budgets are intentionally disabled. Usage is still
+            # recorded for telemetry, while wall-clock/context/step guards remain.
+            max_tokens=0,
             max_wall_clock_s=self._config.budget.max_wall_clock_s,
         )
         prefill_len = len(history)

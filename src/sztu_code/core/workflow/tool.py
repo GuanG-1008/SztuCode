@@ -318,7 +318,7 @@ class WorkflowRunTool(BaseTool):
             limits = WorkflowLimits(
                 max_concurrency=self._config.workflow.max_concurrency,
                 max_depth=self._config.workflow.max_depth,
-                max_tokens=self._config.budget.max_tokens,
+                max_tokens=0,
                 max_wall_clock_s=self._config.budget.max_wall_clock_s,
                 max_retries=self._config.workflow.max_retries,
             )

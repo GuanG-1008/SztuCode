@@ -507,16 +507,10 @@ class AgentLoop:
                 context.result = base
                 context.mark_success()
 
-            # --- 终止检测（Claude Code 风格优先级链）---
-            # 顺序：end_turn > token_budget > wall_clock > blocking_limit
-            #        > max_budget_usd > repeated_error > max_steps
-            # token/wall_clock 在 max_steps 之前检查，避免预算超了还要烧 wrap_up 调用
-
-            # token_budget: 累计 token 已超限 → 直接终止，不做 wrap_up
-            elif context.token_budget_exhausted():
-                context.mark_interrupted("max_tokens_exceeded")
-
-            # wall_clock: 累计时间已超限 → 直接终止
+            # --- 终止检测 ---
+            # 累计 Token 只用于统计，不再作为跨轮硬终止条件；否则大上下文任务
+            # 会在真正完成前因重复计入 input tokens 而提前停止。
+            # wall_clock: 累计时间已超限
             elif context.wall_clock_exceeded():
                 context.mark_interrupted("max_wall_clock_exceeded")
 
@@ -544,7 +538,6 @@ class AgentLoop:
                 # 模型给出完成标记即记为 success；否则保留文本并按步数耗尽标记 interrupted
                 if (
                     self._grace_step_on_max_steps
-                    and not context.token_budget_exhausted()
                     and response.stop_reason == "tool_use"
                     and not has_errors
                 ):
@@ -558,8 +551,8 @@ class AgentLoop:
                         context.result = conclusion_text or context.result
                         context.mark_interrupted("exceeded_max_steps")
                 else:
-                    # 收尾回合：步数到限且预算未耗尽时给一次总结，避免裸失败
-                    if self._wrap_up_on_max_steps and not context.token_budget_exhausted():
+                    # 收尾回合：步数到限时给一次总结，避免裸失败
+                    if self._wrap_up_on_max_steps:
                         summary = await self._wrap_up(context, pending_summaries)
                         context.result = summary or (
                             "\n".join(pending_summaries) if pending_summaries else ""
