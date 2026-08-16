@@ -275,11 +275,13 @@ class GitCommitResult(BaseModel):
 class GitHistoryCommand(BaseModel):
     type: Literal["git.history"] = "git.history"
     workspace_id: str
-    limit: int = Field(default=80, ge=1, le=200)
+    limit: int = Field(default=100, ge=1, le=200)
+    skip: int = Field(default=0, ge=0)
 
 
 class GitHistoryResult(BaseModel):
     commits: list[dict[str, Any]]
+    has_more: bool = False
 
 
 class ChangeDiffResult(BaseModel):

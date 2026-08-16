@@ -63,6 +63,13 @@ export type ChangeSummary = {
   run_id?: string | null; agent_owned?: boolean; revertible?: boolean;
   additions?: number; deletions?: number;
 };
+export type GitRef = { name: string; kind: "head" | "remote" | "tag" };
+export type GitCommitEntry = {
+  hash: string; short_hash: string; parents: string[];
+  author: string; date: string; subject: string; is_head: boolean;
+  is_outgoing: boolean; refs: GitRef[];
+};
+export type GitHistoryPage = { commits: GitCommitEntry[]; has_more: boolean };
 export type Session = {
   session_id: string; title: string; status: string; updated_at: string;
   archived: boolean; pinned: boolean; workspace_id: string | null; latest_run_id?: string | null;
@@ -123,7 +130,7 @@ export type ModelProfileInput = ModelRequestSettings & { id?: string; name: stri
 const client = new IpcClient();
 let subscribed = false;
 const PLUGIN_PROTOCOL_ERROR = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
-const GIT_PROTOCOL_ERROR = "本地服务版本过旧，不支持 Git 提交。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
+const GIT_PROTOCOL_ERROR = "本地服务版本过旧，不支持当前 Git 功能。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
 client.onDisconnect(() => { subscribed = false; });
 const EVENT_TOPICS = [
   "session.*", "run.*", "step.*", "llm.*", "tool.*", "permission.*",
@@ -338,8 +345,8 @@ export async function listChanges(workspaceId: string, runId?: string | null): P
   return (result.changes as ChangeSummary[] | undefined) ?? [];
 }
 
-export async function changeDiff(workspaceId: string, path?: string): Promise<string> {
-  const result = await client.request("change.diff", { workspace_id: workspaceId, path: path ?? null });
+export async function changeDiff(workspaceId: string, path?: string, runId?: string | null): Promise<string> {
+  const result = await client.request("change.diff", { workspace_id: workspaceId, path: path ?? null, run_id: runId ?? null });
   return String(result.diff ?? "");
 }
 
@@ -508,6 +515,20 @@ export async function commitChanges(workspaceId: string, message: string): Promi
     throw reason;
   }
   return String(result.commit_hash ?? "");
+}
+
+export async function gitHistory(workspaceId: string, limit = 100, skip = 0): Promise<GitHistoryPage> {
+  let result: Record<string, unknown>;
+  try {
+    result = await client.request("git.history", { workspace_id: workspaceId, limit, skip });
+  } catch (reason) {
+    if (reason instanceof IpcRequestError && reason.code === -32601) throw new Error(GIT_PROTOCOL_ERROR);
+    throw reason;
+  }
+  return {
+    commits: (result.commits as GitCommitEntry[] | undefined) ?? [],
+    has_more: Boolean(result.has_more),
+  };
 }
 
 export async function listPendingUserQuestions(sessionId?: string | null): Promise<PendingUserQuestion[]> {

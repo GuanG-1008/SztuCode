@@ -3,8 +3,8 @@ import { computed, nextTick, ref, watch } from "vue";
 import { Check, Clipboard, GitCommitHorizontal, LocateFixed, RefreshCw } from "@lucide/vue";
 import type { GitCommitEntry } from "../../services/sztu-runtime";
 
-const props = defineProps<{ commits: GitCommitEntry[]; branch: string | null; loading: boolean }>();
-const emit = defineEmits<{ refresh: [] }>();
+const props = withDefaults(defineProps<{ commits: GitCommitEntry[]; branch: string | null; loading: boolean; loadingMore?: boolean; hasMore?: boolean }>(), { loadingMore: false, hasMore: false });
+const emit = defineEmits<{ refresh: []; loadMore: [] }>();
 type Segment = { from: number; to: number; color: string; upper: boolean };
 type GraphCommit = GitCommitEntry & { lane: number; color: string; segments: Segment[] };
 const rowHeight = 34;
@@ -14,6 +14,7 @@ const colors = ["#7c3aed", "#e46f00", "#087ea4", "#db2777", "#15803d", "#a16207"
 const selectedHash = ref("");
 const copied = ref(false);
 const graphElement = ref<HTMLElement | null>(null);
+const graphScroll = ref<HTMLElement | null>(null);
 
 const graph = computed(() => {
   const active: string[] = [];
@@ -33,15 +34,17 @@ const graph = computed(() => {
     });
     const segments: Segment[] = [];
     before.forEach((hash, from) => {
+      const laneColor = colorByHash.get(hash) ?? colors[from % colors.length];
+      // 每条进入当前行的活跃轨道都必须画到行中点，否则旁路分支会在行间断开。
+      segments.push({ from, to: from, color: laneColor, upper: true });
       if (hash === commit.hash) {
-        segments.push({ from, to: from, color: commitColor, upper: true });
         commit.parents.forEach((parent) => {
           const to = next.indexOf(parent);
           if (to >= 0) segments.push({ from, to, color: colorByHash.get(parent) ?? commitColor, upper: false });
         });
       } else {
         const to = next.indexOf(hash);
-        if (to >= 0) segments.push({ from, to, color: colorByHash.get(hash) ?? colors[from % colors.length], upper: false });
+        if (to >= 0) segments.push({ from, to, color: laneColor, upper: false });
       }
     });
     active.splice(0, active.length, ...next);
@@ -82,6 +85,11 @@ async function locateHead() {
   await nextTick();
   graphElement.value?.querySelector<HTMLElement>(`[data-hash="${head.hash}"]`)?.scrollIntoView({ block: "center" });
 }
+function maybeLoadMore() {
+  const element = graphScroll.value;
+  if (!element || !props.hasMore || props.loadingMore) return;
+  if (element.scrollTop + element.clientHeight >= element.scrollHeight - 180) emit("loadMore");
+}
 watch(() => props.commits, (commits) => {
   if (!commits.some((commit) => commit.hash === selectedHash.value)) selectedHash.value = commits.find((commit) => commit.is_head)?.hash ?? "";
 }, { immediate: true });
@@ -98,7 +106,7 @@ watch(() => props.commits, (commits) => {
     </header>
     <div v-if="loading && !commits.length" class="git-graph-empty"><RefreshCw :size="20" class="spin" />正在读取提交历史…</div>
     <div v-else-if="!graph.rows.length" class="git-graph-empty"><GitCommitHorizontal :size="24" /><b>暂无提交记录</b><span>完成第一次提交后，提交图表会显示在这里。</span></div>
-    <div v-else class="git-graph-scroll">
+    <div v-else ref="graphScroll" class="git-graph-scroll" @scroll.passive="maybeLoadMore">
       <div class="git-graph-list">
         <div v-if="outgoingCount" class="git-graph-outgoing"><i /><span>传出的更改</span><b>{{ outgoingCount }}</b></div>
         <article v-for="commit in graph.rows" :key="commit.hash" :data-hash="commit.hash" class="git-graph-row" :class="{ selected: selectedHash === commit.hash, outgoing: commit.is_outgoing }" tabindex="0" @click="selectCommit(commit)" @keydown.enter="selectCommit(commit)">
@@ -115,6 +123,11 @@ watch(() => props.commits, (commits) => {
           <time :datetime="commit.date" :title="new Date(commit.date).toLocaleString('zh-CN')">{{ relativeDate(commit.date) }}</time>
           <code>{{ commit.short_hash }}</code>
         </article>
+        <div class="git-graph-page-state">
+          <template v-if="loadingMore"><RefreshCw :size="13" class="spin" />正在加载更早的提交…</template>
+          <button v-else-if="hasMore" type="button" @click="emit('loadMore')">加载更早的提交</button>
+          <template v-else>已到达最早提交</template>
+        </div>
       </div>
     </div>
     <footer v-if="selected" class="git-graph-status"><span><i :style="{ background: graph.rows.find((commit) => commit.hash === selected?.hash)?.color }" />{{ selected.subject }}</span><code>{{ selected.hash }}</code><small>{{ selected.parents.length ? `${selected.parents.length} 个父提交` : "根提交" }}</small></footer>

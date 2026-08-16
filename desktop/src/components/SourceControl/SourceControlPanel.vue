@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { ArrowLeft, Check, GitBranch, RefreshCw, Search, X } from "@lucide/vue";
 import GitGraph from "./GitGraph.vue";
 import { changeDiff, commitChanges, discardChanges, gitHistory, listChanges, stageChanges, unstageChanges, workspaceStatus, type ChangeSummary, type GitCommitEntry, type WorkspaceStatus } from "../../services/sztu-runtime";
+import { loadCommitDraft, saveCommitDraft } from "../../utils/sourceControlDraft";
 
 const props = defineProps<{ workspaceId: string; workspaceName: string; workspacePath: string }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
@@ -21,6 +22,10 @@ const commitNotice = ref("");
 const view = ref<"changes" | "graph">("changes");
 const commits = ref<GitCommitEntry[]>([]);
 const graphLoading = ref(false);
+const graphLoadingMore = ref(false);
+const graphHasMore = ref(false);
+const initialGraphPageSize = 40;
+const olderGraphPageSize = 100;
 const filteredChanges = computed(() => {
   const value = query.value.trim().toLocaleLowerCase();
   return value ? changes.value.filter((item) => item.path.toLocaleLowerCase().includes(value)) : changes.value;
@@ -42,10 +47,39 @@ async function stage(path: string) { if (!path || busyPath.value) return; busyPa
 async function unstage(path: string) { if (!path || busyPath.value) return; busyPath.value = path; error.value = ""; try { await unstageChanges(props.workspaceId, [path]); await refresh(); emit("changed"); } catch (reason) { error.value = `取消暂存失败：${messageOf(reason)}`; } finally { busyPath.value = ""; } }
 async function discard(path: string) { if (!path || busyPath.value || !window.confirm(`放弃 ${path} 的已跟踪改动？`)) return; busyPath.value = path; error.value = ""; try { await discardChanges(props.workspaceId, [path]); await refresh(); emit("changed"); } catch (reason) { error.value = `放弃改动失败：${messageOf(reason)}`; } finally { busyPath.value = ""; } }
 async function commit() { const message = commitMessage.value.trim(); if (!message || committing.value) return; committing.value = true; error.value = ""; commitNotice.value = ""; try { const hash = await commitChanges(props.workspaceId, message); commitMessage.value = ""; commitNotice.value = hash ? `已提交 ${hash}` : "提交完成"; await refresh(); emit("changed"); } catch (reason) { error.value = `提交失败：${messageOf(reason)}`; } finally { committing.value = false; } }
-async function loadGraph() { graphLoading.value = true; error.value = ""; try { commits.value = await gitHistory(props.workspaceId); } catch (reason) { commits.value = []; error.value = `加载提交图谱失败：${messageOf(reason)}`; } finally { graphLoading.value = false; } }
+async function loadGraph(reset = true) {
+  if ((reset && graphLoading.value) || (!reset && (graphLoadingMore.value || !graphHasMore.value))) return;
+  if (reset) graphLoading.value = true; else graphLoadingMore.value = true;
+  error.value = "";
+  try {
+    const page = await gitHistory(
+      props.workspaceId,
+      reset ? initialGraphPageSize : olderGraphPageSize,
+      reset ? 0 : commits.value.length,
+    );
+    if (reset) commits.value = page.commits;
+    else {
+      const known = new Set(commits.value.map((commit) => commit.hash));
+      commits.value = [...commits.value, ...page.commits.filter((commit) => !known.has(commit.hash))];
+    }
+    graphHasMore.value = page.has_more;
+  } catch (reason) {
+    if (reset) commits.value = [];
+    error.value = `加载提交图谱失败：${messageOf(reason)}`;
+  } finally {
+    graphLoading.value = false;
+    graphLoadingMore.value = false;
+  }
+}
+function loadMoreGraph() { void loadGraph(false); }
 function switchView(next: "changes" | "graph") { view.value = next; if (next === "graph") void loadGraph(); }
 function refreshCurrentView() { if (view.value === "graph") void loadGraph(); else void refresh(); }
-watch(() => props.workspaceId, () => { selectedPath.value = ""; void refresh(); }, { immediate: true });
+watch(() => props.workspaceId, (workspaceId) => {
+  selectedPath.value = "";
+  commitMessage.value = loadCommitDraft(workspaceId);
+  void refresh();
+}, { immediate: true });
+watch(commitMessage, (message) => saveCommitDraft(props.workspaceId, message));
 </script>
 
 <template>
@@ -60,6 +94,6 @@ watch(() => props.workspaceId, () => { selectedPath.value = ""; void refresh(); 
     <form class="source-control-commit" @submit.prevent="commit"><input v-model="commitMessage" aria-label="提交信息" placeholder="提交信息" :disabled="committing" /><button type="submit" :disabled="committing || !commitMessage.trim() || !changes.some((item) => isStaged(item))">{{ committing ? "提交中…" : "提交" }}</button></form>
     <div class="source-control-body"><div class="source-control-files"><p v-if="!filteredChanges.length" class="source-control-empty"><Check :size="24" /><b>工作区干净</b><span>没有待处理的源代码更改</span></p><section v-for="group in changeGroups" :key="group.key" class="source-control-group"><header class="source-control-group-header"><b>{{ group.label }}</b><span>{{ group.items.length }}</span></header><div v-for="item in group.items" :key="item.path" class="source-control-file" :class="{ active: selectedPath === item.path }" role="button" tabindex="0" @click="select(item.path)" @keydown.enter="select(item.path)"><span class="source-control-file-status" :class="`status-${fileStatus(item).toLowerCase()}`" :title="statusLabel(item)">{{ fileStatus(item) }}</span><span class="source-control-file-name"><b>{{ item.path.split(/[\\/]/).pop() }}</b><small>{{ item.path }}</small></span><span class="source-control-file-actions"><em>+{{ item.additions ?? 0 }}</em><em>-{{ item.deletions ?? 0 }}</em><button type="button" :aria-label="isStaged(item) ? `取消暂存 ${item.path}` : `暂存 ${item.path}`" :title="isStaged(item) ? '取消暂存' : '暂存文件'" :disabled="busyPath === item.path" @click.stop="isStaged(item) ? unstage(item.path) : stage(item.path)"><Check :size="13" /></button><button type="button" class="source-control-discard" :aria-label="`放弃 ${item.path} 的改动`" title="放弃文件改动" :disabled="busyPath === item.path || isStaged(item)" @click.stop="discard(item.path)"><X :size="13" /></button></span></div></section></div><article class="source-control-diff"><header><span>{{ selected?.path || "选择文件查看差异" }}</span><button v-if="selectedPath" type="button" aria-label="清除选择" title="清除选择" @click="selectedPath = ''; diff = ''"><X :size="14" /></button></header><div v-if="diffLoading" class="source-control-diff-empty"><RefreshCw :size="17" class="spin" />加载差异…</div><div v-else-if="error" class="source-control-diff-empty">{{ error }}</div><pre v-else-if="diff" class="source-control-diff-code"><code v-for="(line, index) in diff.split('\n')" :key="index" :class="{ add: line.startsWith('+') && !line.startsWith('+++'), del: line.startsWith('-') && !line.startsWith('---'), hunk: line.startsWith('@@') }">{{ line || " " }}</code></pre><div v-else class="source-control-diff-empty">{{ selectedPath ? "此文件没有可显示的差异。" : "从左侧选择一个文件。" }}</div></article></div>
     </template>
-    <GitGraph v-else :commits="commits" :branch="status?.branch ?? null" :loading="graphLoading" @refresh="loadGraph" />
+    <GitGraph v-else :commits="commits" :branch="status?.branch ?? null" :loading="graphLoading" :loading-more="graphLoadingMore" :has-more="graphHasMore" @refresh="loadGraph" @load-more="loadMoreGraph" />
   </section>
 </template>

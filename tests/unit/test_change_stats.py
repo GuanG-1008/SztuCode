@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 from pathlib import Path
 
+from sztu_code.core.changes import manifest_file_diff
 from sztu_code.core.workspace import WorkspaceManager
 
 
@@ -90,3 +93,125 @@ def test_diff_numstat_counts_staged_changes_against_head(tmp_path: Path) -> None
     manager.stage(workspace.id, ["a.txt"])
 
     assert manager.diff_numstat(workspace.id, ["a.txt"]) == {"a.txt": (2, 1)}
+
+
+# 构造一个带 before 快照的 changes.json 清单，返回 manifest 路径
+def _make_manifest(run_dir: Path, workspace_path: str, records: list[dict]) -> Path:
+    snapshots = run_dir / "change-snapshots"
+    snapshots.mkdir(parents=True)
+    for record in records:
+        snapshot_name = record.get("before_snapshot")
+        if snapshot_name:
+            (snapshots / snapshot_name).write_bytes(record["before_bytes"])
+    manifest_path = run_dir / "changes.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "run_id": "run-test",
+                "workspace_path": str(Path(workspace_path).resolve()),
+                "changes": [
+                    {key: value for key, value in record.items() if not key.startswith("before_bytes")}
+                    for record in records
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def _record(path: str, before: bytes | None, after: bytes | None, snapshot: str | None = None) -> dict:
+    return {
+        "path": path,
+        "before_exists": before is not None,
+        "before_digest": hashlib.sha256(before).hexdigest() if before else None,
+        "after_exists": after is not None,
+        "after_digest": hashlib.sha256(after).hexdigest() if after else None,
+        "before_snapshot": snapshot,
+        "before_bytes": before,
+        "revertible": True,
+    }
+
+
+# 功能：即使 run 改动已提交（磁盘仍为 after 内容），也能基于快照生成 before→当前 的 diff
+# 设计：临时目录写入 before 快照与 after 内容，断言 diff 含 -two/+TWO 且含 ---/+++/@@ 头
+def test_manifest_file_diff_committed_file(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    before = b"one\ntwo\nthree\n"
+    after = b"one\nTWO\nthree\n"
+    (root / "a.txt").write_bytes(after)  # 磁盘仍是 run 结束后的内容（模拟已提交）
+    manifest_path = _make_manifest(
+        tmp_path / "run",
+        str(root),
+        [_record("a.txt", before, after, snapshot="0000.bin")],
+    )
+    diff = manifest_file_diff(manifest_path, root, "a.txt")
+    assert diff is not None
+    assert "-two" in diff
+    assert "+TWO" in diff
+    assert diff.startswith("--- a.txt")
+    assert "@@" in diff
+
+
+# 功能：run 期间新建的文件按"空→当前"生成全新增 diff
+def test_manifest_file_diff_new_file(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    after = b"x\ny\n"
+    (root / "new.txt").write_bytes(after)
+    manifest_path = _make_manifest(
+        tmp_path / "run",
+        str(root),
+        [_record("new.txt", None, after)],
+    )
+    diff = manifest_file_diff(manifest_path, root, "new.txt")
+    assert diff is not None
+    assert "+x" in diff
+    assert diff.count("+") >= 2
+
+
+# 功能：run 期间删除的文件生成全删除 diff（before→空）
+def test_manifest_file_diff_deleted_file(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    before = b"a\nb\n"
+    manifest_path = _make_manifest(
+        tmp_path / "run",
+        str(root),
+        [_record("gone.txt", before, None, snapshot="0000.bin")],
+    )
+    diff = manifest_file_diff(manifest_path, root, "gone.txt")
+    assert diff is not None
+    assert "-a" in diff
+    assert [line for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")] == []
+
+
+# 功能：清单中不存在的路径返回 None，调用方回退 Git diff
+def test_manifest_file_diff_unknown_path_returns_none(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "a.txt").write_bytes(b"x")
+    manifest_path = _make_manifest(
+        tmp_path / "run",
+        str(root),
+        [_record("a.txt", b"x", b"y", snapshot="0000.bin")],
+    )
+    assert manifest_file_diff(manifest_path, root, "missing.txt") is None
+
+
+# 功能：manifest 记录的工作区路径与当前不一致时拒绝生成，防止跨目录读快照
+def test_manifest_file_diff_wrong_workspace_returns_none(tmp_path: Path) -> None:
+    root = tmp_path / "ws"
+    root.mkdir()
+    (root / "a.txt").write_bytes(b"y")
+    other = tmp_path / "other"
+    other.mkdir()
+    manifest_path = _make_manifest(
+        tmp_path / "run",
+        str(other),
+        [_record("a.txt", b"x", b"y", snapshot="0000.bin")],
+    )
+    assert manifest_file_diff(manifest_path, root, "a.txt") is None

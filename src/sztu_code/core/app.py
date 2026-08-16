@@ -26,6 +26,8 @@ from sztu_code.core.bus.commands import (
     CcswitchProviderSummary,
     ChangeDiffCommand,
     ChangeDiffResult,
+    ChangeDiscardCommand,
+    ChangeDiscardResult,
     ChangeListCommand,
     ChangeListResult,
     ChangeRevertCommand,
@@ -35,16 +37,16 @@ from sztu_code.core.bus.commands import (
     ChangeSummary,
     ChangeUnstageCommand,
     ChangeUnstageResult,
-    ChangeDiscardCommand,
-    ChangeDiscardResult,
-    GitCommitCommand,
-    GitCommitResult,
     EventSubscribeCommand,
     EventSubscribeResult,
     FileReadCommand,
     FileReadResult,
     FileSearchCommand,
     FileSearchResult,
+    GitCommitCommand,
+    GitCommitResult,
+    GitHistoryCommand,
+    GitHistoryResult,
     MarketplacePluginSummary,
     MarketplaceSummary,
     ModelBenchmarkCommand,
@@ -160,6 +162,7 @@ from sztu_code.core.bus.envelope import EventPushEnvelope, HandlerError
 from sztu_code.core.changes import (
     active_manifest_changes,
     load_manifest,
+    manifest_file_diff,
     revert_manifest_changes,
 )
 from sztu_code.core.config import (
@@ -555,11 +558,21 @@ class CoreApp:
             changes=[owned.get(change.path, change) for change in summaries]
         )
 
-    # 返回工作区或单个文件的只读 Git diff，供客户端审阅器渲染
+    # 返回工作区或单个文件的只读 Git diff，供客户端审阅器渲染；带 run_id 时优先基于
+    # 该 run 的改动前快照生成 diff，使已提交/已回滚的改动仍可回看，无法生成时回退 Git diff
     async def _change_diff_handler(self, params: dict[str, Any]) -> ChangeDiffResult:
         assert self._workspaces is not None
         cmd = ChangeDiffCommand.model_validate(params)
         try:
+            if cmd.run_id and cmd.path is not None:
+                manifest_path = self._find_change_manifest(cmd.run_id)
+                if manifest_path is not None:
+                    workspace = self._workspaces.get(cmd.workspace_id)
+                    snapshot_diff = manifest_file_diff(
+                        manifest_path, Path(workspace.path), cmd.path
+                    )
+                    if snapshot_diff is not None:
+                        return ChangeDiffResult(diff=snapshot_diff)
             diff = self._workspaces.diff(cmd.workspace_id, cmd.path)
         except ValueError as error:
             raise HandlerError(-32602, str(error)) from error
@@ -616,6 +629,18 @@ class CoreApp:
         except ValueError as error:
             raise HandlerError(-32602, str(error)) from error
         return GitCommitResult(commit_hash=commit_hash)
+
+    async def _git_history_handler(self, params: dict[str, Any]) -> GitHistoryResult:
+        assert self._workspaces is not None
+        cmd = GitHistoryCommand.model_validate(params)
+        try:
+            page = self._workspaces.history(cmd.workspace_id, cmd.limit + 1, cmd.skip)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return GitHistoryResult(
+            commits=page[:cmd.limit],
+            has_more=len(page) > cmd.limit,
+        )
 
     def _agent_change_summaries(
         self, workspace_id: str, run_id: str | None
@@ -1820,6 +1845,7 @@ class CoreApp:
         server.register("change.unstage", self._change_unstage_handler)
         server.register("change.discard", self._change_discard_handler)
         server.register("git.commit", self._git_commit_handler)
+        server.register("git.history", self._git_history_handler)
         server.register("event.subscribe", self._subscribe_handler)
         server.register("session.create", self._session_create_handler)
         server.register("session.list", self._session_list_handler)

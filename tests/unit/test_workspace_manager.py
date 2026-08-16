@@ -270,6 +270,39 @@ def test_workspace_git_stage_unstage_discard_and_commit(tmp_path: Path) -> None:
     assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?", "additions": 1, "deletions": 0}]
 
 
+def test_workspace_git_history_returns_head_and_parent_relationship(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    tracked = root / "tracked.txt"
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Sztu Test"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    tracked.write_text("first\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-m", "initial"], check=True, capture_output=True)
+    tracked.write_text("second\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "commit", "-am", "second"], check=True, capture_output=True)
+
+    manager = WorkspaceManager(tmp_path / "workspaces.json")
+    workspace = manager.open(str(root))
+    history = manager.history(workspace.id)
+    branch = subprocess.run(
+        ["git", "-C", str(root), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert [commit["subject"] for commit in history] == ["second", "initial"]
+    assert history[0]["parents"] == [history[1]["hash"]]
+    assert history[0]["is_head"] is True
+    assert history[1]["is_head"] is False
+    assert len(str(history[0]["short_hash"])) >= 7
+    assert history[0]["is_outgoing"] is False
+    assert {item["name"] for item in history[0]["refs"]} == {branch}
+    assert [commit["subject"] for commit in manager.history(workspace.id, 1, 1)] == ["initial"]
+
+
 def test_git_output_uses_replacement_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 

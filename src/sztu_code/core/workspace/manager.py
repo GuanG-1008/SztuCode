@@ -367,7 +367,9 @@ class WorkspaceManager:
         return commit_hash
 
     # 返回提交历史和父提交关系，供源代码管理图谱绘制提交节点与分支线。
-    def history(self, workspace_id: str, limit: int = 80) -> list[dict[str, object]]:
+    def history(
+        self, workspace_id: str, limit: int = 100, skip: int = 0
+    ) -> list[dict[str, object]]:
         workspace = self.get(workspace_id)
         root = Path(workspace.path)
         head_hash = self._git(root, ["rev-parse", "HEAD"]).strip()
@@ -404,7 +406,8 @@ class WorkspaceManager:
         raw = self._git(
             root,
             [
-                "log", "--all", "--topo-order", "--date=iso-strict", f"-n{limit}",
+                "log", "--all", "--topo-order", "--date=iso-strict",
+                f"--skip={skip}", f"-n{limit}",
                 "--pretty=format:%H%x00%h%x00%P%x00%an%x00%ad%x00%s%x1e",
             ],
         )
