@@ -18,6 +18,9 @@
 .turn-copy { display: grid; width: 27px; height: 27px; margin-left: auto; padding: 0; flex: 0 0 auto; place-items: center; color: #737a82; background: #f3f4f4; border: 1px solid #e8e9ea; border-radius: 5px; }
 .turn-copy:hover { color: #34393f; background: #e9ebec; }
 .turn-copy:focus-visible { outline: 2px solid #9299a1; outline-offset: 1px; }
+.turn-usage { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 11px 0 3px; color: #7d838a; font: 11px/1.4 "Cascadia Mono", Consolas, monospace; }
+.turn-usage span, .turn-usage b { padding: 4px 7px; background: #f3f4f4; border: 1px solid #e8e9ea; border-radius: 5px; font-weight: 400; }
+.turn-usage b { color: #4d535a; background: #eef1f2; }
 .timeline-step { position: relative; padding: 0 0 28px; }
 .timeline-step:last-child { padding-bottom: 8px; }
 .timeline-assistant { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
@@ -142,7 +145,7 @@
 .turn-tail-metrics span { white-space: nowrap; }
 .turn-tail-metrics b { color: #7c8288; font-weight: 500; }
 .turn-status { min-height: 23px; gap: 6px; margin-bottom: 5px; }
-.turn-status b { font-size: 13px; }
+.turn-status b { font-size: 14px; }
 .thinking-panel { margin-bottom: 3px; }
 .thinking-panel button { padding: 4px 0; font-size: 12px; }
 .thinking-panel__details { margin-bottom: 3px; padding: 2px 0 2px 14px; font-size: 11px; line-height: 1.5; }

@@ -8,9 +8,15 @@ from sztu_code.core.bus.commands import (
     PingCommand,
     PongResult,
     SessionPinCommand,
+    SessionSteerMessageCommand,
     SettingsUpdateCommand,
 )
-from sztu_code.core.bus.events import ContextInjectedEvent, CoreStartedEvent, LlmThinkingEvent
+from sztu_code.core.bus.events import (
+    ContextInjectedEvent,
+    CoreStartedEvent,
+    LlmThinkingEvent,
+    SessionMessageSteeredEvent,
+)
 
 
 # 功能：验证 PingCommand 序列化后再反序列化，client 和 type 字段完整保留
@@ -127,3 +133,22 @@ def test_context_injected_event_roundtrip_preserves_full_text() -> None:
     assert restored.type == "context.injected"
     assert restored.label == "上下文注入"
     assert restored.text == text
+
+
+# 功能：验证 steer 命令和事件携带同一会话、运行与追加内容
+# 设计：分别做命令和事件 JSON 往返，锁定桌面端提交与时间线投影依赖的协议字段
+def test_session_steer_wire_models_roundtrip() -> None:
+    command = SessionSteerMessageCommand(session_id="session-1", content="follow up")
+    restored_command = SessionSteerMessageCommand.model_validate_json(command.model_dump_json())
+    assert restored_command.type == "session.steer_message"
+    assert restored_command.content == "follow up"
+
+    event = SessionMessageSteeredEvent(
+        session_id="session-1",
+        run_id="run-1",
+        content="follow up",
+        ts="2026-08-16T00:00:00Z",
+    )
+    restored_event = SessionMessageSteeredEvent.model_validate_json(event.model_dump_json())
+    assert restored_event.type == "session.message_steered"
+    assert restored_event.run_id == "run-1"

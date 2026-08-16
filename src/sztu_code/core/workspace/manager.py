@@ -262,20 +262,41 @@ class WorkspaceManager:
         return matches
 
     # 返回 Git 工作区中未提交文件的状态摘要，供变更审阅面板展示
-    def list_changes(self, workspace_id: str) -> list[dict[str, str]]:
+    def list_changes(self, workspace_id: str) -> list[dict[str, object]]:
         workspace = self.get(workspace_id)
-        raw = self._git(Path(workspace.path), ["status", "--porcelain"])
+        raw = self._git(Path(workspace.path), ["status", "--porcelain=v1", "-z"])
         changes: list[dict[str, str]] = []
-        for line in raw.splitlines():
-            if len(line) < 4 or self._is_ignored_status_line(line):
+        records = raw.split("\0")
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if len(record) < 4:
                 continue
-            index_status, worktree_status, path = line[0], line[1], line[3:]
+            index_status, worktree_status, path = record[0], record[1], record[3:]
+            renamed_from: str | None = None
+            if index_status in {"R", "C"} or worktree_status in {"R", "C"}:
+                if index < len(records):
+                    renamed_from = records[index]
+                    index += 1
+            if self._is_ignored_change_path(path) or (
+                renamed_from is not None and self._is_ignored_change_path(renamed_from)
+            ):
+                continue
             changes.append({
                 "path": path,
                 "index_status": index_status,
                 "worktree_status": worktree_status,
             })
-        return changes
+        numstat = self.diff_numstat(workspace_id, [str(change["path"]) for change in changes])
+        return [
+            {
+                **change,
+                "additions": numstat.get(str(change["path"]), (0, 0))[0],
+                "deletions": numstat.get(str(change["path"]), (0, 0))[1],
+            }
+            for change in changes
+        ]
 
     # 返回工作区或指定文件的未提交 Git diff，不执行任何修改操作
     def diff(self, workspace_id: str, relative_path: str | None = None) -> str:
@@ -315,7 +336,104 @@ class WorkspaceManager:
         self._git(root, ["add", "--", *git_paths])
         return paths
 
-    # 统计指定文件的新增/删除行数；未跟踪/二进制文件把行数计为新增，删除文件取 git numstat
+    # 将指定文件移出暂存区，保留工作区内容
+    def unstage(self, workspace_id: str, paths: list[str]) -> list[str]:
+        workspace = self.get(workspace_id)
+        root = Path(workspace.path)
+        git_paths = [self._git_relative_path(workspace_id, path) for path in paths]
+        self._git(root, ["reset", "--", *git_paths])
+        return paths
+
+    # 丢弃已跟踪文件的暂存区与工作区改动；未跟踪文件不会被删除
+    def discard(self, workspace_id: str, paths: list[str]) -> list[str]:
+        workspace = self.get(workspace_id)
+        root = Path(workspace.path)
+        git_paths = [self._git_relative_path(workspace_id, path) for path in paths]
+        tracked = [path for path in git_paths if self._git(root, ["ls-files", "--error-unmatch", "--", path]).strip()]
+        if tracked:
+            self._git(root, ["restore", "--source=HEAD", "--staged", "--worktree", "--", *tracked])
+        return paths
+
+    # 创建 Git 提交并返回提交哈希
+    def commit(self, workspace_id: str, message: str) -> str:
+        if not message.strip():
+            raise ValueError("commit message must not be empty")
+        workspace = self.get(workspace_id)
+        root = Path(workspace.path)
+        result = self._git_result(root, ["commit", "-m", message])
+        if result[0] != 0:
+            raise ValueError(result[2].strip() or result[1].strip() or "git commit failed")
+        commit_hash = self._git(root, ["rev-parse", "--short", "HEAD"]).strip()
+        return commit_hash
+
+    # 返回提交历史和父提交关系，供源代码管理图谱绘制提交节点与分支线。
+    def history(
+        self, workspace_id: str, limit: int = 100, skip: int = 0
+    ) -> list[dict[str, object]]:
+        workspace = self.get(workspace_id)
+        root = Path(workspace.path)
+        head_hash = self._git(root, ["rev-parse", "HEAD"]).strip()
+        upstream = self._git(
+            root,
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        ).strip()
+        outgoing_hashes = set(
+            self._git(root, ["rev-list", f"{upstream}..HEAD"]).splitlines()
+        ) if upstream else set()
+        refs_by_hash: dict[str, list[dict[str, str]]] = {}
+        for line in self._git(root, ["show-ref", "--dereference"]).splitlines():
+            try:
+                object_hash, full_name = line.split(" ", 1)
+            except ValueError:
+                continue
+            peeled = full_name.endswith("^{}")
+            full_name = full_name.removesuffix("^{}")
+            if full_name.startswith("refs/heads/"):
+                kind, name = "head", full_name.removeprefix("refs/heads/")
+            elif full_name.startswith("refs/remotes/"):
+                kind, name = "remote", full_name.removeprefix("refs/remotes/")
+            elif full_name.startswith("refs/tags/"):
+                kind, name = "tag", full_name.removeprefix("refs/tags/")
+            else:
+                continue
+            item = {"name": name, "kind": kind}
+            if peeled:
+                for values in refs_by_hash.values():
+                    if item in values:
+                        values.remove(item)
+            if item not in refs_by_hash.setdefault(object_hash, []):
+                refs_by_hash[object_hash].append(item)
+        raw = self._git(
+            root,
+            [
+                "log", "--all", "--topo-order", "--date=iso-strict",
+                f"--skip={skip}", f"-n{limit}",
+                "--pretty=format:%H%x00%h%x00%P%x00%an%x00%ad%x00%s%x1e",
+            ],
+        )
+        commits: list[dict[str, object]] = []
+        for record in raw.split("\x1e"):
+            fields = record.strip("\x00\n").split("\x00")
+            if len(fields) != 6 or not fields[0]:
+                continue
+            commits.append({
+                "hash": fields[0],
+                "short_hash": fields[1],
+                "parents": fields[2].split() if fields[2] else [],
+                "author": fields[3],
+                "date": fields[4],
+                "subject": fields[5],
+                "is_head": fields[0] == head_hash,
+                "is_outgoing": fields[0] in outgoing_hashes,
+                "refs": refs_by_hash.get(fields[0], []),
+            })
+        return commits
+
+    def _git_relative_path(self, workspace_id: str, relative_path: str) -> str:
+        self._resolve_in_workspace(workspace_id, relative_path)
+        return relative_path.replace("\\", "/")
+
+    # 统计相对 HEAD 的新增/删除行数；未跟踪文件没有 HEAD 对照时按文本行计为新增。
     def diff_numstat(self, workspace_id: str, paths: list[str]) -> dict[str, tuple[int, int]]:
         workspace = self.get(workspace_id)
         root = Path(workspace.path)
@@ -325,21 +443,30 @@ class WorkspaceManager:
             if self._is_ignored_change_path(relative_path):
                 continue
             git_path = relative_path.replace("\\", "/")
-            raw = self._git(root, ["diff", "--numstat", "--", git_path]).strip()
+            # HEAD diff 同时包含暂存区和工作区改动，避免暂存后只统计当前文件总行数。
+            raw = self._git(root, ["diff", "HEAD", "--numstat", "--", git_path]).strip()
+            if not raw:
+                raw = self._git(root, ["diff", "--cached", "--numstat", "--", git_path]).strip()
+            if not raw:
+                raw = self._git(root, ["diff", "--numstat", "--", git_path]).strip()
             if raw:
-                parts = raw.split()
+                parts = raw.split(None, 2)
                 if len(parts) >= 2 and parts[0] != "-" and parts[1] != "-":
                     try:
                         stats[relative_path] = (int(parts[0]), int(parts[1]))
                         continue
                     except ValueError:
                         pass
+                # Git uses -/- for binary files; binary content has no line count.
+                if len(parts) >= 2 and parts[0] == "-" and parts[1] == "-":
+                    stats[relative_path] = (0, 0)
+                    continue
             file_path = root / relative_path
             if file_path.is_file():
                 try:
-                    line_count = len(
-                        file_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                    )
+                    data = file_path.read_bytes()
+                    _content, _encoding, binary = self._decode_text(data)
+                    line_count = 0 if binary else len(data.decode("utf-8", errors="replace").splitlines())
                 except OSError:
                     line_count = 0
                 stats[relative_path] = (line_count, 0)
@@ -459,6 +586,22 @@ class WorkspaceManager:
         except (OSError, subprocess.SubprocessError):
             return ""
         return result.stdout if result.returncode in success_codes else ""
+
+    @staticmethod
+    def _git_result(root: Path, args: list[str]) -> tuple[int, str, str]:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(root), *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=8,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return 1, "", str(error)
+        return result.returncode, result.stdout, result.stderr
 
     @staticmethod
     def _decode_text(data: bytes) -> tuple[str, str, bool]:

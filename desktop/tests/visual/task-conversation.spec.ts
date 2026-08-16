@@ -38,8 +38,9 @@ test("task conversation prioritizes outcome, evidence, and optional work records
   const turnTokenTotals = await page.locator(".turn-usage b").allTextContents();
   expect(turnTokenTotals).toHaveLength(2);
   expect(new Set(turnTokenTotals).size).toBe(turnTokenTotals.length);
-  await expect(page.getByText("命中缓存 9.3k", { exact: true })).toBeVisible();
-  const copySummary = page.getByRole("button", { name: "复制整段总结" }).first();
+  await expect(page.getByText("命中缓存 9.3K", { exact: true })).toBeVisible();
+  // 用类名定位：复制成功后按钮名称会变为“已复制总结”，按名称定位会滑到下一个按钮
+  const copySummary = page.locator(".turn-copy").first();
   await expect(copySummary).toBeVisible();
   await copySummary.click();
   await expect(copySummary).toHaveAttribute("aria-label", "已复制总结");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 from dataclasses import dataclass
@@ -223,3 +224,63 @@ def revert_manifest_changes(
             target.unlink()
         reverted.append(relative)
     return reverted, blocked
+
+
+def _looks_binary(data: bytes) -> bool:
+    """通过前 8KB 是否含 NUL 字节粗判二进制，避免对二进制快照生成无意义 diff。"""
+    return b"\x00" in data[:8192]
+
+
+def manifest_file_diff(
+    manifest_path: Path,
+    workspace_root: Path,
+    relative_path: str,
+) -> str | None:
+    """基于 run 前快照与当前磁盘内容生成 unified diff，供已提交/已回滚的改动回看。
+
+    该函数不依赖 Git：以 changes.json 记录的 before 快照为基线，与当前文件内容做行级
+    diff；无法为该路径生成（manifest 缺失、快照丢失、二进制等）时返回 None，调用方应
+    回退到常规 Git diff。
+    """
+    manifest = load_manifest(manifest_path)
+    if manifest is None or manifest.get("workspace_path") != str(workspace_root.resolve()):
+        return None
+    changes = manifest.get("changes")
+    if not isinstance(changes, list):
+        return None
+    record = next(
+        (
+            change
+            for change in changes
+            if isinstance(change, dict) and change.get("path") == relative_path
+        ),
+        None,
+    )
+    if record is None:
+        return None
+    before = b""
+    snapshot_name = record.get("before_snapshot")
+    if record.get("before_exists") and isinstance(snapshot_name, str):
+        snapshot_path = manifest_path.parent / "change-snapshots" / snapshot_name
+        try:
+            before = snapshot_path.read_bytes()
+        except OSError:
+            return None
+    current = b""
+    if record.get("after_exists"):
+        target = (workspace_root / relative_path).resolve()
+        try:
+            current = target.read_bytes()
+        except OSError:
+            return None
+    if _looks_binary(before) or _looks_binary(current):
+        return None
+    before_lines = before.decode("utf-8", errors="replace").splitlines()
+    current_lines = current.decode("utf-8", errors="replace").splitlines()
+    unified = difflib.unified_diff(
+        before_lines,
+        current_lines,
+        fromfile=relative_path,
+        tofile=relative_path,
+    )
+    return "\n".join(unified)

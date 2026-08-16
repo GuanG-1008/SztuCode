@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Braces, ChevronDown, FileClock, Info, ShieldAlert } from "@lucide/vue";
+import { Braces, ChevronDown, CornerUpLeft, FileClock, Info, ShieldAlert } from "@lucide/vue";
 import type { ContextInjectionEntry } from "./types";
 
 const props = defineProps<{ entry: ContextInjectionEntry }>();
@@ -8,6 +8,7 @@ const open = ref(false);
 
 const icon = computed(() => {
   if (props.entry.source === "intervention") return ShieldAlert;
+  if (props.entry.source === "steering") return CornerUpLeft;
   if (props.entry.source === "compaction") return FileClock;
   if (props.entry.source === "canvas") return Braces;
   return Info;
@@ -16,6 +17,7 @@ const tag = computed(() => ({
   compaction: "压缩",
   canvas: "进度",
   intervention: "干预",
+  steering: "追加",
   system: "注入",
 }[props.entry.source] ?? "上下文"));
 const body = computed(() => props.entry.text ?? props.entry.preview);

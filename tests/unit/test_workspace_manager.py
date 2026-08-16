@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -175,6 +176,25 @@ def test_workspace_diff_reads_staged_and_untracked_files(tmp_path: Path) -> None
     assert "print('new')" in untracked_diff
 
 
+# 功能：验证变更清单返回可直接用于加载 Diff 的特殊字符文件路径。
+# 策略：创建包含中文和空格的未跟踪文件，并把清单路径原样传给 diff。
+def test_workspace_change_paths_round_trip_to_diff(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    manager = WorkspaceManager(tmp_path / "workspaces.json")
+    workspace = manager.open(str(root))
+    import subprocess
+
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+    changed = root / "中文 file.py"
+    changed.write_text("print('details')\n", encoding="utf-8")
+
+    changes = manager.list_changes(workspace.id)
+
+    assert [change["path"] for change in changes] == ["中文 file.py"]
+    assert "print('details')" in manager.diff(workspace.id, changes[0]["path"])
+
+
 def test_workspace_changes_and_diff_ignore_cache_files(tmp_path: Path) -> None:
     root = tmp_path / "project"
     root.mkdir()
@@ -214,6 +234,73 @@ def test_workspace_changes_and_diff_ignore_cache_files(tmp_path: Path) -> None:
         workspace.id,
         ["src/cache.py", ".pytest_cache/state.json", "src/__pycache__/cache.cpython-313.pyc"],
     ) == {"src/cache.py": (1, 1)}
+
+
+def test_workspace_git_stage_unstage_discard_and_commit(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    tracked = root / "tracked.txt"
+    tracked.write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Sztu Test"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-m", "initial"], check=True, capture_output=True)
+
+    manager = WorkspaceManager(tmp_path / "workspaces.json")
+    workspace = manager.open(str(root))
+    tracked.write_text("after\n", encoding="utf-8")
+
+    assert manager.stage(workspace.id, ["tracked.txt"]) == ["tracked.txt"]
+    assert manager.list_changes(workspace.id)[0]["index_status"] == "M"
+    assert manager.unstage(workspace.id, ["tracked.txt"]) == ["tracked.txt"]
+    assert manager.list_changes(workspace.id)[0]["worktree_status"] == "M"
+
+    untracked = root / "new.txt"
+    untracked.write_text("keep me\n", encoding="utf-8")
+    assert manager.discard(workspace.id, ["tracked.txt", "new.txt"]) == ["tracked.txt", "new.txt"]
+    assert tracked.read_text(encoding="utf-8") == "before\n"
+    assert untracked.read_text(encoding="utf-8") == "keep me\n"
+    assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?", "additions": 1, "deletions": 0}]
+
+    tracked.write_text("committed\n", encoding="utf-8")
+    manager.stage(workspace.id, ["tracked.txt"])
+    commit_hash = manager.commit(workspace.id, "update tracked file")
+    assert len(commit_hash) == 7
+    assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?", "additions": 1, "deletions": 0}]
+
+
+def test_workspace_git_history_returns_head_and_parent_relationship(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    tracked = root / "tracked.txt"
+    subprocess.run(["git", "-C", str(root), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.name", "Sztu Test"], check=True)
+    subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.com"], check=True)
+    tracked.write_text("first\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-m", "initial"], check=True, capture_output=True)
+    tracked.write_text("second\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "commit", "-am", "second"], check=True, capture_output=True)
+
+    manager = WorkspaceManager(tmp_path / "workspaces.json")
+    workspace = manager.open(str(root))
+    history = manager.history(workspace.id)
+    branch = subprocess.run(
+        ["git", "-C", str(root), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert [commit["subject"] for commit in history] == ["second", "initial"]
+    assert history[0]["parents"] == [history[1]["hash"]]
+    assert history[0]["is_head"] is True
+    assert history[1]["is_head"] is False
+    assert len(str(history[0]["short_hash"])) >= 7
+    assert history[0]["is_outgoing"] is False
+    assert {item["name"] for item in history[0]["refs"]} == {branch}
+    assert [commit["subject"] for commit in manager.history(workspace.id, 1, 1)] == ["initial"]
 
 
 def test_git_output_uses_replacement_decoding(monkeypatch: pytest.MonkeyPatch) -> None:

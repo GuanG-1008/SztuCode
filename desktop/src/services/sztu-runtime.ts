@@ -63,6 +63,13 @@ export type ChangeSummary = {
   run_id?: string | null; agent_owned?: boolean; revertible?: boolean;
   additions?: number; deletions?: number;
 };
+export type GitRef = { name: string; kind: "head" | "remote" | "tag" };
+export type GitCommitEntry = {
+  hash: string; short_hash: string; parents: string[];
+  author: string; date: string; subject: string; is_head: boolean;
+  is_outgoing: boolean; refs: GitRef[];
+};
+export type GitHistoryPage = { commits: GitCommitEntry[]; has_more: boolean };
 export type Session = {
   session_id: string; title: string; status: string; updated_at: string;
   archived: boolean; pinned: boolean; workspace_id: string | null; latest_run_id?: string | null;
@@ -76,6 +83,15 @@ export type SessionHistory = {
   messages: unknown[];
   run_stats: Record<string, RunStats>;
   context_injections: ContextInjectionRecord[];
+};
+export type UserQuestionOption = { label: string; description?: string | null };
+export type UserQuestionItem = {
+  id: string; header?: string | null; question: string;
+  options: UserQuestionOption[]; multi_select: boolean;
+};
+export type UserQuestionAnswer = { id: string; selected: string[]; custom?: string };
+export type PendingUserQuestion = {
+  rpc_id: string; session_id: string; run_id: string; questions: UserQuestionItem[];
 };
 export type ApiFormat = "openai_chat_completions" | "anthropic_messages" | "openai_responses";
 export type ModelRequestSettings = {
@@ -114,10 +130,11 @@ export type ModelProfileInput = ModelRequestSettings & { id?: string; name: stri
 const client = new IpcClient();
 let subscribed = false;
 const PLUGIN_PROTOCOL_ERROR = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
+const GIT_PROTOCOL_ERROR = "本地服务版本过旧，不支持当前 Git 功能。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
 client.onDisconnect(() => { subscribed = false; });
 const EVENT_TOPICS = [
   "session.*", "run.*", "step.*", "llm.*", "tool.*", "permission.*",
-  "plan.*", "test.*", "change.*", "log.*", "subagent.*", "skill.*", "context.*", "denial.*",
+  "question.*", "plan.*", "test.*", "change.*", "log.*", "subagent.*", "skill.*", "context.*", "denial.*",
 ];
 
 async function waitForDaemon(): Promise<void> {
@@ -227,6 +244,11 @@ export async function sendPrompt(sessionId: string, message: string, images: Ima
   return String(result.run_id ?? "");
 }
 
+export async function steerPrompt(sessionId: string, message: string, images: ImageBlock[] = []): Promise<string> {
+  const result = await client.request("session.steer_message", { session_id: sessionId, content: message, images });
+  return String(result.run_id ?? "");
+}
+
 export async function renameSession(sessionId: string, title: string): Promise<Session> {
   const result = await client.request("session.rename", { session_id: sessionId, title });
   return result.session as Session;
@@ -323,8 +345,8 @@ export async function listChanges(workspaceId: string, runId?: string | null): P
   return (result.changes as ChangeSummary[] | undefined) ?? [];
 }
 
-export async function changeDiff(workspaceId: string, path?: string): Promise<string> {
-  const result = await client.request("change.diff", { workspace_id: workspaceId, path: path ?? null });
+export async function changeDiff(workspaceId: string, path?: string, runId?: string | null): Promise<string> {
+  const result = await client.request("change.diff", { workspace_id: workspaceId, path: path ?? null, run_id: runId ?? null });
   return String(result.diff ?? "");
 }
 
@@ -472,4 +494,55 @@ export async function testModelProfile(input: Omit<ModelProfileInput, "id" | "na
 
 export async function respondPermission(toolUseId: string, decision: "allow_once" | "always_allow" | "deny_once" | "always_deny"): Promise<void> {
   await client.request("permission.respond", { tool_use_id: toolUseId, decision });
+}
+
+export async function unstageChanges(workspaceId: string, paths: string[]): Promise<string[]> {
+  const result = await client.request("change.unstage", { workspace_id: workspaceId, paths });
+  return (result.unstaged_paths as string[] | undefined) ?? [];
+}
+
+export async function discardChanges(workspaceId: string, paths: string[]): Promise<string[]> {
+  const result = await client.request("change.discard", { workspace_id: workspaceId, paths, confirm: "discard" });
+  return (result.discarded_paths as string[] | undefined) ?? [];
+}
+
+export async function commitChanges(workspaceId: string, message: string): Promise<string> {
+  let result: Record<string, unknown>;
+  try {
+    result = await client.request("git.commit", { workspace_id: workspaceId, message });
+  } catch (reason) {
+    if (reason instanceof IpcRequestError && reason.code === -32601) throw new Error(GIT_PROTOCOL_ERROR);
+    throw reason;
+  }
+  return String(result.commit_hash ?? "");
+}
+
+export async function gitHistory(workspaceId: string, limit = 100, skip = 0): Promise<GitHistoryPage> {
+  let result: Record<string, unknown>;
+  try {
+    result = await client.request("git.history", { workspace_id: workspaceId, limit, skip });
+  } catch (reason) {
+    if (reason instanceof IpcRequestError && reason.code === -32601) throw new Error(GIT_PROTOCOL_ERROR);
+    throw reason;
+  }
+  return {
+    commits: (result.commits as GitCommitEntry[] | undefined) ?? [],
+    has_more: Boolean(result.has_more),
+  };
+}
+
+export async function listPendingUserQuestions(sessionId?: string | null): Promise<PendingUserQuestion[]> {
+  const result = await client.request("question.pending", { session_id: sessionId ?? null });
+  return (result.pending as PendingUserQuestion[] | undefined) ?? [];
+}
+
+export async function respondUserQuestion(
+  pending: Pick<PendingUserQuestion, "rpc_id" | "session_id">,
+  answers: UserQuestionAnswer[],
+): Promise<void> {
+  await client.request("question.respond", {
+    rpc_id: pending.rpc_id,
+    session_id: pending.session_id,
+    answers,
+  });
 }

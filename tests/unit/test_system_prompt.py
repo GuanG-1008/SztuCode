@@ -59,6 +59,23 @@ def test_discover_and_inject_claude_md(tmp_path: Path) -> None:
     assert "先写测试再实现" in prompt
 
 
+# 功能：验证 SztuCode 原生项目指令文件与 CLAUDE.md 使用同一套发现和注入机制
+# 设计：临时目录放置 SZTUCODE.md，分别检查发现结果和完整系统提示词
+def test_discover_and_inject_sztucode_md(tmp_path: Path) -> None:
+    (tmp_path / "SZTUCODE.md").write_text(
+        "SztuCode 项目规则：先运行测试\n", encoding="utf-8"
+    )
+
+    entries = discover_instruction_files(tmp_path)
+    assert len(entries) == 1
+    assert entries[0][0] == "SZTUCODE.md"
+    assert "先运行测试" in entries[0][1]
+
+    prompt = build_system_prompt(workspace_root=tmp_path)
+    assert "## SZTUCODE.md" in prompt
+    assert "SztuCode 项目规则：先运行测试" in prompt
+
+
 # 功能：验证超大指令文件被按预算截断
 # 设计：写入远超单文件上限的 CLAUDE.md，断言内容被截断且含 [truncated]
 def test_instruction_file_budget_truncation(tmp_path: Path) -> None:

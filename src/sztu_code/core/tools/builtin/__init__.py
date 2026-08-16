@@ -1,3 +1,4 @@
+from sztu_code.core.tools.builtin.ask_user_question import AskUserQuestionTool
 from sztu_code.core.tools.builtin.bash import BashTool
 from sztu_code.core.tools.builtin.edit_file import EditFileTool
 from sztu_code.core.tools.builtin.glob_search import GlobSearchTool
@@ -15,6 +16,7 @@ from sztu_code.core.tools.builtin.task_update import TaskUpdateTool
 from sztu_code.core.tools.builtin.write_file import WriteFileTool
 
 __all__ = [
+    "AskUserQuestionTool",
     "BashTool",
     "EditFileTool",
     "GlobSearchTool",

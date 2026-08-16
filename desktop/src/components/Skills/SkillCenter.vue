@@ -12,6 +12,7 @@ import {
   type MarketplacePluginSummary, type MarketplaceSummary, type PluginSummary,
   type SkillSummary,
 } from "../../services/sztu-runtime";
+import { BUILT_IN_SKILLS } from "../CommandPalette/slash-menu";
 
 const props = defineProps<{
   connected: boolean;
@@ -123,11 +124,24 @@ function pluginDescription(plugin: PluginSummary): string {
 
 async function refreshCatalog(): Promise<void> {
   if (!props.connected) {
-    skills.value = [];
+    // 离线时展示内建技能目录（与斜杠命令菜单的内建目录一致），连接本地服务后由运行时技能列表替换。
+    skills.value = BUILT_IN_SKILLS.map((skill, index) => ({
+      id: `builtin-${index}`,
+      name: skill.name,
+      display_name: skill.name,
+      description: skill.description,
+      short_description: skill.description,
+      source: "builtin",
+      scope: "system" as const,
+      path: "",
+      enabled: true,
+      allow_implicit_invocation: false,
+    }));
     plugins.value = [];
     marketplaces.value = [];
     catalogPlugins.value = [];
-    error.value = "尚未连接本地运行时";
+    pluginMarketplaceSupported.value = true;
+    error.value = "";
     return;
   }
   loading.value = true;
@@ -138,7 +152,24 @@ async function refreshCatalog(): Promise<void> {
       listPlugins(props.workspaceId),
       getPluginCatalog(props.workspaceId),
     ]);
-    skills.value = nextSkills;
+    // 内建技能始终在目录中（与斜杠命令菜单一致）；同名技能以运行时版本为准
+    const mergedSkills = new Map(nextSkills.map((skill) => [skill.name.toLocaleLowerCase(), skill]));
+    for (const skill of BUILT_IN_SKILLS) {
+      if (mergedSkills.has(skill.name.toLocaleLowerCase())) continue;
+      mergedSkills.set(skill.name.toLocaleLowerCase(), {
+        id: `builtin-${skill.name}`,
+        name: skill.name,
+        display_name: skill.name,
+        description: skill.description,
+        short_description: skill.description,
+        source: "builtin",
+        scope: "system" as const,
+        path: "",
+        enabled: true,
+        allow_implicit_invocation: false,
+      });
+    }
+    skills.value = [...mergedSkills.values()];
     plugins.value = nextPlugins;
     marketplaces.value = nextCatalog.marketplaces;
     catalogPlugins.value = nextCatalog.plugins;

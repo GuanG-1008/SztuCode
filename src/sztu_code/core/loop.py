@@ -63,6 +63,8 @@ def _can_run_read_only_batch_concurrently(
         tool = registry.get(tool_call.name)
         if tool is None:
             return None
+        if tool.is_interactive:
+            return None
         runtime_params = dict(tool_call.input)
         runtime_params.pop("description", None)
         runtime_params.pop(_PERMISSION_GRANT_KEY, None)
@@ -154,6 +156,7 @@ class AgentLoop:
         compact_cooldown_steps: int = 3,
         circuit_breaker_max_failures: int = 3,
         tool_max_concurrency: int = 4,
+        steering_queue: asyncio.Queue[dict[str, object]] | None = None,
     ) -> None:
         if tool_max_concurrency < 1:
             raise ValueError("tool_max_concurrency must be at least 1")
@@ -179,10 +182,26 @@ class AgentLoop:
         self._compact_cooldown_steps = compact_cooldown_steps
         self._circuit_breaker_max_failures = circuit_breaker_max_failures
         self._tool_max_concurrency = tool_max_concurrency
+        self._steering_queue = steering_queue
         # 压缩冷却期：两次压缩之间至少间隔 N 步；冷启动即可触发
         self._last_compact_step: int = -15
         # 熔断器日志去重：避免每步都刷屏
         self._circuit_breaker_logged: bool = False
+
+    # 把当前已到达的 steer 消息按 FIFO 追加到执行上下文，并返回注入条数
+    def _drain_steering(self, context: ExecutionContext) -> int:
+        if self._steering_queue is None:
+            return 0
+        drained = 0
+        while True:
+            try:
+                message = self._steering_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            context.messages.append(message)
+            self._steering_queue.task_done()
+            drained += 1
+        return drained
 
     # 驱动 plan→act→observe 循环直到上下文终止；CancelledError 向上传播
     async def run(self, context: ExecutionContext) -> None:
@@ -197,6 +216,7 @@ class AgentLoop:
             # the next model request instead of only at runner shutdown.
             if self._compactor is not None:
                 await self._compactor.wait_pending()
+            self._drain_steering(context)
             # 惰性记录 run 开始墙钟（runner/子 agent 都可能未设置）
             if context.started_at <= 0.0:
                 context.started_at = time.monotonic()
@@ -468,8 +488,19 @@ class AgentLoop:
             ):
                 pending_summaries = await self._wait_for_background(context)
 
+            steering_count = self._drain_steering(context)
+            steering_received = steering_count > 0
+            if steering_received and pending_summaries:
+                context.messages.insert(
+                    len(context.messages) - steering_count,
+                    {
+                        "role": "user",
+                        "content": "Background subagent results:\n" + "\n".join(pending_summaries),
+                    },
+                )
+
             # Termination check — end_turn wins over everything if it hits
-            if response.stop_reason == "end_turn":
+            if response.stop_reason == "end_turn" and not steering_received:
                 base = response.text or ""
                 if pending_summaries:
                     base += "\n\n" + "\n".join(pending_summaries)
@@ -629,6 +660,11 @@ class AgentLoop:
             await self._bus.publish(
                 StepFinishedEvent(run_id=context.run_id, step=context.step, ts=_now())
             )
+            if context.status == "success":
+                await asyncio.sleep(0)
+                if self._drain_steering(context):
+                    context.status = "running"
+                    context.reason = None
 
     # 收尾回合：max_steps 到达且预算未耗尽时，做一次无工具 LLM 调用，
     # 让模型总结进度/状态/剩余工作，写入 context.result 后再标记失败
