@@ -50,6 +50,25 @@ def test_harness_injects_only_prompts_required_by_runtime_context() -> None:
     ) == (auto_mode, auto_memory)
 
 
+# 功能：验证工具规则只按实际注册工具和危险任务意图注入
+# 设计：普通读文件任务只拿读取规则，删除任务额外拿谨慎执行规则，避免全量常驻
+def test_harness_injects_tool_and_care_rules_on_demand() -> None:
+    harness = PromptHarness()
+    read_rule = DEFAULT_PROMPT_CATALOG.get("tool-usage-policy", "read-files").content
+    care_rule = DEFAULT_PROMPT_CATALOG.get(
+        "executing-actions-with-care", "executing-actions-with-care"
+    ).content
+    entries = harness.runtime_entries(
+        PromptRuntimeContext(tool_names=frozenset({"read_file"}), task_text="读取配置")
+    )
+    assert read_rule in entries
+    assert care_rule not in entries
+    dangerous = harness.runtime_entries(
+        PromptRuntimeContext(tool_names=frozenset({"bash"}), task_text="删除旧分支并推送")
+    )
+    assert care_rule in dangerous
+
+
 # 功能：验证参考提示词永远不会被 Harness 自动注入
 # 设计：枚举全部 reference-only 元数据，并与所有运行状态的组合结果取交集
 def test_harness_never_injects_reference_only_prompts() -> None:

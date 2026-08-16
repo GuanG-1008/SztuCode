@@ -123,7 +123,7 @@ class SpawnAgentTool(BaseTool):
         budget: BudgetConfig | None = None,
         wrap_up_on_max_steps: bool = True,
         grace_step_on_max_steps: bool = True,
-        stuck_max_failures: int = 3,
+        stuck_max_failures: int = 2,
         stuck_max_total: int = 0,
         tool_max_concurrency: int = 4,
         max_depth: int = 2,
@@ -218,10 +218,6 @@ class SpawnAgentTool(BaseTool):
             if child_permission_manager is not None
             else "normal"
         )
-        system_prompt = DEFAULT_PROMPT_HARNESS.compose(
-            system_prompt,
-            PromptRuntimeContext(permission_mode=child_permission_mode),
-        )
         child_run_id = new_run_id()
         child_context = ExecutionContext(
             run_id=child_run_id,
@@ -263,6 +259,14 @@ class SpawnAgentTool(BaseTool):
             child_max_steps=child_max_steps,
             allowed_paths=p.allowed_paths,
             scope_audit=p.scope_audit if isinstance(p.scope_audit, ScopeAuditLog) else None,
+        )
+        child_context.system_prompt_override = DEFAULT_PROMPT_HARNESS.compose(
+            system_prompt,
+            PromptRuntimeContext(
+                permission_mode=child_permission_mode,
+                tool_names=frozenset(tool.name for tool in child_registry),
+                task_text=p.prompt,
+            ),
         )
         # 子 agent 使用独立的 DenialTracker，避免父子 agent 拒绝计数互相干扰
         from sztu_code.core.permissions.denial_tracker import DenialTracker

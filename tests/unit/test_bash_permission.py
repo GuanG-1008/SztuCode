@@ -67,6 +67,16 @@ def test_extract_cmd_name() -> None:
     assert _extract_cmd_name("VAR=val cmd") == "cmd"
 
 
+# 功能：验证 Bash 默认超时和 Git 专用默认超时
+# 设计：未显式设置时普通命令为 30 秒、Git 为 20 秒，显式 timeout 始终优先
+def test_bash_effective_timeout_defaults() -> None:
+    from sztu_code.core.tools.builtin.bash import BashParams, _effective_timeout
+
+    assert _effective_timeout(BashParams(command="python -V"), "python -V") == 30
+    assert _effective_timeout(BashParams(command="git status"), "git status") == 20
+    assert _effective_timeout(BashParams(command="git status", timeout=7), "git status") == 7
+
+
 # 功能：验证 _has_dangerous_paths 检测危险模式
 # 设计：绝对路径、~、..、$HOME、sudo 等应被检出
 def test_dangerous_path_detection() -> None:

@@ -6,15 +6,14 @@ from sztu_code.core.stuck_tracker import StuckLoopTracker, stuck_signature
 # ── record_failure / should_intervene ─────────────────────────────────────────
 
 # 功能：验证同一签名连续失败达到阈值时触发干预
-# 设计：同一签名失败 3 次，第三次 record_failure 返回 True，snapshot 记录 worst_count
+# 设计：同一签名失败 2 次，第二次 record_failure 返回 True，snapshot 记录 worst_count
 def test_record_failure_increments_consecutive() -> None:
     tracker = StuckLoopTracker()
     sig = ("bash", "pytest test_a")
     assert tracker.record_failure(sig) is False  # 1 次
-    assert tracker.record_failure(sig) is False  # 2 次
-    assert tracker.record_failure(sig) is True   # 3 次
+    assert tracker.record_failure(sig) is True   # 2 次
     snap = tracker.snapshot()
-    assert snap["worst_count"] == 3
+    assert snap["worst_count"] == 2
     assert snap["worst_signature"] == "bash:pytest test_a"
 
 
@@ -24,11 +23,9 @@ def test_record_success_resets_consecutive() -> None:
     tracker = StuckLoopTracker()
     sig = ("bash", "pytest test_a")
     tracker.record_failure(sig)
-    tracker.record_failure(sig)
     tracker.record_success(sig)
     assert tracker.record_failure(sig) is False  # 1 次
-    assert tracker.record_failure(sig) is False  # 2 次
-    assert tracker.record_failure(sig) is True   # 3 次
+    assert tracker.record_failure(sig) is True   # 2 次
 
 
 # 功能：max_failures=0 时关闭软干预
@@ -42,17 +39,15 @@ def test_max_failures_zero_disables() -> None:
 
 
 # 功能：不同签名的失败各自计数，不互相累计
-# 设计：cmdA 与 cmdB 各失败数次，未到 3 前不触发；cmdA 到 3 才触发
+# 设计：cmdA 与 cmdB 各失败一次未触发；cmdA 第二次才触发
 def test_distinct_signatures_not_merged() -> None:
     tracker = StuckLoopTracker()
     sig_a = ("bash", "pytest test_a")
     sig_b = ("bash", "pytest test_b")
     tracker.record_failure(sig_a)
-    tracker.record_failure(sig_a)
     tracker.record_failure(sig_b)
-    assert tracker.record_failure(sig_b) is False   # cmdB=2，未达阈值
-    assert tracker.should_intervene() is False      # a=2,b=2 都未达 3
-    assert tracker.record_failure(sig_a) is True    # cmdA=3 触发
+    assert tracker.should_intervene() is False
+    assert tracker.record_failure(sig_a) is True
 
 
 # ── reset_intervention / hard_stop ────────────────────────────────────────────
@@ -62,7 +57,6 @@ def test_distinct_signatures_not_merged() -> None:
 def test_reset_intervention_clears_cycle() -> None:
     tracker = StuckLoopTracker(max_total=1)
     sig = ("bash", "pytest test_a")
-    tracker.record_failure(sig)
     tracker.record_failure(sig)
     tracker.record_failure(sig)
     tracker.reset_intervention()
@@ -78,7 +72,6 @@ def test_max_total_zero_never_hard_stops() -> None:
     for _ in range(5):
         tracker.record_failure(sig)
         tracker.record_failure(sig)
-        tracker.record_failure(sig)
         tracker.reset_intervention()
     assert tracker.hard_stop_reached() is False
 
@@ -88,7 +81,6 @@ def test_max_total_zero_never_hard_stops() -> None:
 def test_intervention_message_names_signature() -> None:
     tracker = StuckLoopTracker()
     sig = ("read_file", "src/foo.py")
-    tracker.record_failure(sig)
     tracker.record_failure(sig)
     tracker.record_failure(sig)
     msg = tracker.intervention_message()

@@ -339,6 +339,18 @@ def test_compaction_threshold_default_changed(tmp_path: Path, monkeypatch: pytes
     assert cfg.compaction.auto_threshold == 0.70
 
 
+# 功能：验证默认失败干预为两次且旧压缩阈值字段关闭
+# 设计：简单任务两次同类失败即注入换方案提示，Token/步数字段只保留兼容
+def test_execution_defaults_are_short_task_friendly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SZTU_STUCK_MAX_FAILURES", raising=False)
+    monkeypatch.delenv("SZTU_COMPACT_MIN_TOKENS", raising=False)
+    monkeypatch.delenv("SZTU_COMPACT_MIN_STEPS", raising=False)
+    cfg = get_config()
+    assert cfg.agent.stuck_max_failures == 2
+    assert cfg.compaction.auto_compact_min_tokens == 0
+    assert cfg.compaction.auto_compact_min_steps == 0
+
+
 # 功能：验证 agent 默认 max_steps 从 0 改为 100
 # 设计：默认提供步数硬止损，防止无限步数
 def test_agent_max_steps_default_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

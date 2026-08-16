@@ -68,7 +68,7 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | `SZTU_TOOL_MAX_CONCURRENCY` | `4` | 同轮全部明确只读时的最大工具并发数；`1` 表示串行 |
 | `SZTU_PERMISSION_MODE` | `normal` | `normal`、`plan`、`accept_edits`、`auto` |
 | `SZTU_PERMISSION_TIMEOUT_S` | `60` | 审批超时秒数；`0` 表示不超时 |
-| `SZTU_COMPACT_THRESHOLD` | `0` | 自动压缩阈值，范围 0–1；`0` 关闭 |
+| `SZTU_COMPACT_THRESHOLD` | `0.70` | 自动压缩仅在上下文占用率达到阈值时触发；范围 0–1，`0` 关闭 |
 | `SZTU_COMPACT_TOOL_LIMIT` | `8000` | 工具结果截断阈值 |
 | `SZTU_COMPACT_TOOL_KEEP` | `4000` | 截断后保留字符数 |
 | `SZTU_TRACE_ENABLED` | `true` | 是否记录 trace |
@@ -79,6 +79,8 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | `SZTU_WORKFLOW_MAX_CONCURRENCY` | `4` | 工作流最大并行角色任务数 |
 | `SZTU_WORKFLOW_MAX_DEPTH` | `2` | 工作流与 Subagent 最大嵌套深度 |
 | `SZTU_WORKFLOW_MAX_RETRIES` | `1` | 单个角色任务最大重试次数 |
+
+自动压缩不会因为 turn 数、累计 Token 或步数单独触发。Bash 工具只有一层子进程超时：普通命令默认 30 秒，未显式指定时 Git 命令默认 20 秒；超时结果不会由通用工具层自动重试。通用瞬时错误最多重试一次。简单任务同一工具调用连续失败两次后会要求 Agent 更换方案；如果仍无法推进，再由现有硬止损结束运行。
 
 ## TOML 示例
 
@@ -96,7 +98,7 @@ format = "text"
 max_steps = 0          # 0 = 不限步数（预算驱动）；到达上限时标 interrupted 而非 failed，可续跑
 wrap_up_on_max_steps = true
 grace_step_on_max_steps = true
-stuck_max_failures = 3
+stuck_max_failures = 2
 stuck_max_total = 0
 tool_max_concurrency = 4  # 仅当整批工具均明确为 read_only 且无需审批时生效
 
@@ -126,7 +128,7 @@ mode = "normal"
 timeout_s = 60
 
 [compaction]
-auto_threshold = 0.85
+auto_threshold = 0.70
 tool_result_limit = 8000
 tool_result_keep = 4000
 ```

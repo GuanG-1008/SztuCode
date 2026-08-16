@@ -102,26 +102,26 @@ async def test_rate_limited_retries_and_succeeds(monkeypatch: pytest.MonkeyPatch
     assert failed_events[0].error_class == "rate_limited"  # type: ignore[attr-defined]
 
 
-# 功能：验证 runtime_error 超过 2 次重试后最终返回失败，attempt 字段递增
-# 设计：_AlwaysFails 三次都失败；断言最终结果 is_error + 收到 3 个 failed 事件，attempt 为 1/2/3
+# 功能：验证 runtime_error 只重试一次后最终返回失败
+# 设计：_AlwaysFails 两次都失败；断言最终结果 is_error + 收到 2 个 failed 事件
 async def test_runtime_error_exhausts_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     result, events = await _run(_AlwaysFails("runtime_error"), monkeypatch=monkeypatch)
     assert result.is_error
     assert result.error_type == "runtime_error"
     failed_events = [e for e in events if e.type == "tool.call_failed"]  # type: ignore[attr-defined]
-    assert len(failed_events) == 3
+    assert len(failed_events) == 2
     attempts = [e.attempt for e in failed_events]  # type: ignore[attr-defined]
-    assert attempts == [1, 2, 3]
+    assert attempts == [1, 2]
 
 
-# 功能：验证 rate_limited 耗尽重试后最终返回失败，error_class 为 rate_limited
-# 设计：_RateLimitedNTimes(10) 始终抛异常，断言 3 个 failed 事件且 error_class 统一
+# 功能：验证 rate_limited 只重试一次后最终返回失败
+# 设计：_RateLimitedNTimes(10) 始终抛异常，断言 2 个 failed 事件且 error_class 统一
 async def test_rate_limited_exhausts_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     result, events = await _run(_RateLimitedNTimes(10), monkeypatch=monkeypatch)
     assert result.is_error
     assert result.error_type == "rate_limited"
     failed_events = [e for e in events if e.type == "tool.call_failed"]  # type: ignore[attr-defined]
-    assert len(failed_events) == 3
+    assert len(failed_events) == 2
     assert all(e.error_class == "rate_limited" for e in failed_events)  # type: ignore[attr-defined]
 
 
@@ -136,8 +136,8 @@ async def test_schema_error_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     assert failed_events[0].attempt == 1  # type: ignore[attr-defined]
 
 
-# 功能：验证 timeout 触发重试（瞬时超时值得再试）
-# 设计：SlowTool 配合极短超时，断言每次超时都重试并发出 failed 事件，最终失败
+# 功能：验证 timeout 不触发通用重试
+# 设计：SlowTool 配合极短超时，断言只执行一次并发出一个 failed 事件
 async def test_timeout_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
@@ -165,15 +165,14 @@ async def test_timeout_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.is_error
     assert result.error_type == "timeout"
     failed_events = [e for e in events if e.type == "tool.call_failed"]  # type: ignore[attr-defined]
-    # 初始 1 次 + _MAX_RETRIES 次重试，每次都超时并发出 failed 事件
-    assert len(failed_events) == inv_mod._MAX_RETRIES + 1
+    assert len(failed_events) == 1
 
 
 # 功能：验证成功后的 tool.call_failed 事件中 error_class 字段存在且取值合法
 # 设计：_FailNTimes(2) 两次失败后成功，检查所有 failed 事件的 error_class 均在合法枚举内
 async def test_failed_event_has_valid_error_class(monkeypatch: pytest.MonkeyPatch) -> None:
     valid_classes = {"runtime_error", "timeout", "schema_error", "permission_denied", "rate_limited"}
-    result, events = await _run(_FailNTimes(2), monkeypatch=monkeypatch)
+    result, events = await _run(_FailNTimes(1), monkeypatch=monkeypatch)
     assert not result.is_error
     for e in events:
         if e.type == "tool.call_failed":  # type: ignore[attr-defined]

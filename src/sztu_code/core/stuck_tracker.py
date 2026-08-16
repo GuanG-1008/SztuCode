@@ -26,7 +26,7 @@ def stuck_signature(tool_call: ToolCallBlock) -> tuple[str, str]:
 # 追踪"同一操作反复失败"的卡死：连续同签名失败达阈值触发软干预，累计干预达阈值可硬停
 class StuckLoopTracker:
     # 初始化卡死追踪器，可覆盖连续失败阈值与硬停阈值
-    def __init__(self, max_failures: int = 3, max_total: int = 0) -> None:
+    def __init__(self, max_failures: int = 2, max_total: int = 0) -> None:
         self._max_failures = max_failures
         self._max_total = max_total
         self._consecutive: dict[tuple[str, str], int] = {}

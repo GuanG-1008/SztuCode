@@ -29,12 +29,12 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 # 功能：验证静态基础段同时包含已索引章节和尚未迁移的后续章节
-# 设计：直接拼 build_static_base，断言第一、二章及现有章节的关键内容均存在
+# 设计：直接拼 build_static_base，断言常驻身份、安全和最小任务约束存在，详细规则不常驻
 def test_static_base_contains_indexed_main_and_existing_sections() -> None:
     base = build_static_base()
     assert "interactive agent" in base
     assert "do not propose changes to code you haven't read" in base
-    assert "# Executing actions with care" in base
+    assert "# Executing actions with care" not in base
     assert "user-selected permission mode" in base
     assert "authorized security testing" in base
 
@@ -64,7 +64,7 @@ def test_doing_tasks_sections_are_loaded_once_in_index_order() -> None:
     assert "using SztuCode" in sections[10]
     assert "github.com/rojim666/SztuCode/issues" in sections[10]
     assert sections[-1].startswith("If your approach is blocked")
-    assert all(base.count(section) == 1 for section in sections)
+    assert sum(section in base for section in sections) == 4
 
 
 # 功能：验证第三章谨慎执行操作由完整原子提示词加载且仅注入一次
@@ -79,7 +79,7 @@ def test_executing_actions_with_care_section_is_loaded_once() -> None:
     assert "A user approving an action (like a\ngit push) once does NOT mean" in section
     assert "Destructive operations: deleting files/branches" in section
     assert "do not use destructive actions as a shortcut" in section
-    assert base.count(section) == 1
+    assert base.count(section) == 0
 
 
 # 功能：验证第四章输出效率由完整原子提示词加载且仅注入一次
@@ -109,9 +109,9 @@ def test_tone_and_style_sections_are_loaded_once_in_index_order() -> None:
     assert sections[1].startswith("Only use emojis if the user explicitly requests it")
     assert "Do not use a colon before tool calls" in sections[1]
     assert sections[2] == "Your responses should be short and concise."
-    assert base.count(sections[0]) == 1
-    assert base.count(sections[1]) == 1
-    assert f"{sections[1]}\n\n{sections[2]}\n\n# Tool usage policy" in base
+    assert base.count(sections[0]) == 0
+    assert base.count(sections[1]) == 0
+    assert sections[2] in base
 
 
 # 功能：验证第六章工具使用策略按顺序加载并使用 SztuCode 的真实工具名
@@ -139,7 +139,7 @@ def test_tool_usage_policy_sections_are_loaded_once_in_index_order() -> None:
     )
     assert "Git Bash rather than cmd" in sections[9]
     assert "Do NOT install packages" in sections[9]
-    assert all(base.count(section) == 1 for section in sections)
+    assert all(base.count(section) == 0 for section in sections)
 
 
 # 功能：验证主系统提示词的章节分组顺序稳定
@@ -150,17 +150,9 @@ def test_static_prompt_group_order() -> None:
     assert base.index("You are SztuCode") < base.index(
         "The user will primarily request"
     )
-    assert base.index("The user will primarily request") < base.index(
-        "# Executing actions with care"
-    )
-    assert base.index("# Executing actions with care") < base.index("# Output efficiency")
-    assert base.index("# Output efficiency") < base.index(
-        "When referencing specific functions"
-    )
-    assert base.index("When referencing specific functions") < base.index(
-        "# Tool usage policy"
-    )
-    assert base.index("# Tool usage policy") < base.index("# Work protocol")
+    assert base.index("The user will primarily request") < base.index("# Output efficiency")
+    assert base.index("# Output efficiency") < base.index("Your responses should be short")
+    assert base.index("Your responses should be short") < base.index("# Work protocol")
 
 
 # 功能：验证索引中的非法路径不会越过提示词分组目录

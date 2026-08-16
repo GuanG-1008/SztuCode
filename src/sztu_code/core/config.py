@@ -19,7 +19,7 @@ _DEFAULT_CLIENT_SETTINGS_PATH = "~/.sztu/client-settings.json"
 _DEFAULT_MAX_STEPS = 100  # 硬止损；SWE-bench 极少需要 >100 步；显式设为 0 可恢复不限
 _DEFAULT_WRAP_UP_ON_MAX_STEPS = True
 _DEFAULT_GRACE_STEP_ON_MAX_STEPS = True
-_DEFAULT_STUCK_MAX_FAILURES = 3
+_DEFAULT_STUCK_MAX_FAILURES = 2
 _DEFAULT_STUCK_MAX_TOTAL = 0
 _DEFAULT_TOOL_MAX_CONCURRENCY = 4
 _DEFAULT_TRACE_FILE = "~/.sztu/traces/daemon.jsonl"
@@ -134,10 +134,9 @@ class CompactionConfig:
     # context_pct 触发压缩的阈值；0 表示禁用百分比触发
     # 70% × 200K 窗口 = 140K 上下文才触发，避免过早失忆
     auto_threshold: float = 0.70
-    # 累计 input tokens 超过此值触发压缩（绝对值触发，不受窗口大小影响）；0=禁用
-    # 全量替换压缩架构下设为 300K，仅在上下文真正膨胀时才压缩
-    auto_compact_min_tokens: int = 300_000
-    # 步数触发压缩（全量替换架构下默认关闭，步数触发容易在"刚理解完代码"的时刻失忆）
+    # 已废弃：自动压缩现在仅由上下文占用率触发，字段保留用于旧配置兼容
+    auto_compact_min_tokens: int = 0
+    # 已废弃：自动压缩现在仅由上下文占用率触发，字段保留用于旧配置兼容
     auto_compact_min_steps: int = 0
     tool_result_limit: int = 8_000
     tool_result_keep: int = 4_000

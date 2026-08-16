@@ -32,10 +32,10 @@ if TYPE_CHECKING:
     from sztu_code.core.permissions.manager import PermissionManager
 
 _DEFAULT_TIMEOUT: float = 120.0
-_MAX_RETRIES: int = 2
+_MAX_RETRIES: int = 1
 _RETRY_BASE_S: float = 2.0  # backoff base; tests can monkeypatch to 0
-# 可重试错误：瞬时失败（超时/限流/偶发运行时错误）值得再试，其余直接失败
-_RETRYABLE: frozenset[str] = frozenset({"runtime_error", "rate_limited", "timeout"})
+# 超时操作可能仍在运行，绝不自动重试；仅重试明确可恢复的瞬时错误
+_RETRYABLE: frozenset[str] = frozenset({"runtime_error", "rate_limited"})
 
 
 def _now() -> str:
@@ -269,7 +269,7 @@ async def invoke_tool(
         error_message: str | None = None
 
         try:
-            if tool.allows_indefinite_wait:
+            if tool.allows_indefinite_wait or tool.manages_timeout:
                 result = await tool.invoke(runtime_params)
             else:
                 result = await asyncio.wait_for(

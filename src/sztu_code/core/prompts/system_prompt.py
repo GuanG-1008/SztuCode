@@ -62,16 +62,17 @@ WORK_PROTOCOL = (
 _LEGACY_STATIC_SECTIONS = (WORK_PROTOCOL,)
 
 
-# 第一至六章已由 Markdown 索引管理；后续章节将在逐步复刻时迁入相同机制
+# 常驻基座只保留身份、安全和最小执行约束；详细规则由 Harness 按场景注入
 def _static_sections() -> tuple[str, ...]:
     return (
         *load_prompt_sections("main"),
         DEFAULT_PROMPT_CATALOG.get("safety-prompts", "malicious-code-protection").content,
-        *load_prompt_sections("doing-tasks"),
-        *load_prompt_sections("executing-actions-with-care"),
+        DEFAULT_PROMPT_CATALOG.get("doing-tasks", "software-engineering-focus").content,
+        DEFAULT_PROMPT_CATALOG.get("doing-tasks", "read-before-modifying").content,
+        DEFAULT_PROMPT_CATALOG.get("doing-tasks", "security").content,
+        DEFAULT_PROMPT_CATALOG.get("doing-tasks", "blocked-approach").content,
         *load_prompt_sections("output-efficiency"),
-        *load_prompt_sections("tone-and-style"),
-        *load_prompt_sections("tool-usage-policy"),
+        DEFAULT_PROMPT_CATALOG.get("tone-and-style", "concise-output-short").content,
         *_LEGACY_STATIC_SECTIONS,
     )
 
