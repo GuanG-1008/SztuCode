@@ -382,7 +382,8 @@ class AgentRunner:
                     compact_cooldown_steps=self._config.compaction.compact_cooldown_steps,
                     circuit_breaker_max_failures=self._config.compaction.circuit_breaker_max_failures,
                     tool_max_concurrency=self._config.agent.tool_max_concurrency,
-                    steering_queue=steering_queue,
+                    pricing_provider=self._config.llm.provider,
+                    pricing_model=self._config.llm.default_model,
                 )
                 await loop.run(context)
             except asyncio.CancelledError:

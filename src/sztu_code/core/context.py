@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sztu_code.core.compact.canvas import TaskCanvas
+    from sztu_code.core.pricing import CostEstimate, PricingCatalog, UnknownPricingPolicy
 
 
 # 终止原因枚举 — 仿 Claude Code 的 7 种退出条件
@@ -201,7 +202,7 @@ class ExecutionContext:
     def is_at_blocking_limit(self, context_pct: float) -> bool:
         return context_pct > 0.98
 
-    # 检查 USD 预算是否已耗尽
+    # 检查 USD 预算是否已耗尽（旧版，固定价格，已弃用）
     def is_over_budget(self, cost_per_input: float = 3.0, cost_per_output: float = 15.0) -> bool:
         if self.max_budget_usd <= 0:
             return False
@@ -210,3 +211,63 @@ class ExecutionContext:
             + self.total_output_tokens / 1_000_000 * cost_per_output
         )
         return cost >= self.max_budget_usd
+
+    # 计算当前累积 usage 的成本估算
+    def estimate_cost(
+        self,
+        provider: str,
+        model: str,
+        catalog: PricingCatalog | None = None,
+    ) -> CostEstimate:
+        from sztu_code.core.pricing import (
+            TokenUsage,
+            calculate_cost,
+            get_builtin_catalog,
+        )
+
+        if catalog is None:
+            catalog = get_builtin_catalog()
+
+        usage = TokenUsage(
+            input_tokens=self.total_input_tokens,
+            output_tokens=self.total_output_tokens,
+            cache_read_input_tokens=self.total_cache_read_input_tokens,
+            cache_creation_input_tokens=self.total_cache_creation_input_tokens,
+        )
+
+        return calculate_cost(provider, model, usage, catalog)
+
+    # 检查是否超出 USD 预算（使用 pricing catalog）
+    def is_over_budget_with_pricing(
+        self,
+        provider: str = "",
+        model: str = "",
+        pricing_catalog: PricingCatalog | None = None,
+        unknown_policy: UnknownPricingPolicy | None = None,
+    ) -> bool:
+        from sztu_code.core.pricing import UnknownPricingPolicy
+
+        if self.max_budget_usd <= 0:
+            return False
+
+        # 缺少模型身份时不能静默回退旧固定价格
+        if not provider or not model:
+            if unknown_policy is None:
+                unknown_policy = UnknownPricingPolicy.FAIL_OPEN
+            return unknown_policy == UnknownPricingPolicy.FAIL_CLOSED
+
+        if unknown_policy is None:
+            unknown_policy = UnknownPricingPolicy.FAIL_OPEN
+
+        estimate = self.estimate_cost(provider, model, pricing_catalog)
+
+        if estimate.status in {"unknown", "incomplete"}:
+            # 未知或不完整定价：根据策略决定
+            return unknown_policy == UnknownPricingPolicy.FAIL_CLOSED
+
+        if estimate.amount is None:
+            # 无法计算（极端情况），保守失败
+            return unknown_policy == UnknownPricingPolicy.FAIL_CLOSED
+
+        # 比较 Decimal 和 float 时需要转换
+        return float(estimate.amount) >= self.max_budget_usd

@@ -18,6 +18,7 @@ from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.base import LLMProvider
 from sztu_code.core.llm.types import ToolCallBlock
 from sztu_code.core.permissions.policy import PermissionDecision
+from sztu_code.core.pricing import PricingCatalog, UnknownPricingPolicy
 from sztu_code.core.stuck_tracker import stuck_signature
 from sztu_code.core.tools.base import (
     _PERMISSION_GRANT_KEY,
@@ -50,6 +51,34 @@ _DEFAULT_SYSTEM_PROMPT = (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# 解开 Trace 等 provider wrapper，拿到底层模型提供者
+def _unwrap_provider(provider: LLMProvider) -> object:
+    current: object = provider
+    seen: set[int] = set()
+    while hasattr(current, "_inner") and id(current) not in seen:
+        seen.add(id(current))
+        current = getattr(current, "_inner")
+    return current
+
+
+# 从 provider 类型推断 pricing catalog 使用的 provider key
+def _infer_pricing_provider(provider: LLMProvider) -> str:
+    inner = _unwrap_provider(provider)
+    name = type(inner).__name__.lower()
+    if "anthropic" in name:
+        return "anthropic"
+    if "openai" in name:
+        return "openai"
+    return ""
+
+
+# 从 provider 实例推断当前模型 ID
+def _infer_pricing_model(provider: LLMProvider) -> str:
+    inner = _unwrap_provider(provider)
+    value = getattr(inner, "_model", "")
+    return value if isinstance(value, str) else ""
 
 
 # 检查一批调用是否均为无需审批的显式只读工具，未知或分类异常一律保守降级
@@ -156,7 +185,10 @@ class AgentLoop:
         compact_cooldown_steps: int = 3,
         circuit_breaker_max_failures: int = 3,
         tool_max_concurrency: int = 4,
-        steering_queue: asyncio.Queue[dict[str, object]] | None = None,
+        pricing_provider: str = "",
+        pricing_model: str = "",
+        pricing_catalog: PricingCatalog | None = None,
+        unknown_pricing_policy: UnknownPricingPolicy = UnknownPricingPolicy.FAIL_OPEN,
     ) -> None:
         if tool_max_concurrency < 1:
             raise ValueError("tool_max_concurrency must be at least 1")
@@ -182,7 +214,10 @@ class AgentLoop:
         self._compact_cooldown_steps = compact_cooldown_steps
         self._circuit_breaker_max_failures = circuit_breaker_max_failures
         self._tool_max_concurrency = tool_max_concurrency
-        self._steering_queue = steering_queue
+        self._pricing_provider = pricing_provider or _infer_pricing_provider(provider)
+        self._pricing_model = pricing_model or _infer_pricing_model(provider)
+        self._pricing_catalog = pricing_catalog
+        self._unknown_pricing_policy = unknown_pricing_policy
         # 压缩冷却期：两次压缩之间至少间隔 N 步；冷启动即可触发
         self._last_compact_step: int = -15
         # 熔断器日志去重：避免每步都刷屏
@@ -528,7 +563,12 @@ class AgentLoop:
                 context.mark_interrupted(TerminationReason.BLOCKING_LIMIT)
 
             # max_budget_usd: USD 成本上限
-            elif context.is_over_budget():
+            elif context.is_over_budget_with_pricing(
+                provider=self._pricing_provider,
+                model=self._pricing_model,
+                pricing_catalog=self._pricing_catalog,
+                unknown_policy=self._unknown_pricing_policy,
+            ):
                 context.mark_interrupted(TerminationReason.MAX_BUDGET_USD)
 
             # repeated_error: 同一工具同类错误连续 N 次
