@@ -109,7 +109,7 @@ async function revertAll() {
   }
 }
 
-// 进入完整 Diff 审核页
+// 进入统一的 Git 源代码管理页
 function openReview() {
   if (!props.workspaceId || !props.runId || !resolvedPaths.value.length) return;
   emit("review", { workspaceId: props.workspaceId, runId: props.runId, paths: resolvedPaths.value });
@@ -141,7 +141,7 @@ function openReview() {
           :disabled="!changes.length"
           @click.stop="openReview"
         >
-          <Search :size="12" />完整 Diff
+          <Search :size="12" />查看变更
         </button>
       </span>
       <ChevronUp v-if="open" class="bottom-diff-preview__chevron" :size="14" />

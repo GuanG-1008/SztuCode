@@ -33,6 +33,12 @@ from sztu_code.core.bus.commands import (
     ChangeStageCommand,
     ChangeStageResult,
     ChangeSummary,
+    ChangeUnstageCommand,
+    ChangeUnstageResult,
+    ChangeDiscardCommand,
+    ChangeDiscardResult,
+    GitCommitCommand,
+    GitCommitResult,
     EventSubscribeCommand,
     EventSubscribeResult,
     FileReadCommand,
@@ -541,6 +547,16 @@ class CoreApp:
             return ChangeListResult(changes=agent_changes)
         owned = {change.path: change for change in agent_changes}
         summaries = [ChangeSummary.model_validate(change) for change in changes]
+        numstat = self._workspaces.diff_numstat(
+            cmd.workspace_id, [change.path for change in summaries]
+        )
+        summaries = [
+            change.model_copy(update={
+                "additions": numstat.get(change.path, (0, 0))[0],
+                "deletions": numstat.get(change.path, (0, 0))[1],
+            })
+            for change in summaries
+        ]
         return ChangeListResult(
             changes=[owned.get(change.path, change) for change in summaries]
         )
@@ -579,6 +595,33 @@ class CoreApp:
         except ValueError as error:
             raise HandlerError(-32602, str(error)) from error
         return ChangeStageResult(staged_paths=staged)
+
+    async def _change_unstage_handler(self, params: dict[str, Any]) -> ChangeUnstageResult:
+        assert self._workspaces is not None
+        cmd = ChangeUnstageCommand.model_validate(params)
+        try:
+            paths = self._workspaces.unstage(cmd.workspace_id, cmd.paths)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return ChangeUnstageResult(unstaged_paths=paths)
+
+    async def _change_discard_handler(self, params: dict[str, Any]) -> ChangeDiscardResult:
+        assert self._workspaces is not None
+        cmd = ChangeDiscardCommand.model_validate(params)
+        try:
+            paths = self._workspaces.discard(cmd.workspace_id, cmd.paths)
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return ChangeDiscardResult(discarded_paths=paths)
+
+    async def _git_commit_handler(self, params: dict[str, Any]) -> GitCommitResult:
+        assert self._workspaces is not None
+        cmd = GitCommitCommand.model_validate(params)
+        try:
+            commit_hash = self._workspaces.commit(cmd.workspace_id, cmd.message.strip())
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return GitCommitResult(commit_hash=commit_hash)
 
     def _agent_change_summaries(
         self, workspace_id: str, run_id: str | None
@@ -1780,6 +1823,9 @@ class CoreApp:
         server.register("change.diff", self._change_diff_handler)
         server.register("change.revert", self._change_revert_handler)
         server.register("change.stage", self._change_stage_handler)
+        server.register("change.unstage", self._change_unstage_handler)
+        server.register("change.discard", self._change_discard_handler)
+        server.register("git.commit", self._git_commit_handler)
         server.register("event.subscribe", self._subscribe_handler)
         server.register("session.create", self._session_create_handler)
         server.register("session.list", self._session_list_handler)

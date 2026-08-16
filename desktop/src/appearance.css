@@ -141,7 +141,6 @@
   .project-popover,
   .launcher-popover,
   .bottom-diff-preview,
-  .bottom-diff-preview__bar,
   .simple-page,
   .session-board article,
   .permission-confirm,
@@ -779,6 +778,12 @@
   background: color-mix(in srgb, var(--surface) var(--inspector-surface-opacity), transparent) !important;
 }
 
+:root:not([data-wallpaper="none"]) .sandbox-workspace {
+  background: color-mix(in srgb, var(--surface) var(--inspector-surface-opacity), transparent) !important;
+  backdrop-filter: blur(12px) saturate(108%);
+  -webkit-backdrop-filter: blur(12px) saturate(108%);
+}
+
 :root:not([data-wallpaper="none"]) :is(
   .task-conversation > .kimi-composer,
   .task-launcher .composer-input-shell,
@@ -804,6 +809,63 @@
   .workspace-empty-view
 ) {
   background: transparent !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .project-profile-meta,
+  .project-profile-overview,
+  .project-profile-component,
+  .project-technology-grid > section,
+  .project-validation-command,
+  .project-evidence li,
+  .project-validation-empty
+) {
+  color: var(--text-muted) !important;
+  background: var(--surface-soft) !important;
+  border-color: var(--border) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .project-profile-toolbar p b,
+  .project-profile-overview strong,
+  .project-profile-component > header b,
+  .project-profile-subheading b,
+  .project-validation-group > header b,
+  .project-validation-command code,
+  .project-evidence summary,
+  .project-evidence code
+) {
+  color: var(--text) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .project-profile-toolbar p small,
+  .project-profile-meta,
+  .project-profile-meta code,
+  .project-profile-overview small,
+  .project-profile-component > header small,
+  .project-profile-subheading small,
+  .project-validation-command p,
+  .project-validation-command span,
+  .project-validation-command small,
+  .project-evidence li > span,
+  .project-evidence li > small,
+  .project-recommendation-note
+) {
+  color: var(--text-muted) !important;
+}
+
+:root[data-app-theme="dark"] :is(.project-profile-component__icon, .project-technology-list > span) {
+  color: var(--text) !important;
+  background: var(--surface-raised) !important;
+}
+
+:root[data-app-theme="dark"] :is(
+  .project-profile-overview > span + span,
+  .project-profile-component > header,
+  .project-validation-group + .project-validation-group
+) {
+  border-color: var(--border) !important;
 }
 
 :root:not([data-wallpaper="none"]) .file-tree-view .code-preview {

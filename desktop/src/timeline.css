@@ -145,7 +145,7 @@
 .turn-tail-metrics span { white-space: nowrap; }
 .turn-tail-metrics b { color: #7c8288; font-weight: 500; }
 .turn-status { min-height: 23px; gap: 6px; margin-bottom: 5px; }
-.turn-status b { font-size: 13px; }
+.turn-status b { font-size: 14px; }
 .thinking-panel { margin-bottom: 3px; }
 .thinking-panel button { padding: 4px 0; font-size: 12px; }
 .thinking-panel__details { margin-bottom: 3px; padding: 2px 0 2px 14px; font-size: 11px; line-height: 1.5; }

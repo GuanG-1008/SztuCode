@@ -27,6 +27,34 @@ let writeQueue = Promise.resolve();
 const pendingInput: string[] = [];
 let started = false;
 let disposed = false;
+let themeObserver: MutationObserver | null = null;
+
+function terminalTheme() {
+  const dark = document.documentElement.dataset.appTheme === "dark";
+  return {
+    background: "rgba(0, 0, 0, 0)",
+    foreground: dark ? "#e7eeee" : "#273238",
+    cursor: dark ? "#b7d7c8" : "#315c4d",
+    cursorAccent: dark ? "#202425" : "#ffffff",
+    selectionBackground: dark ? "#47705f99" : "#98c4ad99",
+    black: dark ? "#17201d" : "#273238",
+    red: dark ? "#f18b84" : "#a63e36",
+    green: dark ? "#8bd5ad" : "#18794e",
+    yellow: dark ? "#e5c27a" : "#8a6116",
+    blue: dark ? "#8ebeff" : "#175cd3",
+    magenta: dark ? "#d5a4e7" : "#8e3ba8",
+    cyan: dark ? "#82d4d5" : "#087e8b",
+    white: dark ? "#dbe5e3" : "#f5f5f5",
+    brightBlack: dark ? "#82908c" : "#666666",
+    brightRed: dark ? "#ffaaa3" : "#d92d20",
+    brightGreen: dark ? "#a5e8c1" : "#16803d",
+    brightYellow: dark ? "#f2d694" : "#a66f00",
+    brightBlue: dark ? "#b0d0ff" : "#1570ef",
+    brightMagenta: dark ? "#e5baf4" : "#a445b8",
+    brightCyan: dark ? "#a4e9e7" : "#0891a6",
+    brightWhite: dark ? "#ffffff" : "#ffffff",
+  };
+}
 
 function showError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
@@ -44,6 +72,7 @@ function sendInput(data: string) {
 async function initialize() {
   if (!terminalRoot.value) return;
   terminal = new Terminal({
+    allowTransparency: true,
     cursorBlink: true,
     cursorStyle: "block",
     convertEol: true,
@@ -52,33 +81,15 @@ async function initialize() {
     lineHeight: 1.08,
     letterSpacing: 0,
     scrollback: 3000,
-    theme: {
-      background: "#ffffff",
-      foreground: "#111111",
-      cursor: "#111111",
-      cursorAccent: "#ffffff",
-      selectionBackground: "#cfe2ff",
-      black: "#111111",
-      red: "#b42318",
-      green: "#18794e",
-      yellow: "#8a6116",
-      blue: "#175cd3",
-      magenta: "#8e3ba8",
-      cyan: "#087e8b",
-      white: "#f5f5f5",
-      brightBlack: "#666666",
-      brightRed: "#d92d20",
-      brightGreen: "#16803d",
-      brightYellow: "#a66f00",
-      brightBlue: "#1570ef",
-      brightMagenta: "#a445b8",
-      brightCyan: "#0891a6",
-      brightWhite: "#ffffff",
-    },
+    theme: terminalTheme(),
   });
   fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(terminalRoot.value);
+  themeObserver = new MutationObserver(() => {
+    if (terminal) terminal.options.theme = terminalTheme();
+  });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-app-theme"] });
   terminal.writeln("Windows PowerShell");
   terminal.writeln("Copyright (C) Microsoft Corporation. All rights reserved.");
   terminal.writeln("");
@@ -121,12 +132,14 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true;
   resizeObserver?.disconnect();
+  themeObserver?.disconnect();
   inputDisposable?.dispose();
   resizeDisposable?.dispose();
   unlistenOutput?.();
   if (started) void sandboxPtyClose(sessionId);
   terminal?.dispose();
   resizeObserver = null;
+  themeObserver = null;
   inputDisposable = null;
   resizeDisposable = null;
   unlistenOutput = null;

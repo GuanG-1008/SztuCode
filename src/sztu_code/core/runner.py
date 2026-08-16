@@ -265,7 +265,10 @@ class AgentRunner:
         if not system_prompt_override:
             from sztu_code.core.prompts import build_system_prompt
 
-            base_prompt = build_system_prompt(workspace_root=workspace_root)
+            # The runner treats the current directory as the default project root for
+            # profile detection, memory, and tools; use the same root for prompt
+            # injection so CLAUDE.md is available even without an explicit workspace.
+            base_prompt = build_system_prompt(workspace_root=project_root)
 
         context = ExecutionContext(
             run_id=run_id,

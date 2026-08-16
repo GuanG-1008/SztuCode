@@ -13,7 +13,6 @@ import ModelConfigMenu from "./components/ModelConfig/ModelConfigMenu.vue";
 import ModelManager from "./components/ModelConfig/ModelManager.vue";
 import SessionActions from "./components/session/SessionActions.vue";
 import ChatPortal, { type ChatView } from "./components/Chat/ChatPortal.vue";
-import DiffReview from "./components/Diff/DiffReview.vue";
 import BottomDiffPreview from "./components/Diff/BottomDiffPreview.vue";
 import ExecutionTimeline from "./components/timeline/ExecutionTimeline.vue";
 import SessionStatsLine from "./components/timeline/SessionStatsLine.vue";
@@ -22,6 +21,7 @@ import SkillCenter from "./components/Skills/SkillCenter.vue";
 import SettingsDialog from "./components/Settings/SettingsDialog.vue";
 import QueueDock from "./components/Composer/QueueDock.vue";
 import UserQuestionComposer from "./components/UserQuestions/UserQuestionComposer.vue";
+import SourceControlPanel from "./components/SourceControl/SourceControlPanel.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
@@ -36,8 +36,7 @@ import {
   type Attachment, type ImageBlock, type PendingUserQuestion, type ProviderStatus, type RuntimeSettings, type Session, type UserQuestionAnswer, type Workspace,
 } from "./services/sztu-runtime";
 
-type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "diff";
-type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
+type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "source-control";
 type RuntimeEvent = Record<string, unknown>;
 type QueuedSubmission = {
   id: string;
@@ -210,7 +209,6 @@ const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number
 // 首 token 延迟追踪（借鉴 dsh assistant-timing）：run 起点 → 首个 token 的时间差
 const runStartedAtByRun = new Map<string, number>();
 const firstTokenByRun = new Map<string, number>();
-const reviewCtx = ref<ReviewContext | null>(null);
 // 切换会话加载动画：超过 260ms 未返回时显示终端图标动效，避免快加载闪屏
 const sessionLoading = computed(() => activeView.value?.loading ?? false);
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
@@ -1493,15 +1491,9 @@ function handleReverted(runId: string) {
 function handleContinue() {
   void submitTask("继续", null);
 }
-// 进入代码变更审核页
-function handleReview(ctx: ReviewContext) {
-  reviewCtx.value = ctx;
-  page.value = "diff";
-}
-function closeReview() {
-  reviewCtx.value = null;
-  page.value = "work";
-  void refreshIndex(false);
+// 所有变更审阅统一进入右上角 Git 源代码管理页
+function handleReview() {
+  if (activeWorkspace.value) openPage("source-control");
 }
 async function openLocalProject() {
   closeLauncherMenus();
@@ -1958,7 +1950,7 @@ watch(activeId, () => { streamScrolledUp.value = false; });
 
       <nav class="sidebar-tools" aria-label="工作台工具">
         <button :class="{ active: page === 'board' }" @click="openPage('board')"><LayoutDashboard :size="16" :stroke-width="1.8" /><span>全部任务</span></button>
-        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" :stroke-width="1.8" /><span>自动化</span><small>即将推出</small></button>
+        <button :class="{ active: page === 'automations' }" @click="openPage('automations')"><CalendarClock :size="16" :stroke-width="1.8" /><span>自动化</span></button>
         <button class="sidebar-more-trigger" :class="{ expanded: sidebarToolsExpanded }" :aria-expanded="sidebarToolsExpanded" aria-controls="sidebar-more-tools" @click="sidebarToolsExpanded = !sidebarToolsExpanded"><Ellipsis :size="16" :stroke-width="1.8" /><span>更多</span><ChevronDown :size="16" :stroke-width="1.8" /></button>
         <div v-if="sidebarToolsExpanded" id="sidebar-more-tools" class="sidebar-more-tools">
           <div>
@@ -2072,6 +2064,7 @@ watch(activeId, () => { streamScrolledUp.value = false; });
                 <div v-if="projectMenuOpen" class="project-popover"><button v-for="item in activeWorkspaces" :key="item.workspace_id" @click="chooseWorkspace(item)">{{ item.name }}<small>{{ item.path }}</small></button></div>
                 <div class="work-header__tools">
                   <SessionActions :session="active" @changed="refreshIndex(false)" @closed="closeActiveSession" />
+                  <button class="source-control-toggle" title="源代码管理" aria-label="源代码管理" :disabled="!activeWorkspace" @click="openPage('source-control')"><GitBranch :size="18" /></button>
                   <button class="workspace-panel-toggle" title="工作区" aria-label="工作区" :aria-expanded="inspectorOpen" :class="{ active: inspectorOpen }" @click="toggleInspector"><Folder :size="18" /></button>
                 </div>
               </header>
@@ -2206,7 +2199,7 @@ watch(activeId, () => { streamScrolledUp.value = false; });
 
       <section v-if="page === 'chat'"><ChatPortal :view="chatView" :connected="connected" @submit="submitChat" @navigate="chatView = $event" @open-project="openLocalProject" /></section>
 
-      <section v-else-if="page === 'diff'" class="diff-page"><DiffReview v-if="reviewCtx" :workspace-id="reviewCtx.workspaceId" :run-id="reviewCtx.runId" :paths="reviewCtx.paths" @close="closeReview" @changed="refreshIndex(false)" /></section>
+      <section v-else-if="page === 'source-control'" class="source-control-host"><SourceControlPanel v-if="activeWorkspace" :workspace-id="activeWorkspace.workspace_id" :workspace-name="activeWorkspace.name" :workspace-path="activeWorkspace.path" @close="openPage('work')" @changed="refreshIndex(false)" /></section>
 
       <section v-else-if="page === 'board'" class="simple-page board-page">
         <header><div><h1>全部任务</h1><p>管理项目任务、临时任务与归档记录</p></div><button class="outline-button" @click="refreshIndex(false)">刷新</button></header>

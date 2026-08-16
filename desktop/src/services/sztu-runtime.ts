@@ -488,6 +488,21 @@ export async function respondPermission(toolUseId: string, decision: "allow_once
   await client.request("permission.respond", { tool_use_id: toolUseId, decision });
 }
 
+export async function unstageChanges(workspaceId: string, paths: string[]): Promise<string[]> {
+  const result = await client.request("change.unstage", { workspace_id: workspaceId, paths });
+  return (result.unstaged_paths as string[] | undefined) ?? [];
+}
+
+export async function discardChanges(workspaceId: string, paths: string[]): Promise<string[]> {
+  const result = await client.request("change.discard", { workspace_id: workspaceId, paths, confirm: "discard" });
+  return (result.discarded_paths as string[] | undefined) ?? [];
+}
+
+export async function commitChanges(workspaceId: string, message: string): Promise<string> {
+  const result = await client.request("git.commit", { workspace_id: workspaceId, message });
+  return String(result.commit_hash ?? "");
+}
+
 export async function listPendingUserQuestions(sessionId?: string | null): Promise<PendingUserQuestion[]> {
   const result = await client.request("question.pending", { session_id: sessionId ?? null });
   return (result.pending as PendingUserQuestion[] | undefined) ?? [];

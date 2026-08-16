@@ -1,0 +1,50 @@
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import { ArrowLeft, Check, GitBranch, RefreshCw, Search, X } from "@lucide/vue";
+import { changeDiff, commitChanges, discardChanges, listChanges, stageChanges, unstageChanges, workspaceStatus, type ChangeSummary, type WorkspaceStatus } from "../../services/sztu-runtime";
+
+const props = defineProps<{ workspaceId: string; workspaceName: string; workspacePath: string }>();
+const emit = defineEmits<{ close: []; changed: [] }>();
+const status = ref<WorkspaceStatus | null>(null);
+const changes = ref<ChangeSummary[]>([]);
+const selectedPath = ref("");
+const diff = ref("");
+const query = ref("");
+const loading = ref(false);
+const diffLoading = ref(false);
+const error = ref("");
+const busyPath = ref("");
+const commitMessage = ref("");
+const committing = ref(false);
+const commitNotice = ref("");
+const filteredChanges = computed(() => {
+  const value = query.value.trim().toLocaleLowerCase();
+  return value ? changes.value.filter((item) => item.path.toLocaleLowerCase().includes(value)) : changes.value;
+});
+const additions = computed(() => changes.value.reduce((sum, item) => sum + Number(item.additions ?? 0), 0));
+const deletions = computed(() => changes.value.reduce((sum, item) => sum + Number(item.deletions ?? 0), 0));
+const selected = computed(() => changes.value.find((item) => item.path === selectedPath.value) ?? null);
+function messageOf(reason: unknown) { return reason instanceof Error ? reason.message : String(reason); }
+function fileStatus(item: ChangeSummary) { return item.index_status !== " " && item.index_status !== "?" ? item.index_status : item.worktree_status !== " " ? item.worktree_status : item.index_status || item.worktree_status || "M"; }
+function statusLabel(item: ChangeSummary) { const value = fileStatus(item); return value === "A" ? "新增" : value === "D" ? "删除" : value === "R" ? "重命名" : value === "?" ? "未跟踪" : "修改"; }
+function isStaged(item: ChangeSummary) { return item.index_status !== " " && item.index_status !== "?"; }
+async function select(path: string) { if (!path || diffLoading.value) return; selectedPath.value = path; diffLoading.value = true; error.value = ""; try { diff.value = await changeDiff(props.workspaceId, path); } catch (reason) { diff.value = ""; error.value = messageOf(reason); } finally { diffLoading.value = false; } }
+async function refresh() { loading.value = true; error.value = ""; try { const [nextStatus, nextChanges] = await Promise.all([workspaceStatus(props.workspaceId), listChanges(props.workspaceId)]); status.value = nextStatus; changes.value = nextChanges; if (!nextChanges.some((item) => item.path === selectedPath.value)) selectedPath.value = nextChanges[0]?.path ?? ""; if (selectedPath.value) await select(selectedPath.value); } catch (reason) { error.value = messageOf(reason); } finally { loading.value = false; } }
+async function stage(path: string) { if (!path || busyPath.value) return; busyPath.value = path; error.value = ""; try { await stageChanges(props.workspaceId, [path]); await refresh(); emit("changed"); } catch (reason) { error.value = `暂存失败：${messageOf(reason)}`; } finally { busyPath.value = ""; } }
+async function unstage(path: string) { if (!path || busyPath.value) return; busyPath.value = path; error.value = ""; try { await unstageChanges(props.workspaceId, [path]); await refresh(); emit("changed"); } catch (reason) { error.value = `取消暂存失败：${messageOf(reason)}`; } finally { busyPath.value = ""; } }
+async function discard(path: string) { if (!path || busyPath.value || !window.confirm(`放弃 ${path} 的已跟踪改动？`)) return; busyPath.value = path; error.value = ""; try { await discardChanges(props.workspaceId, [path]); await refresh(); emit("changed"); } catch (reason) { error.value = `放弃改动失败：${messageOf(reason)}`; } finally { busyPath.value = ""; } }
+async function commit() { const message = commitMessage.value.trim(); if (!message || committing.value) return; committing.value = true; error.value = ""; commitNotice.value = ""; try { const hash = await commitChanges(props.workspaceId, message); commitMessage.value = ""; commitNotice.value = hash ? `已提交 ${hash}` : "提交完成"; await refresh(); emit("changed"); } catch (reason) { error.value = `提交失败：${messageOf(reason)}`; } finally { committing.value = false; } }
+watch(() => props.workspaceId, () => { selectedPath.value = ""; void refresh(); }, { immediate: true });
+</script>
+
+<template>
+  <section class="source-control-page">
+    <header class="source-control-header"><button type="button" class="source-control-back" aria-label="返回会话" title="返回会话" @click="emit('close')"><ArrowLeft :size="17" /></button><div class="source-control-title"><GitBranch :size="18" /><div><h1>源代码管理</h1><p>{{ workspaceName }}<span>{{ workspacePath }}</span></p></div></div><button type="button" class="source-control-refresh" aria-label="刷新源代码管理" title="刷新" :disabled="loading" @click="refresh"><RefreshCw :size="16" :class="{ spin: loading }" /></button></header>
+    <div class="source-control-branch"><GitBranch :size="14" /><b>{{ status?.branch || "未检测到分支" }}</b><small>{{ status?.is_git_repository ? "Git 仓库" : "非 Git 仓库" }}</small></div>
+    <div v-if="error" class="source-control-error" role="alert">{{ error }}</div>
+    <div class="source-control-summary"><span><b>{{ changes.length }}</b> 项更改</span><span class="source-control-add">+{{ additions }}</span><span class="source-control-del">-{{ deletions }}</span><span v-if="commitNotice" class="source-control-commit-notice">{{ commitNotice }}</span></div>
+    <label class="source-control-search"><Search :size="14" /><input v-model="query" placeholder="筛选更改" aria-label="筛选更改" /></label>
+    <form class="source-control-commit" @submit.prevent="commit"><input v-model="commitMessage" aria-label="提交信息" placeholder="提交信息" :disabled="committing" /><button type="submit" :disabled="committing || !commitMessage.trim() || !changes.some((item) => isStaged(item))">{{ committing ? "提交中…" : "提交" }}</button></form>
+    <div class="source-control-body"><div class="source-control-files"><p v-if="!filteredChanges.length" class="source-control-empty"><Check :size="24" /><b>工作区干净</b><span>没有待处理的源代码更改</span></p><div v-for="item in filteredChanges" :key="item.path" class="source-control-file" :class="{ active: selectedPath === item.path }" role="button" tabindex="0" @click="select(item.path)" @keydown.enter="select(item.path)"><span class="source-control-file-status" :class="`status-${fileStatus(item).toLowerCase()}`" :title="statusLabel(item)">{{ fileStatus(item) }}</span><span class="source-control-file-name"><b>{{ item.path.split(/[\\/]/).pop() }}</b><small>{{ item.path }}</small></span><span class="source-control-file-actions"><em>+{{ item.additions ?? 0 }}</em><em>-{{ item.deletions ?? 0 }}</em><button type="button" :aria-label="isStaged(item) ? `取消暂存 ${item.path}` : `暂存 ${item.path}`" :title="isStaged(item) ? '取消暂存' : '暂存文件'" :disabled="busyPath === item.path" @click.stop="isStaged(item) ? unstage(item.path) : stage(item.path)"><Check :size="13" /></button><button type="button" class="source-control-discard" :aria-label="`放弃 ${item.path} 的改动`" title="放弃文件改动" :disabled="busyPath === item.path || isStaged(item)" @click.stop="discard(item.path)"><X :size="13" /></button></span></div></div><article class="source-control-diff"><header><span>{{ selected?.path || "选择文件查看差异" }}</span><button v-if="selectedPath" type="button" aria-label="清除选择" title="清除选择" @click="selectedPath = ''; diff = ''"><X :size="14" /></button></header><div v-if="diffLoading" class="source-control-diff-empty"><RefreshCw :size="17" class="spin" />加载差异…</div><div v-else-if="error" class="source-control-diff-empty">{{ error }}</div><pre v-else-if="diff" class="source-control-diff-code"><code v-for="(line, index) in diff.split('\n')" :key="index" :class="{ add: line.startsWith('+') && !line.startsWith('+++'), del: line.startsWith('-') && !line.startsWith('---'), hunk: line.startsWith('@@') }">{{ line || " " }}</code></pre><div v-else class="source-control-diff-empty">{{ selectedPath ? "此文件没有可显示的差异。" : "从左侧选择一个文件。" }}</div></article></div>
+  </section>
+</template>

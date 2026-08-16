@@ -77,7 +77,7 @@ test("Chat portal exposes every tool page and its primary interactions", async (
   await page.getByPlaceholder("搜索技能").fill("");
   await expect(page).toHaveScreenshot("skill-center-1280.png", { fullPage: true });
 
-  await page.getByRole("button", { name: "自动化 即将推出", exact: true }).click();
+  await page.getByRole("button", { name: "自动化", exact: true }).click();
   await page.locator(".chat-automations").getByRole("button", { name: "新建任务", exact: true }).click();
   await page.getByPlaceholder("例如：每周项目进展汇总").fill("周报汇总");
   await page.getByRole("button", { name: "保存任务", exact: true }).click();

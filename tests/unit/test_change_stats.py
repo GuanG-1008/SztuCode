@@ -73,3 +73,15 @@ def test_stage_adds_to_git_index(tmp_path: Path) -> None:
 
     status = _git(root, "status", "--porcelain").stdout
     assert any(line.startswith("M ") for line in status.splitlines())
+
+
+def test_diff_numstat_counts_staged_changes_against_head(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _make_git_repo(root)
+    (root / "a.txt").write_text("one\nTWO\nthree\nfour\nFIVE\n", encoding="utf-8")
+    manager = WorkspaceManager(tmp_path / "state" / "workspaces.json")
+    workspace = manager.open(str(root))
+
+    manager.stage(workspace.id, ["a.txt"])
+
+    assert manager.diff_numstat(workspace.id, ["a.txt"]) == {"a.txt": (2, 1)}

@@ -70,6 +70,7 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 | 扩展机制      | Skills、Subagents 与 MCP 外部工具统一接入                       |
 | 可观测性      | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放               |
 | 变更审阅      | 桌面端展示文件变化和 Diff，支持接受、暂存与回退                 |
+| 项目指令      | 自动发现并注入工作区及父目录的 `CLAUDE.md`、`SZTUCODE.md` 等规则 |
 | Agent 评测    | `sztu-eval` 统一任务协议、重复运行、指标报告和 SWE-bench 适配 |
 
 项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和完整多智能体工作流仍在路线图中，不将设计目标描述为已完成能力。

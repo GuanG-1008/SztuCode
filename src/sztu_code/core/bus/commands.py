@@ -240,6 +240,37 @@ class ChangeStageResult(BaseModel):
     staged_paths: list[str]
 
 
+class ChangeUnstageCommand(BaseModel):
+    type: Literal["change.unstage"] = "change.unstage"
+    workspace_id: str
+    paths: list[str] = Field(min_length=1, max_length=200)
+
+
+class ChangeUnstageResult(BaseModel):
+    unstaged_paths: list[str]
+
+
+class ChangeDiscardCommand(BaseModel):
+    type: Literal["change.discard"] = "change.discard"
+    workspace_id: str
+    paths: list[str] = Field(min_length=1, max_length=200)
+    confirm: Literal["discard"]
+
+
+class ChangeDiscardResult(BaseModel):
+    discarded_paths: list[str]
+
+
+class GitCommitCommand(BaseModel):
+    type: Literal["git.commit"] = "git.commit"
+    workspace_id: str
+    message: str = Field(min_length=1, max_length=500)
+
+
+class GitCommitResult(BaseModel):
+    commit_hash: str
+
+
 class ChangeDiffResult(BaseModel):
     diff: str
 
@@ -868,6 +899,9 @@ Command = Annotated[
     | ChangeDiffCommand
     | ChangeRevertCommand
     | ChangeStageCommand
+    | ChangeUnstageCommand
+    | ChangeDiscardCommand
+    | GitCommitCommand
     | EventSubscribeCommand
     | SessionCreateCommand
     | SessionListCommand

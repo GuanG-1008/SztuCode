@@ -175,7 +175,7 @@ class SessionManager:
                     goal = arguments or content
                     system_prompt_override = "\n\n".join(
                         [
-                            build_system_prompt(workspace_root=workspace_root),
+                            build_system_prompt(workspace_root=workspace_root or Path.cwd()),
                             f"## Active skill: {skill.name}\n{rendered_skill}",
                         ]
                     )

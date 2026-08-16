@@ -92,6 +92,21 @@ const validationCategories: Array<{ key: ValidationCategory; label: string }> = 
 const plan = computed(() => [...(props.steps ?? [])].reverse().find((step) => step.plan?.length)?.plan ?? []);
 const completed = computed(() => plan.value.filter((item) => item.status === "completed").length);
 const selectedName = computed(() => selectedPath.value.split(/[\\/]/).filter(Boolean).pop() ?? selectedPath.value);
+const profileOverview = computed(() => {
+  const profile = profileState.value.profile;
+  if (!profile) return { projects: 0, technologies: 0, validations: 0, evidence: 0 };
+  const technologies = new Set<string>();
+  let validations = 0;
+  let evidence = 0;
+  for (const project of profile.projects) {
+    for (const group of projectTechnologies(project)) {
+      for (const finding of group.findings) technologies.add(`${group.label}:${finding.name.toLocaleLowerCase()}`);
+    }
+    validations += project.validation_plan.length;
+    evidence += project.evidence.length;
+  }
+  return { projects: profile.projects.length, technologies: technologies.size, validations, evidence };
+});
 const usedSkills = computed(() => {
   const skills = (props.steps ?? []).flatMap((step) => step.skills ?? []);
   return [...new Map(skills.map((skill) => [skill.name, skill])).values()];
@@ -166,6 +181,12 @@ function projectTechnologies(project: ProjectComponent): Array<{ label: string; 
 
 function commandsFor(project: ProjectComponent, category: ValidationCategory) {
   return project.validation_plan.filter((command) => command.category === category);
+}
+
+function validationGroups(project: ProjectComponent) {
+  return validationCategories
+    .map((category) => ({ ...category, commands: commandsFor(project, category.key) }))
+    .filter((category) => category.commands.length);
 }
 
 function evidenceLabel(evidence: DetectionEvidence): string {
@@ -450,11 +471,19 @@ onBeforeUnmount(() => {
               <span v-if="profileState.profile.monorepo" class="project-profile-badge">Monorepo</span>
               <span v-if="profileState.profile.scan_limited" class="project-profile-warning">扫描范围受限，结果可能不完整</span>
             </div>
-            <article v-for="project in profileState.profile.projects" :key="project.path" class="project-profile-component">
+            <div class="project-profile-overview" aria-label="项目画像概览">
+              <span><strong>{{ profileOverview.projects }}</strong><small>项目</small></span>
+              <span><strong>{{ profileOverview.technologies }}</strong><small>技术项</small></span>
+              <span><strong>{{ profileOverview.validations }}</strong><small>验证建议</small></span>
+              <span><strong>{{ profileOverview.evidence }}</strong><small>识别证据</small></span>
+            </div>
+            <article v-for="(project, projectIndex) in profileState.profile.projects" :key="project.path" class="project-profile-component">
               <header>
-                <div><b>{{ project.path === '.' ? '工作区根项目' : project.path }}</b><small>路径归属：{{ project.path }}</small></div>
-                <span>仅建议，未执行</span>
+                <span class="project-profile-component__icon"><FolderOpen :size="17" /></span>
+                <div><b>{{ project.path === '.' ? '工作区根项目' : project.path }}</b><small>{{ project.path === '.' ? '位于工作区根目录' : `相对路径 ${project.path}` }}</small></div>
+                <span class="project-profile-component__index">{{ String(projectIndex + 1).padStart(2, '0') }}</span>
               </header>
+              <div class="project-profile-subheading"><b>技术识别</b><small>{{ projectTechnologies(project).reduce((total, group) => total + group.findings.length, 0) }} 项结果</small></div>
               <div class="project-technology-grid">
                 <section v-for="group in projectTechnologies(project)" :key="group.label">
                   <b>{{ group.label }}</b>
@@ -464,18 +493,19 @@ onBeforeUnmount(() => {
                   <small v-else>未识别</small>
                 </section>
               </div>
+              <div class="project-profile-subheading"><b>推荐验证</b><small>{{ project.validation_plan.length ? `${validationGroups(project).length} 类 · ${project.validation_plan.length} 条命令` : '暂无建议' }}</small></div>
               <div class="project-validation-plan">
-                <section v-for="category in validationCategories" :key="category.key" class="project-validation-group">
-                  <header><b>{{ category.label }}</b><small>{{ commandsFor(project, category.key).length }} 条建议</small></header>
-                  <p v-if="!commandsFor(project, category.key).length" class="project-validation-empty">暂无推荐命令</p>
-                  <article v-for="command in commandsFor(project, category.key)" :key="`${command.working_directory}:${command.command}`" class="project-validation-command">
+                <section v-for="category in validationGroups(project)" :key="category.key" class="project-validation-group">
+                  <header><b>{{ category.label }}</b><small>{{ category.commands.length }} 条</small></header>
+                  <article v-for="command in category.commands" :key="`${command.working_directory}:${command.command}`" class="project-validation-command">
                     <div><code>{{ command.command }}</code><span>目录：{{ command.working_directory || '.' }}</span></div>
                     <p>{{ command.reason }}</p>
                     <small v-if="command.evidence.length">依据：{{ command.evidence.map(evidenceLabel).join('；') }}</small>
-                    <em>仅建议，未执行</em>
                   </article>
                 </section>
+                <p v-if="!project.validation_plan.length" class="project-validation-empty">当前结构下暂无可靠的验证命令建议。</p>
               </div>
+              <p v-if="project.validation_plan.length" class="project-recommendation-note"><SquareTerminal :size="13" />以上命令仅作为验证建议，不会自动执行。</p>
               <details v-if="project.evidence.length" class="project-evidence">
                 <summary>识别证据（{{ project.evidence.length }}）</summary>
                 <ul><li v-for="evidence in project.evidence" :key="`${evidence.path}:${evidence.rule}`"><code>{{ evidence.path }}</code><span>{{ evidence.rule }}</span><small v-if="evidence.detail">{{ evidence.detail }}</small></li></ul>

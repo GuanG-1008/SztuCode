@@ -10,6 +10,7 @@ import "./file-rail.css";
 import "./typography.css";
 import "./appearance.css";
 import "./queue-dock.css";
+import "./source-control.css";
 import { initializeAppearance } from "./services/appearance";
 
 initializeAppearance();
