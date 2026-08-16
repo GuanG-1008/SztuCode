@@ -4684,6 +4684,376 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 }
 ```
 
+### SessionSteerMessageCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `session_id` | `string` | yes |
+| `content` | `string` | yes |
+| `images` | `array` | no |
+
+```json
+{
+  "$defs": {
+    "MessageImageBlock": {
+      "properties": {
+        "type": {
+          "const": "image",
+          "default": "image",
+          "title": "Type",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "data": {
+          "title": "Data",
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "data"
+      ],
+      "title": "MessageImageBlock",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "session.steer_message",
+      "default": "session.steer_message",
+      "title": "Type",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "content": {
+      "title": "Content",
+      "type": "string"
+    },
+    "images": {
+      "items": {
+        "$ref": "#/$defs/MessageImageBlock"
+      },
+      "title": "Images",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "content"
+  ],
+  "title": "SessionSteerMessageCommand",
+  "type": "object"
+}
+```
+
+### SessionSteerMessageResult
+
+| Field | Type | Required |
+|---|---|---|
+| `run_id` | `string` | yes |
+| `status` | `string` | no |
+
+```json
+{
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "const": "accepted",
+      "default": "accepted",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id"
+  ],
+  "title": "SessionSteerMessageResult",
+  "type": "object"
+}
+```
+
+### UserQuestionRespondCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `rpc_id` | `string` | yes |
+| `session_id` | `string` | yes |
+| `answers` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "UserQuestionAnswer": {
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "selected": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Selected",
+          "type": "array"
+        },
+        "custom": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Custom"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "UserQuestionAnswer",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "question.respond",
+      "default": "question.respond",
+      "title": "Type",
+      "type": "string"
+    },
+    "rpc_id": {
+      "title": "Rpc Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "answers": {
+      "items": {
+        "$ref": "#/$defs/UserQuestionAnswer"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "title": "Answers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "rpc_id",
+    "session_id",
+    "answers"
+  ],
+  "title": "UserQuestionRespondCommand",
+  "type": "object"
+}
+```
+
+### UserQuestionRespondResult
+
+| Field | Type | Required |
+|---|---|---|
+| `ok` | `boolean` | no |
+
+```json
+{
+  "properties": {
+    "ok": {
+      "default": true,
+      "title": "Ok",
+      "type": "boolean"
+    }
+  },
+  "title": "UserQuestionRespondResult",
+  "type": "object"
+}
+```
+
+### UserQuestionPendingCommand
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `session_id` | `string | null` | no |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "question.pending",
+      "default": "question.pending",
+      "title": "Type",
+      "type": "string"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Id"
+    }
+  },
+  "title": "UserQuestionPendingCommand",
+  "type": "object"
+}
+```
+
+### UserQuestionPendingResult
+
+| Field | Type | Required |
+|---|---|---|
+| `pending` | `array` | yes |
+
+```json
+{
+  "$defs": {
+    "UserQuestionItem": {
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "header": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Header"
+        },
+        "question": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserQuestionOption"
+          },
+          "maxItems": 8,
+          "title": "Options",
+          "type": "array"
+        },
+        "multi_select": {
+          "default": false,
+          "title": "Multi Select",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ],
+      "title": "UserQuestionItem",
+      "type": "object"
+    },
+    "UserQuestionOption": {
+      "properties": {
+        "label": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "UserQuestionOption",
+      "type": "object"
+    },
+    "UserQuestionPending": {
+      "properties": {
+        "rpc_id": {
+          "title": "Rpc Id",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/UserQuestionItem"
+          },
+          "title": "Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rpc_id",
+        "session_id",
+        "run_id",
+        "questions"
+      ],
+      "title": "UserQuestionPending",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "pending": {
+      "items": {
+        "$ref": "#/$defs/UserQuestionPending"
+      },
+      "title": "Pending",
+      "type": "array"
+    }
+  },
+  "required": [
+    "pending"
+  ],
+  "title": "UserQuestionPendingResult",
+  "type": "object"
+}
+```
+
 ### SessionGetHistoryCommand
 
 | Field | Type | Required |
@@ -4719,6 +5089,7 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
 |---|---|---|
 | `messages` | `array` | yes |
 | `run_stats` | `object` | no |
+| `context_injections` | `array` | no |
 
 ```json
 {
@@ -4747,6 +5118,14 @@ All commands are sent as JSON-RPC 2.0 requests. The `type` field inside `params`
       },
       "title": "Run Stats",
       "type": "object"
+    },
+    "context_injections": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Context Injections",
+      "type": "array"
     }
   },
   "required": [
@@ -4969,6 +5348,7 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `total_output_tokens` | `integer` | no |
 | `cache_read_input_tokens` | `integer` | no |
 | `elapsed_s` | `number` | no |
+| `context_pct` | `number` | no |
 | `ts` | `string` | yes |
 
 ```json
@@ -5022,6 +5402,11 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
     "elapsed_s": {
       "default": 0.0,
       "title": "Elapsed S",
+      "type": "number"
+    },
+    "context_pct": {
+      "default": 0.0,
+      "title": "Context Pct",
       "type": "number"
     },
     "ts": {
@@ -6623,6 +7008,244 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
   "session_id": "sess-abc123def456",
   "content": "\u603b\u7ed3 README.md",
   "ts": "2026-05-16T10:00:00.001Z"
+}
+```
+
+### SessionMessageSteeredEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `session_id` | `string` | yes |
+| `run_id` | `string` | yes |
+| `content` | `string` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "session.message_steered",
+      "default": "session.message_steered",
+      "title": "Type",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "content": {
+      "title": "Content",
+      "type": "string"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "run_id",
+    "content",
+    "ts"
+  ],
+  "title": "SessionMessageSteeredEvent",
+  "type": "object"
+}
+```
+
+### UserQuestionRequestedEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `rpc_id` | `string` | yes |
+| `session_id` | `string` | yes |
+| `run_id` | `string` | yes |
+| `questions` | `array` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "$defs": {
+    "UserQuestionItem": {
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "header": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Header"
+        },
+        "question": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/UserQuestionOption"
+          },
+          "maxItems": 8,
+          "title": "Options",
+          "type": "array"
+        },
+        "multi_select": {
+          "default": false,
+          "title": "Multi Select",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "question"
+      ],
+      "title": "UserQuestionItem",
+      "type": "object"
+    },
+    "UserQuestionOption": {
+      "properties": {
+        "label": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "UserQuestionOption",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "question.requested",
+      "default": "question.requested",
+      "title": "Type",
+      "type": "string"
+    },
+    "rpc_id": {
+      "title": "Rpc Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/UserQuestionItem"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rpc_id",
+    "session_id",
+    "run_id",
+    "questions",
+    "ts"
+  ],
+  "title": "UserQuestionRequestedEvent",
+  "type": "object"
+}
+```
+
+### UserQuestionResolvedEvent
+
+| Field | Type | Required |
+|---|---|---|
+| `type` | `string` | no |
+| `rpc_id` | `string` | yes |
+| `session_id` | `string` | yes |
+| `run_id` | `string` | yes |
+| `outcome` | `string` | yes |
+| `ts` | `string` | yes |
+
+```json
+{
+  "properties": {
+    "type": {
+      "const": "question.resolved",
+      "default": "question.resolved",
+      "title": "Type",
+      "type": "string"
+    },
+    "rpc_id": {
+      "title": "Rpc Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "answered",
+        "cancelled"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rpc_id",
+    "session_id",
+    "run_id",
+    "outcome",
+    "ts"
+  ],
+  "title": "UserQuestionResolvedEvent",
+  "type": "object"
 }
 ```
 

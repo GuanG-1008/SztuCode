@@ -12,6 +12,7 @@ from sztu_code.core.bus.events import (
     SessionClosedEvent,
     SessionCreatedEvent,
     SessionMessageReceivedEvent,
+    SessionMessageSteeredEvent,
     SessionResumedEvent,
     SessionWaitingForInputEvent,
     SkillInvokedEvent,
@@ -35,6 +36,30 @@ SESSION_BUSY = -32012
 # 返回当前 UTC 时间的 ISO 8601 字符串
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# 将文本与图片转换为会话历史和运行上下文共用的用户消息内容
+def _message_content(
+    content: str,
+    images: list[dict[str, Any]] | None,
+) -> str | list[dict[str, Any]]:
+    if not images:
+        return content
+    return [
+        {"type": "text", "text": content},
+        *[
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": str(image.get("media_type", "")),
+                    "data": str(image.get("data", "")),
+                },
+            }
+            for image in images
+            if image.get("data")
+        ],
+    ]
 
 
 class SessionManager:
@@ -63,6 +88,7 @@ class SessionManager:
         self._locks: dict[str, asyncio.Lock] = {
             session.id: asyncio.Lock() for session in restored
         }
+        self._steering_queues: dict[str, tuple[str, asyncio.Queue[dict[str, Any]]]] = {}
 
     def set_provider(self, provider: LLMProvider | None) -> None:
         self._provider = provider
@@ -114,23 +140,7 @@ class SessionManager:
                 await self._bus.publish(SessionResumedEvent(session_id=sid, ts=_now()))
 
             run_id = run_id or new_run_id()
-            stored_content: str | list[dict[str, Any]] = content
-            if images:
-                stored_content = [
-                    {"type": "text", "text": content},
-                    *[
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": str(image.get("media_type", "")),
-                                "data": str(image.get("data", "")),
-                            },
-                        }
-                        for image in images
-                        if image.get("data")
-                    ],
-                ]
+            stored_content = _message_content(content, images)
             self._store.append_message(sid, "user", stored_content, run_id=run_id)
             await self._bus.publish(
                 SessionMessageReceivedEvent(session_id=sid, content=content, ts=_now())
@@ -165,7 +175,7 @@ class SessionManager:
                     goal = arguments or content
                     system_prompt_override = "\n\n".join(
                         [
-                            build_system_prompt(workspace_root=workspace_root),
+                            build_system_prompt(workspace_root=workspace_root or Path.cwd()),
                             f"## Active skill: {skill.name}\n{rendered_skill}",
                         ]
                     )
@@ -180,6 +190,8 @@ class SessionManager:
                     )
 
             runner = self._runner_factory()
+            steering_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            self._steering_queues[sid] = (run_id, steering_queue)
             try:
                 await runner.run_and_capture(
                     goal,
@@ -189,6 +201,7 @@ class SessionManager:
                     system_prompt_override=system_prompt_override,
                     tool_whitelist=tool_whitelist,
                     workspace_root=workspace_root,
+                    steering_queue=steering_queue,
                 )
             except asyncio.CancelledError:
                 session.updated_at = _now()
@@ -208,6 +221,10 @@ class SessionManager:
                     )
                 self._store.write_meta(session)
                 raise
+            finally:
+                current = self._steering_queues.get(sid)
+                if current is not None and current[0] == run_id:
+                    self._steering_queues.pop(sid, None)
 
             session.updated_at = _now()
             if session.mode == "one_shot":
@@ -224,6 +241,32 @@ class SessionManager:
                 )
             self._store.write_meta(session)
             return run_id
+
+    # 把运行中的追加指令放入 steer 收件箱，供 AgentLoop 在下一次模型调用前注入
+    async def steer_message(
+        self,
+        sid: str,
+        content: str,
+        *,
+        images: list[dict[str, Any]] | None = None,
+    ) -> str:
+        session = self._get_session(sid)
+        current = self._steering_queues.get(sid)
+        if current is None or not self._locks[sid].locked():
+            raise HandlerError(SESSION_BUSY, "steer unavailable")
+        run_id, queue = current
+        queue.put_nowait({"role": "user", "content": _message_content(content, images)})
+        session.updated_at = _now()
+        self._store.write_meta(session)
+        await self._bus.publish(
+            SessionMessageSteeredEvent(
+                session_id=sid,
+                run_id=run_id,
+                content=content,
+                ts=session.updated_at,
+            )
+        )
+        return run_id
 
     # 关闭指定 session 并更新 meta.json
     async def close(self, sid: str) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Discriminator, Field
+from pydantic import BaseModel, Discriminator, Field, model_validator
 
 from sztu_code.core.session.model import SessionMode, SessionStatus
 from sztu_code.core.workspace.project_profile import ProjectProfile
@@ -215,6 +215,7 @@ class ChangeDiffCommand(BaseModel):
     type: Literal["change.diff"] = "change.diff"
     workspace_id: str
     path: str | None = None
+    run_id: str | None = None
 
 
 class ChangeRevertCommand(BaseModel):
@@ -238,6 +239,49 @@ class ChangeStageCommand(BaseModel):
 
 class ChangeStageResult(BaseModel):
     staged_paths: list[str]
+
+
+class ChangeUnstageCommand(BaseModel):
+    type: Literal["change.unstage"] = "change.unstage"
+    workspace_id: str
+    paths: list[str] = Field(min_length=1, max_length=200)
+
+
+class ChangeUnstageResult(BaseModel):
+    unstaged_paths: list[str]
+
+
+class ChangeDiscardCommand(BaseModel):
+    type: Literal["change.discard"] = "change.discard"
+    workspace_id: str
+    paths: list[str] = Field(min_length=1, max_length=200)
+    confirm: Literal["discard"]
+
+
+class ChangeDiscardResult(BaseModel):
+    discarded_paths: list[str]
+
+
+class GitCommitCommand(BaseModel):
+    type: Literal["git.commit"] = "git.commit"
+    workspace_id: str
+    message: str = Field(min_length=1, max_length=500)
+
+
+class GitCommitResult(BaseModel):
+    commit_hash: str
+
+
+class GitHistoryCommand(BaseModel):
+    type: Literal["git.history"] = "git.history"
+    workspace_id: str
+    limit: int = Field(default=100, ge=1, le=200)
+    skip: int = Field(default=0, ge=0)
+
+
+class GitHistoryResult(BaseModel):
+    commits: list[dict[str, Any]]
+    has_more: bool = False
 
 
 class ChangeDiffResult(BaseModel):
@@ -352,6 +396,18 @@ class SessionSendMessageResult(BaseModel):
     run_id: str
 
 
+class SessionSteerMessageCommand(BaseModel):
+    type: Literal["session.steer_message"] = "session.steer_message"
+    session_id: str
+    content: str
+    images: list[MessageImageBlock] = Field(default_factory=list)
+
+
+class SessionSteerMessageResult(BaseModel):
+    run_id: str
+    status: Literal["accepted"] = "accepted"
+
+
 class SessionGetHistoryCommand(BaseModel):
     type: Literal["session.get_history"] = "session.get_history"
     session_id: str
@@ -390,6 +446,60 @@ class PermissionRespondCommand(BaseModel):
 
 class PermissionRespondResult(BaseModel):
     ok: bool = True
+
+
+class UserQuestionOption(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class UserQuestionItem(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    header: str | None = Field(default=None, max_length=40)
+    question: str = Field(min_length=1, max_length=1_000)
+    options: list[UserQuestionOption] = Field(default_factory=list, max_length=8)
+    multi_select: bool = False
+
+    # 拒绝重复选项标签，确保 selected 可以无歧义地回指原选项
+    @model_validator(mode="after")
+    def validate_unique_option_labels(self) -> UserQuestionItem:
+        labels = [option.label for option in self.options]
+        if len(labels) != len(set(labels)):
+            raise ValueError("question option labels must be unique")
+        return self
+
+
+class UserQuestionAnswer(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    selected: list[str] = Field(default_factory=list, max_length=8)
+    custom: str | None = Field(default=None, max_length=4_000)
+
+
+class UserQuestionPending(BaseModel):
+    rpc_id: str
+    session_id: str
+    run_id: str
+    questions: list[UserQuestionItem]
+
+
+class UserQuestionRespondCommand(BaseModel):
+    type: Literal["question.respond"] = "question.respond"
+    rpc_id: str
+    session_id: str
+    answers: list[UserQuestionAnswer] = Field(min_length=1, max_length=3)
+
+
+class UserQuestionRespondResult(BaseModel):
+    ok: bool = True
+
+
+class UserQuestionPendingCommand(BaseModel):
+    type: Literal["question.pending"] = "question.pending"
+    session_id: str | None = None
+
+
+class UserQuestionPendingResult(BaseModel):
+    pending: list[UserQuestionPending]
 
 
 class PermissionSetModeCommand(BaseModel):
@@ -802,6 +912,10 @@ Command = Annotated[
     | ChangeDiffCommand
     | ChangeRevertCommand
     | ChangeStageCommand
+    | ChangeUnstageCommand
+    | ChangeDiscardCommand
+    | GitCommitCommand
+    | GitHistoryCommand
     | EventSubscribeCommand
     | SessionCreateCommand
     | SessionListCommand
@@ -810,10 +924,13 @@ Command = Annotated[
     | SessionPinCommand
     | SessionResumeCommand
     | SessionSendMessageCommand
+    | SessionSteerMessageCommand
     | SessionGetHistoryCommand
     | SessionCloseCommand
     | SessionDeleteCommand
     | PermissionRespondCommand
+    | UserQuestionRespondCommand
+    | UserQuestionPendingCommand
     | PermissionSetModeCommand
     | SettingsGetCommand
     | SettingsUpdateCommand

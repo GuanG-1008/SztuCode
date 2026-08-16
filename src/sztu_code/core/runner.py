@@ -19,6 +19,7 @@ from sztu_code.core.config import SztuConfig
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus, EventHandler
 from sztu_code.core.events.writer import EventWriter
+from sztu_code.core.interaction.user_questions import UserQuestionManager
 from sztu_code.core.llm import create_provider
 from sztu_code.core.llm.base import LLMProvider
 from sztu_code.core.loop import AgentLoop
@@ -34,6 +35,7 @@ from sztu_code.core.subagent.registry import BackgroundTaskRegistry
 from sztu_code.core.subagent.tool import AgentResultTool, SpawnAgentTool
 from sztu_code.core.task.manager import TaskManager
 from sztu_code.core.tools.builtin import (
+    AskUserQuestionTool,
     BashTool,
     EditFileTool,
     ListDirTool,
@@ -81,6 +83,7 @@ class AgentRunner:
         runs_dir: Path | None = None,
         trace: TraceWriter | None = None,
         permission_manager: PermissionManager | None = None,
+        user_question_manager: UserQuestionManager | None = None,
         mcp_manager: McpServerManager | None = None,
     ) -> None:
         self._config = config
@@ -90,6 +93,7 @@ class AgentRunner:
         self._runs_dir = runs_dir or RUNS_DIR
         self._trace = trace
         self._permission_manager = permission_manager
+        self._user_question_manager = user_question_manager
         self._mcp_manager = mcp_manager
         # 跨 run 共享的后台 subagent 任务注册表
         self._task_registry = BackgroundTaskRegistry()
@@ -124,6 +128,15 @@ class AgentRunner:
         ]:
             if _ok(t.name):
                 registry.register(t)
+        if (
+            self._user_question_manager is not None
+            and session_id
+            and run_id is not None
+            and _ok("ask_user_question")
+        ):
+            registry.register(
+                AskUserQuestionTool(self._user_question_manager, session_id, run_id)
+            )
         if (
             memory_catalog is not None
             and memory_catalog.requires_reader()
@@ -203,6 +216,7 @@ class AgentRunner:
         system_prompt_override: str | None = None,
         tool_whitelist: list[str] | None = None,
         workspace_root: Path | None = None,
+        steering_queue: asyncio.Queue[dict[str, object]] | None = None,
     ) -> RunOutcome:
         run_id = run_id or new_run_id()
         if session is not None and store is not None:
@@ -251,7 +265,10 @@ class AgentRunner:
         if not system_prompt_override:
             from sztu_code.core.prompts import build_system_prompt
 
-            base_prompt = build_system_prompt(workspace_root=workspace_root)
+            # The runner treats the current directory as the default project root for
+            # profile detection, memory, and tools; use the same root for prompt
+            # injection so CLAUDE.md is available even without an explicit workspace.
+            base_prompt = build_system_prompt(workspace_root=project_root)
 
         context = ExecutionContext(
             run_id=run_id,

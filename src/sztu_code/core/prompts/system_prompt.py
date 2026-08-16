@@ -17,6 +17,7 @@ _MAX_PARENT_SCAN_DEPTH = 6
 # 候选指令文件名与 scope 标识
 _INSTRUCTION_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("CLAUDE.md", "claude_md"),
+    ("SZTUCODE.md", "sztucode_md"),
     ("CLAW.md", "claw_md"),
     ("AGENTS.md", "agents_md"),
     (".claude/CLAUDE.md", "claude_claude_md"),
@@ -155,7 +156,7 @@ def _normalize(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if line.strip()).strip()
 
 
-# 从工作区根向上发现指令文件（CLAUDE.md 等），去重并受预算限制
+# 从工作区根向上发现指令文件（CLAUDE.md、SZTUCODE.md 等），去重并受预算限制
 def discover_instruction_files(root: Path) -> list[tuple[str, str]]:
     seen: set[str] = set()
     entries: list[tuple[str, str]] = []
@@ -183,7 +184,11 @@ def discover_instruction_files(root: Path) -> list[tuple[str, str]]:
                 budget = 0
             else:
                 budget -= len(content)
-            label = candidate if candidate == "CLAUDE.md" else f"{current.name}/{candidate}"
+            label = (
+                candidate
+                if candidate in {"CLAUDE.md", "SZTUCODE.md"}
+                else f"{current.name}/{candidate}"
+            )
             entries.append((label, content))
             if budget <= 0:
                 return entries

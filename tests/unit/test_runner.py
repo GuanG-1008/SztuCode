@@ -542,6 +542,69 @@ async def test_project_profile_is_injected_into_system_prompt(
     assert "Recommended unit test: uv run pytest" in provider.system
 
 
+# 功能：验证 runner 的最终 system prompt 会注入工作区 CLAUDE.md
+# 设计：使用捕获型 provider 观察真实 run 链路，而不是只测试提示词构建函数
+async def test_claude_md_is_injected_by_runner(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "CLAUDE.md").write_text(
+        "项目规则：先阅读相关代码\n",
+        encoding="utf-8",
+    )
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    outcome = await runner.run_and_capture("inspect project", workspace_root=workspace_root)
+
+    assert outcome.status == "success"
+    assert provider.system is not None
+    assert "## CLAUDE.md" in provider.system
+    assert "项目规则：先阅读相关代码" in provider.system
+
+
+# 功能：验证 runner 的最终 system prompt 会注入工作区 SZTUCODE.md
+# 设计：使用捕获型 provider 观察真实 run 链路，确保桌面端/CLI 共用的底层机制生效
+async def test_sztucode_md_is_injected_by_runner(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    (workspace_root / "SZTUCODE.md").write_text(
+        "SztuCode 规则：修改后必须验证\n",
+        encoding="utf-8",
+    )
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    outcome = await runner.run_and_capture("inspect project", workspace_root=workspace_root)
+
+    assert outcome.status == "success"
+    assert provider.system is not None
+    assert "## SZTUCODE.md" in provider.system
+    assert "SztuCode 规则：修改后必须验证" in provider.system
+
+
+# 功能：验证未显式传入工作区时仍从当前目录读取 CLAUDE.md
+# 设计：切换到临时目录运行完整链路，覆盖 CLI/TUI 默认工作区场景
+async def test_claude_md_is_injected_for_default_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "CLAUDE.md").write_text("默认工作区规则\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    provider = _CapturingProvider(LlmResponse(stop_reason="end_turn", text="done"))
+    runner = AgentRunner(_config(), provider=provider, runs_dir=tmp_path / "runs")
+
+    outcome = await runner.run_and_capture("inspect project")
+
+    assert outcome.status == "success"
+    assert provider.system is not None
+    assert "## CLAUDE.md" in provider.system
+    assert "默认工作区规则" in provider.system
+
+
 # 功能：验证项目画像检测遇到文件系统或数据错误时不会阻断 agent run
 # 设计：依次注入 OSError 和 ValueError，确认两种允许捕获的失败均保留正常 run 且不产生画像段
 async def test_project_profile_detection_errors_do_not_block_run(

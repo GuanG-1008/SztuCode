@@ -332,7 +332,7 @@ const turns = computed<TurnView[]>(() => {
     <article
       v-for="turn in turns"
       :key="turn.key"
-      v-memo="[turn.key, turn.state, turn.summaryText, turn.thinkingText, turn.runStats, turn.pending, turn.hasContent, turn.contextInjections, isTurnExpanded(turn), turn.state === 'running' ? now : null]"
+      v-memo="[turn.key, turn.state, turn.summaryText, turn.thinkingText, turn.runStats, turn.pending, turn.hasContent, turn.contextInjections, isTurnExpanded(turn), copiedTurn, turn.state === 'running' ? now : null]"
       class="timeline-step"
     >
       <div v-if="turn.userMessage" class="timeline-user-message">
@@ -405,6 +405,14 @@ const turns = computed<TurnView[]>(() => {
 
           <div v-if="isTurnExpanded(turn) && turn.state !== 'running' && turn.state !== 'waiting' && turn.stateLabel !== '工作记录'" class="turn-status turn-status--result" :class="turn.state">
             <b>{{ turn.stateLabel }}</b>
+          </div>
+
+          <!-- 每轮 Token 消耗与缓存命中：展开历史时展示，运行中轮次不渲染 -->
+          <div v-if="turn.runStats && isTurnExpanded(turn)" class="turn-usage" aria-label="本轮 Token 消耗与缓存命中">
+            <span>命中缓存 {{ formatTokens(turn.runStats.cacheReadInputTokens) }}</span>
+            <span>输入 {{ formatTokens(turn.runStats.inputTokens) }}</span>
+            <span>输出 {{ formatTokens(turn.runStats.outputTokens) }}</span>
+            <b>总计 {{ formatTokens(turn.runStats.inputTokens + turn.runStats.outputTokens) }} tokens</b>
           </div>
 
           <section v-if="isTurnExpanded(turn) && (turn.passedTests || turn.failedTests || turn.changePaths.length || (turn.state === 'failed' && turn.failureReason))" class="evidence-strip" aria-label="验证与变更">

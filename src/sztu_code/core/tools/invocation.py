@@ -197,7 +197,8 @@ async def invoke_tool(
                 started_at=started_at,
             )
 
-    if permission_manager is not None:
+    # 结构化提问本身就是用户交互，不进入危险操作审批通道
+    if permission_manager is not None and not tool.is_interactive:
         async def _emit_permission(raw: dict[str, Any]) -> None:
             await bus.publish(PermissionRequestedEvent(**raw, run_id=run_id))
 
@@ -268,9 +269,12 @@ async def invoke_tool(
         error_message: str | None = None
 
         try:
-            result = await asyncio.wait_for(
-                tool.invoke(runtime_params), timeout=timeout
-            )
+            if tool.allows_indefinite_wait:
+                result = await tool.invoke(runtime_params)
+            else:
+                result = await asyncio.wait_for(
+                    tool.invoke(runtime_params), timeout=timeout
+                )
             ms = elapsed()
 
             if result.is_error:

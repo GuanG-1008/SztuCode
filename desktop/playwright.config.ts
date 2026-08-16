@@ -12,6 +12,8 @@ export default defineConfig({
     browserName: "chromium",
     colorScheme: "dark",
     deviceScaleFactor: 1,
+    // 会话总结的“复制整段总结”按钮依赖 navigator.clipboard.writeText，无头模式下默认拒绝
+    permissions: ["clipboard-read", "clipboard-write"],
     ...(Object.keys(chromiumLaunchOptions).length
       ? { launchOptions: chromiumLaunchOptions }
       : {}),

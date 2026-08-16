@@ -55,7 +55,7 @@ async function select(path: string) {
   loadingDiff.value = true;
   diffError.value = "";
   try {
-    diff.value = await changeDiff(props.workspaceId, path);
+    diff.value = await changeDiff(props.workspaceId, path, props.runId);
   } catch (error) {
     diffError.value = messageOf(error);
   } finally {
