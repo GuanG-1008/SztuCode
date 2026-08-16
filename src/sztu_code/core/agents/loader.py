@@ -10,6 +10,8 @@ class AgentProfile:
     name: str
     description: str
     system_prompt: str
+    # 可选的原子提示词 ID；内建角色通过它引用 prompts/content 下的 Markdown
+    prompt_id: str = ""
     allowed_tools: list[str] = field(default_factory=list)
     model: str = ""
     # 子 agent 权限模式：normal/plan/accept_edits/auto
@@ -46,10 +48,17 @@ class AgentProfileLoader:
         with open(path, "rb") as f:
             data = tomllib.load(f)
         agent = data.get("agent", {})
+        prompt_id = agent.get("prompt_id", "").strip()
+        system_prompt = agent.get("system_prompt", "").strip()
+        if prompt_id:
+            from sztu_code.core.prompts.subagent_prompts import load_subagent_prompt
+
+            system_prompt = load_subagent_prompt(prompt_id)
         return AgentProfile(
             name=name,
             description=agent.get("description", ""),
-            system_prompt=agent.get("system_prompt", "").strip(),
+            system_prompt=system_prompt,
+            prompt_id=prompt_id,
             allowed_tools=agent.get("allowed_tools", []),
             model=agent.get("model", ""),
             permission_mode=agent.get("permission_mode", "normal"),

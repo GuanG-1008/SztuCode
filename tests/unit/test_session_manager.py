@@ -420,3 +420,21 @@ async def test_skill_invocation_keeps_base_prompt_without_goal_duplication(tmp_p
     assert "Inspect src/app.py carefully." in runner.system_prompt_override
     assert "# Environment" in runner.system_prompt_override
     assert runner.tool_whitelist == ["read_file"]
+
+
+# 功能：验证第九章内建斜杠命令会加载专用提示词并仅把参数作为任务目标
+# 设计：用可观察 runner 调用 /security-review，断言基础提示、工作流正文、目标和工具范围
+async def test_builtin_slash_command_loads_indexed_prompt(tmp_path: Path) -> None:
+    runner = _Runner()
+    store = SessionStore(tmp_path / "sessions")
+    manager = SessionManager(store, lambda: runner, EventBus())  # type: ignore[arg-type]
+    session = await manager.create("chat")
+
+    await manager.send_message(session.id, "/security-review origin/main")
+
+    assert runner.goal == "origin/main"
+    assert runner.system_prompt_override is not None
+    assert "## Active slash command: /security-review" in runner.system_prompt_override
+    assert "HIGH-CONFIDENCE security" in runner.system_prompt_override
+    assert "# Environment" in runner.system_prompt_override
+    assert runner.tool_whitelist is None

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from copy import deepcopy
 
+from sztu_code.core.prompts.tool_descriptions import load_tool_descriptions
 from sztu_code.core.tools.base import BaseTool, ToolPermission
 
 # 内置别名映射（无需在工具类上声明即可使用）
@@ -89,6 +90,7 @@ class ToolRegistry:
     def tool_schemas(self) -> list[dict[str, object]]:
         if self._schema_cache is None:
             schemas: list[dict[str, object]] = []
+            indexed_descriptions = load_tool_descriptions()
             for tool in self._tools.values():
                 input_schema = deepcopy(tool.input_schema)
                 raw_properties = input_schema.get("properties", {})
@@ -109,7 +111,7 @@ class ToolRegistry:
                 input_schema["required"] = required
                 schemas.append({
                     "name": tool.name,
-                    "description": tool.description,
+                    "description": indexed_descriptions.get(tool.name, tool.description),
                     "input_schema": input_schema,
                 })
             self._schema_cache = schemas

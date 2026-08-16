@@ -335,6 +335,25 @@ def _read_event_types(events_path: Path) -> list[str]:
 # --- tests -------------------------------------------------------------------
 
 
+# 功能：验证主 Agent 注册指南要求优先使用的文件与内容搜索工具
+# 设计：直接构建 Registry，避免启动模型，并检查两个工具及其 Markdown schema 描述
+def test_main_registry_includes_dedicated_search_tools(tmp_path: Path) -> None:
+    from sztu_code.core.prompts.tool_descriptions import load_tool_descriptions
+    from sztu_code.core.task.manager import TaskManager
+
+    runner = AgentRunner(_config(), runs_dir=tmp_path / "runs")
+    registry = runner._build_registry(  # noqa: SLF001
+        TaskManager(tmp_path / "tasks"),
+        workspace_root=tmp_path,
+    )
+    schemas = {str(schema["name"]): schema for schema in registry.tool_schemas()}
+
+    assert registry.get("glob_search") is not None
+    assert registry.get("grep_search") is not None
+    assert schemas["glob_search"]["description"] == load_tool_descriptions()["glob_search"]
+    assert schemas["grep_search"]["description"] == load_tool_descriptions()["grep_search"]
+
+
 # 功能：验证 run 开始时发布携带正确 goal 的 run.started 事件
 # 设计：用 extra_handlers 收集事件，而非从 events.jsonl 读取，避免文件 I/O 耦合；聚焦 runner 层的事件发布职责
 async def test_run_started_event_published(tmp_path: Path) -> None:

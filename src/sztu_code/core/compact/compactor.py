@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 from sztu_code.core.bus.events import ContextCompactedEvent, ContextCompactingEvent
 from sztu_code.core.compact.token_counter import TokenCounter
 from sztu_code.core.events.bus import EventBus
+from sztu_code.core.prompts.context_management_prompts import (
+    load_context_management_prompt,
+)
 
 if TYPE_CHECKING:
     from sztu_code.core.context import ExecutionContext
@@ -47,34 +50,9 @@ def _continuation_ack_blocks() -> list[dict[str, Any]]:
     ]
 
 
-_COMPACT_PROMPT = """\
-You are compressing an agent conversation into a handoff summary.
-Another LLM instance will continue this task from your summary alone — make it complete.
-
-Structure your response with exactly these six sections:
-
-## 1. Original Goal
-One sentence describing what the user asked the agent to accomplish.
-
-## 2. Completed Steps
-Bullet list of what has been done. Be specific (file paths, commands run, decisions made).
-
-## 3. Key Constraints & Discoveries
-Facts learned during the run that affect future decisions \
-(e.g., API limitations, file formats, user preferences stated mid-conversation).
-
-## 4. Current File State
-For each file that was created or modified: path, a one-line description of its current state.
-
-## 5. Remaining TODOs
-Ordered list of what still needs to be done to complete the original goal.
-
-## 6. Critical Data
-Any values the next LLM needs verbatim: IDs, tokens, exact error messages, config values \
-discovered during the run.
-
-Be concise. Omit reasoning steps and intermediate attempts. Keep conclusions.\
-"""
+# 在真正触发上下文压缩时按稳定 ID 获取摘要提示词
+def _compact_prompt() -> str:
+    return load_context_management_prompt("context-compaction-summary")
 
 
 # 返回当前 UTC 时间的简短时间戳字符串（用于文件名）
@@ -82,7 +60,21 @@ Be concise. Omit reasoning steps and intermediate attempts. Keep conclusions.\
 def _summary_is_well_formed(summary: str) -> bool:
     keywords = any(
         kw in summary.lower()
-        for kw in ("original goal", "completed", "remaining", "summary", "progress")
+        for kw in (
+            "original goal",
+            "completed",
+            "remaining",
+            "summary",
+            "progress",
+            "primary request",
+            "pending tasks",
+            "current work",
+            "task overview",
+            "current state",
+            "important discoveries",
+            "next steps",
+            "context to preserve",
+        )
     )
     return bool(keywords and len(summary) >= 30)
 
@@ -98,6 +90,7 @@ def _now() -> str:
 
 # ─── 滑动窗口 turn 检测 ───
 
+
 # 判断消息是否为独立 user 文本消息（turn 0 序言或干预消息）
 def _is_standalone_user_msg(msg: dict[str, Any]) -> bool:
     return msg.get("role") == "user" and isinstance(msg.get("content"), str)
@@ -106,9 +99,7 @@ def _is_standalone_user_msg(msg: dict[str, Any]) -> bool:
 # 判断 user 消息是否包含 tool_result 块（标志一个 turn 结束）
 def _has_tool_results(msg: dict[str, Any]) -> bool:
     content = msg.get("content")
-    return isinstance(content, list) and any(
-        b.get("type") == "tool_result" for b in content
-    )
+    return isinstance(content, list) and any(b.get("type") == "tool_result" for b in content)
 
 
 # 将扁平消息列表切分为 turn 列表
@@ -190,7 +181,9 @@ class Compactor:
         final_result: CompactionResult | None = None
         if sliding_window_size > 0:
             ret = await self.compact_messages(
-                context.messages, provider, focus=focus,
+                context.messages,
+                provider,
+                focus=focus,
                 sliding_window_size=sliding_window_size,
                 compaction_count=context.compaction_count,
             )
@@ -219,8 +212,10 @@ class Compactor:
         await self.record_compaction(context.run_id, final_result)
         logger.info(
             "context compacted session=%s run=%s original≈%d summary=%d tokens mode=%s",
-            self._session_id, context.run_id,
-            final_result.original_token_estimate, final_result.summary_tokens,
+            self._session_id,
+            context.run_id,
+            final_result.original_token_estimate,
+            final_result.summary_tokens,
             "sliding" if sliding_window_size > 0 else "full",
         )
         return final_result
@@ -243,7 +238,9 @@ class Compactor:
             final_result: CompactionResult | None = None
             if sliding_window_size > 0:
                 ret = await self.compact_messages(
-                    snapshot, provider, focus=focus,
+                    snapshot,
+                    provider,
+                    focus=focus,
                     sliding_window_size=sliding_window_size,
                     compaction_count=context.compaction_count,
                 )
@@ -251,7 +248,8 @@ class Compactor:
                     context.compaction_failure_count += 1
                     logger.warning(
                         "compactor: sliding compaction attempt %d failed (session=%s)",
-                        context.compaction_failure_count, context.run_id,
+                        context.compaction_failure_count,
+                        context.run_id,
                     )
                     return
                 sliding_result, new_msgs = ret
@@ -259,7 +257,8 @@ class Compactor:
                     context.compaction_failure_count += 1
                     logger.warning(
                         "compactor: sliding compaction attempt %d failed (session=%s)",
-                        context.compaction_failure_count, context.run_id,
+                        context.compaction_failure_count,
+                        context.run_id,
                     )
                     return
                 # result 非 None 但 new_msgs 为 None → 跳过（token 不足等）
@@ -267,7 +266,7 @@ class Compactor:
                     return
                 # 检查快照后是否有新消息追加
                 if len(context.messages) > len(snapshot):
-                    new_messages_since = context.messages[len(snapshot):]
+                    new_messages_since = context.messages[len(snapshot) :]
                     context.messages = new_msgs + new_messages_since
                 else:
                     context.messages = new_msgs
@@ -278,12 +277,13 @@ class Compactor:
                     context.compaction_failure_count += 1
                     logger.warning(
                         "compactor: full compaction attempt %d failed (session=%s)",
-                        context.compaction_failure_count, context.run_id,
+                        context.compaction_failure_count,
+                        context.run_id,
                     )
                     return
                 # 检查快照后是否有新消息追加
                 if len(context.messages) > len(snapshot):
-                    new_messages = context.messages[len(snapshot):]
+                    new_messages = context.messages[len(snapshot) :]
                     context.messages = [  # type: ignore[assignment]
                         {"role": "user", "content": _continuation_message(ret.summary_text)},
                         {"role": "assistant", "content": _continuation_ack_blocks()},
@@ -300,8 +300,10 @@ class Compactor:
             await self.record_compaction(context.run_id, final_result)
             logger.info(
                 "context compacted (async) session=%s run=%s original≈%d summary=%d tokens mode=%s",
-                self._session_id, context.run_id,
-                final_result.original_token_estimate, final_result.summary_tokens,
+                self._session_id,
+                context.run_id,
+                final_result.original_token_estimate,
+                final_result.summary_tokens,
                 "sliding" if sliding_window_size > 0 else "full",
             )
 
@@ -366,7 +368,7 @@ class Compactor:
                 # turn 太少 — 回退全量替换，确保短对话仍能压缩
                 history_text = _messages_to_text(messages)
                 original_estimate = counter.count(history_text)
-                prompt = _COMPACT_PROMPT
+                prompt = _compact_prompt()
                 if focus.strip():
                     prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
 
@@ -410,14 +412,15 @@ class Compactor:
             if original_estimate < 2000:
                 logger.info(
                     "compactor: old turns too small (%d tok, %d turns), deferring",
-                    original_estimate, len(old_turns),
+                    original_estimate,
+                    len(old_turns),
                 )
                 return CompactionResult(
                     summary_text="",
                     original_token_estimate=original_estimate,
                     summary_tokens=0,
                 ), None
-            prompt = _COMPACT_PROMPT
+            prompt = _compact_prompt()
             if compaction_count > 0:
                 prompt += (
                     f"\n\nThis is compaction #{compaction_count + 1}. "
@@ -450,17 +453,21 @@ class Compactor:
                 return None, None
 
             # 重构消息列表：序言 + 摘要对 + 最近 turn
-            rebuilt_msgs: list[dict[str, Any]] = list(preamble) + [
-                {"role": "user", "content": _continuation_message(result.summary_text)},
-                {"role": "assistant", "content": _continuation_ack_blocks()},
-            ] + _flatten_turns(recent_turns)
+            rebuilt_msgs: list[dict[str, Any]] = (
+                list(preamble)
+                + [
+                    {"role": "user", "content": _continuation_message(result.summary_text)},
+                    {"role": "assistant", "content": _continuation_ack_blocks()},
+                ]
+                + _flatten_turns(recent_turns)
+            )
 
             return result, rebuilt_msgs
         else:
             # ─── 全量替换模式（向后兼容）───
             history_text = _messages_to_text(messages)
             original_estimate = counter.count(history_text)
-            prompt = _COMPACT_PROMPT
+            prompt = _compact_prompt()
             if focus.strip():
                 prompt += f"\n\nIMPORTANT: Pay special attention to: {focus.strip()}"
 
@@ -509,11 +516,7 @@ def _validate_summary(
         logger.warning("compactor: LLM returned invalid summary, skipping compaction")
         return None
 
-    summary_tokens = (
-        response.usage.output_tokens
-        if response.usage
-        else counter.count(summary_text)
-    )
+    summary_tokens = response.usage.output_tokens if response.usage else counter.count(summary_text)
     if summary_tokens >= original_estimate:
         logger.warning(
             "compactor: summary not beneficial original=%d summary=%d, skipping compaction",

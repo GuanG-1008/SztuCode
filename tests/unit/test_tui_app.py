@@ -431,6 +431,21 @@ async def test_slash_items_load_async(monkeypatch) -> None:
     assert app._builtin_slash_items()[0] in app._slash_items
 
 
+# 功能：验证第九章六个斜杠命令全部出现在 TUI 首帧自动补全中
+# 设计：直接读取不依赖异步 Skill 扫描的内建候选，确保每个运行时命令都可被发现
+def test_chapter_nine_slash_items_are_builtin() -> None:
+    names = {name for name, _description in KamaTuiApp("127.0.0.1", 9999)._builtin_slash_items()}
+
+    assert {
+        "security-review",
+        "batch",
+        "review-pr",
+        "pr-comments",
+        "commit",
+        "create-pr",
+    } <= names
+
+
 # 功能：验证 /theme 按序切换明暗主题并更新 Textual 主题与全局取色
 # 设计：直接调用 _cycle_theme 两次，断言主题名与 textual theme 依次切换，
 #       覆盖循环首尾衔接（light 之后回到 dark）；async 提供事件循环供 run_worker 调度
