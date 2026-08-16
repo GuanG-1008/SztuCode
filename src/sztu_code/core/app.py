@@ -113,6 +113,8 @@ from sztu_code.core.bus.commands import (
     SessionResumeResult,
     SessionSendMessageCommand,
     SessionSendMessageResult,
+    SessionSteerMessageCommand,
+    SessionSteerMessageResult,
     SessionSummary,
     SettingsGetCommand,
     SettingsGetResult,
@@ -126,6 +128,10 @@ from sztu_code.core.bus.commands import (
     SkillSetEnabledCommand,
     SkillSetEnabledResult,
     SkillSummary,
+    UserQuestionPendingCommand,
+    UserQuestionPendingResult,
+    UserQuestionRespondCommand,
+    UserQuestionRespondResult,
     WorkspaceArchiveCommand,
     WorkspaceArchiveResult,
     WorkspaceDeleteCommand,
@@ -159,6 +165,7 @@ from sztu_code.core.config import (
     save_client_settings,
 )
 from sztu_code.core.events.bus import EventBus
+from sztu_code.core.interaction.user_questions import UserQuestionManager
 from sztu_code.core.llm import create_provider
 from sztu_code.core.llm.ccswitch import get_ccswitch_provider, list_ccswitch_providers
 from sztu_code.core.logging_setup import setup_logging
@@ -238,6 +245,7 @@ class CoreApp:
         self._active_session_runs: dict[str, asyncio.Task[str]] = {}
         self._sessions: SessionManager | None = None
         self._permission_manager: PermissionManager | None = None
+        self._user_question_manager = UserQuestionManager(self._bus)
         self._mcp_manager: McpServerManager | None = None
         self._workspaces: WorkspaceManager | None = None
 
@@ -626,7 +634,17 @@ class CoreApp:
                 return SessionSendMessageResult(run_id=existing_run_id)
         active_run = self._active_session_runs.get(cmd.session_id)
         if active_run is not None and not active_run.done():
-            raise HandlerError(SESSION_BUSY, "session busy")
+            try:
+                await asyncio.wait_for(asyncio.shield(active_run), timeout=0.1)
+            except TimeoutError as error:
+                raise HandlerError(SESSION_BUSY, "session busy") from error
+            except asyncio.CancelledError:
+                # 被用户停止的上一轮同样已结束，可继续接受排队消息
+                if not active_run.cancelled():
+                    raise
+            except Exception:
+                # 上一轮失败也已经完成清理，不应阻止排队的下一轮启动
+                pass
         await self._sessions.get_history(cmd.session_id)
 
         run_id = new_run_id()
@@ -644,6 +662,17 @@ class CoreApp:
         self._track_run(run_id, run_task)
         run_task.add_done_callback(partial(self._on_session_run_finished, cmd.session_id))
         return SessionSendMessageResult(run_id=run_id)
+
+    # 将追加消息投递给运行中会话的 steer 收件箱
+    async def _session_steer_handler(self, params: dict[str, Any]) -> SessionSteerMessageResult:
+        assert self._sessions is not None
+        cmd = SessionSteerMessageCommand.model_validate(params)
+        run_id = await self._sessions.steer_message(
+            cmd.session_id,
+            cmd.content,
+            images=[image.model_dump() for image in cmd.images],
+        )
+        return SessionSteerMessageResult(run_id=run_id)
 
     # 清理已结束的 session run，并记录后台执行中未能返回给 RPC 调用方的异常
     def _on_session_run_finished(self, session_id: str, task: asyncio.Task[str]) -> None:
@@ -695,6 +724,30 @@ class CoreApp:
             return PermissionRespondResult()
         self._permission_manager.respond(cmd.tool_use_id, cmd.decision)
         return PermissionRespondResult()
+
+    # 接收结构化问题回答，校验后恢复 ask_user_question 所在的工具调用
+    async def _user_question_respond_handler(
+        self, params: dict[str, Any]
+    ) -> UserQuestionRespondResult:
+        cmd = UserQuestionRespondCommand.model_validate(params)
+        try:
+            await self._user_question_manager.respond(
+                rpc_id=cmd.rpc_id,
+                session_id=cmd.session_id,
+                answers=cmd.answers,
+            )
+        except ValueError as error:
+            raise HandlerError(-32602, str(error)) from error
+        return UserQuestionRespondResult()
+
+    # 返回 daemon 内仍在等待回答的问题，供客户端刷新或重连后恢复输入接管态
+    async def _user_question_pending_handler(
+        self, params: dict[str, Any]
+    ) -> UserQuestionPendingResult:
+        cmd = UserQuestionPendingCommand.model_validate(params)
+        return UserQuestionPendingResult(
+            pending=self._user_question_manager.list_pending(cmd.session_id)
+        )
 
     # 接收客户端权限模式切换请求，设置 PermissionManager 模式并广播事件
     async def _permission_set_mode_handler(self, params: dict[str, Any]) -> PermissionSetModeResult:
@@ -1692,6 +1745,7 @@ class CoreApp:
                 bus=self._bus,
                 trace=self._trace,
                 permission_manager=self._permission_manager,
+                user_question_manager=self._user_question_manager,
                 mcp_manager=self._mcp_manager,
             ),
             bus=self._bus,
@@ -1734,10 +1788,13 @@ class CoreApp:
         server.register("session.pin", self._session_pin_handler)
         server.register("session.resume", self._session_resume_handler)
         server.register("session.send_message", self._session_send_handler)
+        server.register("session.steer_message", self._session_steer_handler)
         server.register("session.get_history", self._session_history_handler)
         server.register("session.close", self._session_close_handler)
         server.register("session.delete", self._session_delete_handler)
         server.register("permission.respond", self._permission_respond_handler)
+        server.register("question.respond", self._user_question_respond_handler)
+        server.register("question.pending", self._user_question_pending_handler)
         server.register("permission.set_mode", self._permission_set_mode_handler)
         server.register("settings.get", self._settings_get_handler)
         server.register("settings.update", self._settings_update_handler)

@@ -27,6 +27,7 @@ class _Runner:
         system_prompt_override: str | None = None,
         tool_whitelist: list[str] | None = None,
         workspace_root: Path | None = None,
+        steering_queue: asyncio.Queue[dict[str, object]] | None = None,
     ) -> RunOutcome:
         assert run_id is not None
         assert session is not None
@@ -35,12 +36,54 @@ class _Runner:
         self.system_prompt_override = system_prompt_override
         self.tool_whitelist = tool_whitelist
         self.workspace_root = workspace_root
+        self.steering_queue = steering_queue
         store.append_messages(
             session.id,
             [{"role": "assistant", "content": [{"type": "text", "text": f"done {goal}"}]}],
             run_id,
         )
         return RunOutcome(status="success", result="done", reason=None)
+
+
+# 功能：验证运行中的会话可接收 steer 消息并发布带 run_id 的追加事件
+# 设计：用暂停 runner 保持会话锁和 steer 队列存活，直接检查 FIFO 消息与事件投影后再释放任务
+async def test_steer_message_reaches_active_runner_queue(tmp_path: Path) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    captured: dict[str, object] = {}
+    events: list[object] = []
+    bus = EventBus()
+
+    # 收集会话事件，验证 UI 能按 session_id 和 run_id 定位追加指令
+    async def collect(event: object) -> None:
+        events.append(event)
+
+    class _SteeringRunner:
+        # 暂停运行并暴露 manager 注入的 steer 队列
+        async def run_and_capture(self, goal: str, **kwargs: object) -> RunOutcome:
+            captured["queue"] = kwargs["steering_queue"]
+            started.set()
+            await release.wait()
+            return RunOutcome(status="success", result="done", reason=None)
+
+    bus.subscribe(collect)
+    manager = SessionManager(SessionStore(tmp_path), lambda: _SteeringRunner(), bus)  # type: ignore[arg-type]
+    session = await manager.create("chat")
+    run_task = asyncio.create_task(manager.send_message(session.id, "first"))
+    await started.wait()
+
+    run_id = await manager.steer_message(session.id, "follow up")
+    queue = captured["queue"]
+    assert isinstance(queue, asyncio.Queue)
+    assert queue.get_nowait() == {"role": "user", "content": "follow up"}
+    assert any(
+        getattr(event, "type", "") == "session.message_steered"
+        and getattr(event, "run_id", "") == run_id
+        for event in events
+    )
+
+    release.set()
+    await run_task
 
 
 class _SummaryProvider:

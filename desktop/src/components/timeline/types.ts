@@ -16,7 +16,7 @@ export type ToolCallEntry = {
 // 上下文注入行：展示模型实际收到的完整 system 上下文及内部干预。
 export type ContextInjectionEntry = {
   id: string;
-  source: "compaction" | "canvas" | "intervention" | "system";
+  source: "compaction" | "canvas" | "intervention" | "steering" | "system";
   label: string;    // 展示名（如 "上下文注入"、"会话压缩"）
   chars: number;    // 注入内容字符数
   preview: string;  // 折叠时摘要（首行/前 100 字符）

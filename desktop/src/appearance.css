@@ -137,6 +137,7 @@
   .work-header,
   .task-canvas,
   .kimi-composer,
+  .composer-input-shell,
   .project-popover,
   .launcher-popover,
   .bottom-diff-preview,
@@ -778,7 +779,7 @@
 
 :root:not([data-wallpaper="none"]) :is(
   .task-conversation > .kimi-composer,
-  .task-launcher .landing-composer textarea,
+  .task-launcher .composer-input-shell,
   .chat-composer > textarea
 ) {
   background: color-mix(in srgb, var(--surface) var(--composer-surface-opacity), transparent) !important;

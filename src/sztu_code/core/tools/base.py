@@ -36,6 +36,10 @@ class BaseTool(ABC):
     params_model: ClassVar[type[BaseModel] | None] = None
     # 每个工具声明自身所需的最低权限级别
     required_permission: ToolPermission = ToolPermission.WORKSPACE_WRITE
+    # 交互工具不参与并发只读批次，避免同一步中多个等待态争用输入区域
+    is_interactive: bool = False
+    # 用户交互等待由 run 取消控制，不受普通工具执行超时限制
+    allows_indefinite_wait: bool = False
     # 工具名称别名列表（如 "read" → "read_file"）
     aliases: ClassVar[list[str]] = []
 

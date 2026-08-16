@@ -77,6 +77,15 @@ export type SessionHistory = {
   run_stats: Record<string, RunStats>;
   context_injections: ContextInjectionRecord[];
 };
+export type UserQuestionOption = { label: string; description?: string | null };
+export type UserQuestionItem = {
+  id: string; header?: string | null; question: string;
+  options: UserQuestionOption[]; multi_select: boolean;
+};
+export type UserQuestionAnswer = { id: string; selected: string[]; custom?: string };
+export type PendingUserQuestion = {
+  rpc_id: string; session_id: string; run_id: string; questions: UserQuestionItem[];
+};
 export type ApiFormat = "openai_chat_completions" | "anthropic_messages" | "openai_responses";
 export type ModelRequestSettings = {
   api_format: ApiFormat; context_window: number; max_output_tokens: number;
@@ -117,7 +126,7 @@ const PLUGIN_PROTOCOL_ERROR = "本地服务版本过旧，不支持插件市场�
 client.onDisconnect(() => { subscribed = false; });
 const EVENT_TOPICS = [
   "session.*", "run.*", "step.*", "llm.*", "tool.*", "permission.*",
-  "plan.*", "test.*", "change.*", "log.*", "subagent.*", "skill.*", "context.*", "denial.*",
+  "question.*", "plan.*", "test.*", "change.*", "log.*", "subagent.*", "skill.*", "context.*", "denial.*",
 ];
 
 async function waitForDaemon(): Promise<void> {
@@ -224,6 +233,11 @@ export async function sessionHistory(sessionId: string): Promise<SessionHistory>
 
 export async function sendPrompt(sessionId: string, message: string, images: ImageBlock[] = [], clientMessageId?: string): Promise<string> {
   const result = await client.request("session.send_message", { session_id: sessionId, content: message, images, client_message_id: clientMessageId });
+  return String(result.run_id ?? "");
+}
+
+export async function steerPrompt(sessionId: string, message: string, images: ImageBlock[] = []): Promise<string> {
+  const result = await client.request("session.steer_message", { session_id: sessionId, content: message, images });
   return String(result.run_id ?? "");
 }
 
@@ -472,4 +486,20 @@ export async function testModelProfile(input: Omit<ModelProfileInput, "id" | "na
 
 export async function respondPermission(toolUseId: string, decision: "allow_once" | "always_allow" | "deny_once" | "always_deny"): Promise<void> {
   await client.request("permission.respond", { tool_use_id: toolUseId, decision });
+}
+
+export async function listPendingUserQuestions(sessionId?: string | null): Promise<PendingUserQuestion[]> {
+  const result = await client.request("question.pending", { session_id: sessionId ?? null });
+  return (result.pending as PendingUserQuestion[] | undefined) ?? [];
+}
+
+export async function respondUserQuestion(
+  pending: Pick<PendingUserQuestion, "rpc_id" | "session_id">,
+  answers: UserQuestionAnswer[],
+): Promise<void> {
+  await client.request("question.respond", {
+    rpc_id: pending.rpc_id,
+    session_id: pending.session_id,
+    answers,
+  });
 }

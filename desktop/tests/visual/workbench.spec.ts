@@ -20,6 +20,60 @@ test("agent workbench sidebar prioritizes tasks and project context", async ({ p
   await expect(page).toHaveScreenshot("task-launcher-v5-1280.png", { fullPage: true });
 });
 
+test("new task composer keeps pasted images and attachment control inside the input shell", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const input = page.getByPlaceholder("汝之所想，皆以言成");
+  const attachmentButton = page.getByRole("button", { name: "添加附件", exact: true });
+  await expect(attachmentButton.locator("svg")).toBeVisible();
+
+  await input.evaluate((textarea) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([
+      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+    ], "pasted-image.png", { type: "image/png" }));
+    textarea.dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: transfer,
+    }));
+  });
+
+  const shell = page.locator(".task-launcher .composer-input-shell");
+  const strip = shell.locator(".attachment-strip");
+  await expect(strip).toBeVisible();
+  await expect(strip.locator("img")).toHaveAttribute("alt", "pasted-image.png");
+
+  const geometry = await page.evaluate(() => {
+    const shell = document.querySelector<HTMLElement>(".task-launcher .composer-input-shell")!;
+    const strip = shell.querySelector<HTMLElement>(".attachment-strip")!;
+    const textarea = shell.querySelector<HTMLTextAreaElement>("textarea")!;
+    const button = shell.querySelector<HTMLButtonElement>(".launcher-attachment-trigger")!;
+    const shellBounds = shell.getBoundingClientRect();
+    const stripBounds = strip.getBoundingClientRect();
+    const textareaBounds = textarea.getBoundingClientRect();
+    const buttonBounds = button.getBoundingClientRect();
+    const topElement = document.elementFromPoint(
+      buttonBounds.left + buttonBounds.width / 2,
+      buttonBounds.top + buttonBounds.height / 2,
+    );
+    return {
+      stripInsideTop: stripBounds.top >= shellBounds.top && stripBounds.bottom <= shellBounds.bottom,
+      stripAboveTextarea: stripBounds.bottom <= textareaBounds.top,
+      buttonInside: buttonBounds.left >= shellBounds.left && buttonBounds.bottom <= shellBounds.bottom,
+      buttonReceivesPointer: topElement === button || button.contains(topElement),
+    };
+  });
+
+  expect(geometry).toEqual({
+    stripInsideTop: true,
+    stripAboveTextarea: true,
+    buttonInside: true,
+    buttonReceivesPointer: true,
+  });
+});
+
 test("work page remains mounted while navigating between top-level pages", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -37,6 +91,103 @@ test("work page remains mounted while navigating between top-level pages", async
   await expect(workHost).toBeVisible();
   await expect(page.locator(".kimi-main")).toHaveClass(/work-active/);
   expect(await workHost.evaluate((element) => (element as HTMLElement & { persistentMarker?: string }).persistentMarker)).toBe("mounted");
+});
+
+test("running sessions keep rendering and timing while another session is open", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(async () => {
+    const { IpcClient } = await import("/src/lib/ipc.ts") as {
+      IpcClient: { prototype: { request: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>> } };
+    };
+    const historyLoads: Record<string, number> = {};
+    (window as typeof window & { __sessionHistoryLoads?: Record<string, number> }).__sessionHistoryLoads = historyLoads;
+    IpcClient.prototype.request = async (method, params = {}) => {
+      if (method === "session.get_history") {
+        const sessionId = String(params.session_id ?? "");
+        historyLoads[sessionId] = (historyLoads[sessionId] ?? 0) + 1;
+        const runId = sessionId === "session-a" ? "run-a" : "run-b";
+        return {
+          messages: [{
+            role: "user",
+            content: sessionId === "session-a" ? "持续执行 A" : "查看会话 B",
+            run_id: runId,
+            ts: new Date(Date.now() - 2200).toISOString(),
+          }],
+          run_stats: {
+            [runId]: { input_tokens: 8, output_tokens: 0, cache_read_input_tokens: 0, elapsed_s: 0, context_pct: 0.01 },
+          },
+          context_injections: [],
+        };
+      }
+      if (method === "workspace.tree") return { nodes: [] };
+      if (method === "change.list") return { changes: [] };
+      return {};
+    };
+
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const state = root.__vue_app__?._instance?.setupState as {
+      workspace: Record<string, unknown> | null;
+      workspaces: Array<Record<string, unknown>>;
+      sessions: Array<Record<string, unknown>>;
+      chooseTask: (id: string) => Promise<void>;
+    } | undefined;
+    if (!state) throw new Error("Vue application state is unavailable");
+    const workspace = { workspace_id: "workspace-cache", name: "Cache", path: "F:/cache", archived: false };
+    state.workspace = workspace;
+    state.workspaces = [workspace];
+    state.sessions = [
+      {
+        session_id: "session-a", title: "Session A", status: "active", updated_at: "", archived: false, pinned: false,
+        workspace_id: "workspace-cache", latest_run_id: "run-a", total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+      },
+      {
+        session_id: "session-b", title: "Session B", status: "waiting_for_input", updated_at: "", archived: false, pinned: false,
+        workspace_id: "workspace-cache", latest_run_id: "run-b", total_input_tokens: 0, total_output_tokens: 0, total_elapsed_s: 0,
+      },
+    ];
+    await state.chooseTask("session-a");
+  });
+
+  const timeline = page.locator(".execution-timeline");
+  await expect(page.getByRole("button", { name: "停止任务" })).toBeVisible();
+  await timeline.evaluate((element) => { (element as HTMLElement & { cacheMarker?: string }).cacheMarker = "session-a"; });
+  const initialElapsed = Number((await page.locator(".turn-history-toggle span").textContent())?.match(/[\d.]+/)?.[0] ?? 0);
+
+  await page.evaluate(async () => {
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const state = root.__vue_app__?._instance?.setupState as {
+      chooseTask: (id: string) => Promise<void>;
+      applyRuntimeEvent: (event: Record<string, unknown>) => void;
+    };
+    if (!state) throw new Error("Vue application state is unavailable");
+    await state.chooseTask("session-b");
+    state.applyRuntimeEvent({ type: "llm.token", run_id: "run-a", step: 1, token: "后台增量仍在渲染" });
+  });
+  await page.waitForTimeout(1250);
+  await page.evaluate(async () => {
+    const root = document.querySelector("#app") as HTMLElement & {
+      __vue_app__?: { _instance?: { setupState?: Record<string, unknown> } };
+    };
+    const chooseTask = root.__vue_app__?._instance?.setupState?.chooseTask as ((id: string) => Promise<void>) | undefined;
+    if (!chooseTask) throw new Error("chooseTask is unavailable");
+    await chooseTask("session-a");
+  });
+
+  await expect(page.getByText("后台增量仍在渲染", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止任务" })).toBeVisible();
+  expect(await timeline.evaluate((element) => (element as HTMLElement & { cacheMarker?: string }).cacheMarker)).toBe("session-a");
+  const restoredElapsed = Number((await page.locator(".turn-history-toggle span").textContent())?.match(/[\d.]+/)?.[0] ?? 0);
+  expect(restoredElapsed).toBeGreaterThan(initialElapsed);
+  expect(await page.evaluate(() => (window as typeof window & { __sessionHistoryLoads?: Record<string, number> }).__sessionHistoryLoads)).toEqual({
+    "session-a": 1,
+    "session-b": 1,
+  });
 });
 
 test("task conversation scrolls against the workspace divider while controls stay visible", async ({ page }) => {
@@ -801,7 +952,7 @@ test("regional transparency controls update each workspace surface independently
       alpha: {
         chrome: alpha(".kimi-titlebar"),
         conversation: alpha(".kimi-main"),
-        composer: alpha(".landing-composer textarea"),
+        composer: alpha(".task-launcher .composer-input-shell"),
         inspector: alpha('[data-transparency-fixture="inspector"]'),
       },
       persisted: JSON.parse(localStorage.getItem("sztu.appearance") || "{}"),

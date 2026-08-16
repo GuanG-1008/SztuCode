@@ -283,6 +283,50 @@ async def _run_tool_batch(
 # --- tests -------------------------------------------------------------------
 
 
+# 功能：验证首轮 end_turn 返回期间到达的 steer 会让 AgentLoop 继续执行下一次模型调用
+# 设计：首个 provider 调用把消息放入真实 asyncio.Queue，再断言第二次调用看见该用户消息且最终成功
+async def test_steering_received_at_end_turn_continues_loop() -> None:
+    steering_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+
+    class _SteeringProvider:
+        # 初始化调用记录，供测试检查第二轮输入
+        def __init__(self) -> None:
+            self.calls: list[list[dict[str, object]]] = []
+
+        # 首轮响应前模拟用户追加指令，第二轮正常结束
+        async def chat(
+            self,
+            messages: list[dict[str, object]],
+            tool_schemas: list[dict[str, object]],
+            bus: EventBus,
+            run_id: str,
+            *,
+            step: int = 0,
+            system: str | None = None,
+        ) -> LlmResponse:
+            self.calls.append([dict(message) for message in messages])
+            if len(self.calls) == 1:
+                steering_queue.put_nowait({"role": "user", "content": "follow up"})
+                return LlmResponse(stop_reason="end_turn", text="first answer")
+            return LlmResponse(stop_reason="end_turn", text="final answer")
+
+    provider = _SteeringProvider()
+    loop = AgentLoop(
+        provider,  # type: ignore[arg-type]
+        ToolRegistry(),
+        EventBus(),
+        steering_queue=steering_queue,
+    )
+    context = _ctx()
+
+    await loop.run(context)
+
+    assert len(provider.calls) == 2
+    assert provider.calls[1][-1] == {"role": "user", "content": "follow up"}
+    assert context.status == "success"
+    assert context.result == "final answer"
+
+
 # 功能：验证三个只读工具在并发上限不小于三时于 220ms 内完成
 # 设计：每个工具独立等待 100ms，并同时断言探针峰值并发度，避免仅靠宽松耗时阈值产生假阳性
 async def test_read_only_batch_runs_concurrently_under_bounded_limit() -> None:

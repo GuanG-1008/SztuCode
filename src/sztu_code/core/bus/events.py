@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Discriminator
 
+from sztu_code.core.bus.commands import UserQuestionItem
+
 ToolSchedulerMode = Literal["serial", "concurrent"]
 
 
@@ -242,6 +244,32 @@ class PermissionDeniedEvent(BaseModel):
     ts: str
 
 
+class SessionMessageSteeredEvent(BaseModel):
+    type: Literal["session.message_steered"] = "session.message_steered"
+    session_id: str
+    run_id: str
+    content: str
+    ts: str
+
+
+class UserQuestionRequestedEvent(BaseModel):
+    type: Literal["question.requested"] = "question.requested"
+    rpc_id: str
+    session_id: str
+    run_id: str
+    questions: list[UserQuestionItem]
+    ts: str
+
+
+class UserQuestionResolvedEvent(BaseModel):
+    type: Literal["question.resolved"] = "question.resolved"
+    rpc_id: str
+    session_id: str
+    run_id: str
+    outcome: Literal["answered", "cancelled"]
+    ts: str
+
+
 class DenialInterventionEvent(BaseModel):
     type: Literal["denial.intervention"] = "denial.intervention"
     run_id: str
@@ -434,6 +462,7 @@ Event = Annotated[
     | LogLineEvent
     | SessionCreatedEvent
     | SessionMessageReceivedEvent
+    | SessionMessageSteeredEvent
     | SessionWaitingForInputEvent
     | SessionResumedEvent
     | SessionClosedEvent
@@ -444,6 +473,8 @@ Event = Annotated[
     | PermissionRequestedEvent
     | PermissionGrantedEvent
     | PermissionDeniedEvent
+    | UserQuestionRequestedEvent
+    | UserQuestionResolvedEvent
     | SubagentStartedEvent
     | SubagentFinishedEvent
     | SkillInvokedEvent

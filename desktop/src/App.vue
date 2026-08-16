@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, KeepAlive, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
-  AlertTriangle, Archive, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
+  AlertTriangle, Archive, ArrowUp, BookOpen, CalendarClock, Check, ChevronDown, CirclePlus, Clock, Coins, Ellipsis, Folder, FolderOpen, FolderPlus, FolderSearch,
   GitBranch, Globe2, GripVertical, LayoutDashboard, MessageCircle, Minus, PanelLeftClose, PanelLeftOpen,
-  Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
+  ListPlus, Plus, Puzzle, RotateCcw, Search, Settings, ShieldCheck, Square, Terminal, Trash2, Wrench, X,
 } from "@lucide/vue";
 import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,22 +20,32 @@ import SessionStatsLine from "./components/timeline/SessionStatsLine.vue";
 import SlashCommandMenu from "./components/CommandPalette/SlashCommandMenu.vue";
 import SkillCenter from "./components/Skills/SkillCenter.vue";
 import SettingsDialog from "./components/Settings/SettingsDialog.vue";
+import QueueDock from "./components/Composer/QueueDock.vue";
+import UserQuestionComposer from "./components/UserQuestions/UserQuestionComposer.vue";
 import { slashMenuItems } from "./components/CommandPalette/slash-menu";
 import type { ContextInjectionEntry, PermissionDecision, PermissionState, PlanItem, TimelineEvent, TimelineStep, ToolCallEntry, WorkflowTaskEntry } from "./components/timeline/types";
 import { isMacOSPlatform } from "./lib/platform";
 import { appendThinkingBatch, appendTokenBatch, createTokenFrameBatcher } from "./utils/timelineStream";
 import { deriveSessionStats } from "./utils/sessionStats";
+import { resolveComposerSubmitMode, type ComposerSubmitGesture, type QueueDockItem } from "./utils/composerSubmission";
 import { loadAppearanceSettings, type AppearanceSettings } from "./services/appearance";
 import {
-  cancelRun, connectRuntime, createSession, deleteWorkspace, getProviderStatus, getRuntimeSettings, listSessions,
-  listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission,
-  resumeWorkspace, sendPrompt, sessionHistory, setRuntimeSettings, workspaceStatus,
-  type Attachment, type ImageBlock, type ProviderStatus, type RuntimeSettings, type Session, type Workspace,
+  cancelRun, connectRuntime, createSession, deleteWorkspace, getProviderStatus, getRuntimeSettings, listPendingUserQuestions, listSessions,
+  listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission, respondUserQuestion,
+  resumeWorkspace, sendPrompt, sessionHistory, setRuntimeSettings, steerPrompt, workspaceStatus,
+  type Attachment, type ImageBlock, type PendingUserQuestion, type ProviderStatus, type RuntimeSettings, type Session, type UserQuestionAnswer, type Workspace,
 } from "./services/sztu-runtime";
 
 type Page = "work" | "chat" | "board" | "skills" | "automations" | "webbridge" | "diff";
 type ReviewContext = { workspaceId: string; runId: string; paths: string[] };
 type RuntimeEvent = Record<string, unknown>;
+type QueuedSubmission = {
+  id: string;
+  text: string;
+  contentSuffix: string;
+  images: ImageBlock[];
+  attachmentCount: number;
+};
 const FULL_SIDEBAR_MIN_WIDTH = 952;
 const FULL_SIDEBAR_MIN_HEIGHT = 640;
 const SIDEBAR_MIN_WIDTH = 224;
@@ -68,15 +78,73 @@ const workspaces = ref<Workspace[]>([]);
 const workspace = ref<Workspace | null>(null);
 const sessions = ref<Session[]>([]);
 const activeId = ref<string | null>(null);
-const timeline = ref<Map<number, TimelineStep>>(new Map());
+type SessionViewState = {
+  timeline: Map<number, TimelineStep>;
+  activeRunId: string | null;
+  runActive: boolean;
+  loaded: boolean;
+  loading: boolean;
+  queue: QueuedSubmission[];
+  queueDispatching: boolean;
+  queueBusyId: string | null;
+};
+const sessionViews = reactive(new Map<string, SessionViewState>());
+const launcherTimeline = ref<Map<number, TimelineStep>>(new Map());
+function ensureSessionView(sessionId: string): SessionViewState {
+  let view = sessionViews.get(sessionId);
+  if (!view) {
+    view = reactive({
+      timeline: new Map(), activeRunId: null, runActive: false, loaded: false, loading: false,
+      queue: [], queueDispatching: false, queueBusyId: null,
+    });
+    sessionViews.set(sessionId, view);
+  }
+  return view;
+}
+const activeView = computed(() => activeId.value ? ensureSessionView(activeId.value) : null);
+// 保留 timeline/activeRunId/runActive 兼容入口，实际状态按 session_id 隔离。
+const timeline = computed<Map<number, TimelineStep>>({
+  get: () => activeView.value?.timeline ?? launcherTimeline.value,
+  set: (value) => {
+    if (activeView.value) {
+      activeView.value.timeline = value;
+      activeView.value.loaded = true;
+    }
+    else launcherTimeline.value = value;
+  },
+});
+const activeRunId = computed<string | null>({
+  get: () => activeView.value?.activeRunId ?? null,
+  set: (value) => {
+    if (!activeView.value) return;
+    activeView.value.activeRunId = value;
+    if (value && activeId.value) runToSession.set(value, activeId.value);
+  },
+});
+const runActive = computed<boolean>({
+  get: () => activeView.value?.runActive ?? false,
+  set: (value) => { if (activeView.value) activeView.value.runActive = value; },
+});
+const activeQueueItems = computed<QueueDockItem[]>(() => (activeView.value?.queue ?? []).map((item) => ({
+  id: item.id,
+  text: item.text,
+  attachmentCount: item.attachmentCount,
+})));
+const runToSession = new Map<string, string>();
+const finishedRunIds = new Set<string>();
+const deferredRuntimeEvents = new Map<string, RuntimeEvent[]>();
+const historyLoadVersionBySession = new Map<string, number>();
+const sessionLoadingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const historyLoadPromises = new Map<string, Promise<void>>();
+let runtimeTargetSessionId: string | null = null;
 const tokenBatcher = createTokenFrameBatcher(
-  ({ runId, step, tokens }) => setStep(step, (current) => appendTokenBatch({ ...current, runId }, tokens)),
+  ({ runId, step, tokens }) => {
+    const sessionId = runToSession.get(runId);
+    if (sessionId) setSessionStep(step, (current) => appendTokenBatch({ ...current, runId }, tokens), sessionId);
+  },
   (callback) => window.requestAnimationFrame(callback),
   (handle) => window.cancelAnimationFrame(handle),
 );
-const activeRunId = ref<string | null>(null);
-// 当前会话是否正在执行 run（区别于 activeRunId：加载历史任务时 activeRunId 可能是已结束的 run）
-const runActive = ref(false);
 const prompt = ref("");
 const activePrompt = ref<HTMLTextAreaElement | null>(null);
 // 会话流“回到底部”悬浮按钮：离开底部超过阈值时显示，点击平滑回底
@@ -142,16 +210,21 @@ const liveRunUsage = new Map<string, { inputTokens: number; outputTokens: number
 // 首 token 延迟追踪（借鉴 dsh assistant-timing）：run 起点 → 首个 token 的时间差
 const runStartedAtByRun = new Map<string, number>();
 const firstTokenByRun = new Map<string, number>();
-let historyLoadSeq = 0;
 const reviewCtx = ref<ReviewContext | null>(null);
 // 切换会话加载动画：超过 260ms 未返回时显示终端图标动效，避免快加载闪屏
-const sessionLoading = ref(false);
-let sessionLoadingTimer: ReturnType<typeof setTimeout> | undefined;
+const sessionLoading = computed(() => activeView.value?.loading ?? false);
 // 后台会话（非当前展示）正在等待审批的权限，切走后仍可审批，避免任务停滞
 const pendingPermissions = ref<Array<{ toolUseId: string; toolName: string; preview: string; runId: string }>>([]);
+const pendingUserQuestions = ref<PendingUserQuestion[]>([]);
+const questionSubmittingId = ref<string | null>(null);
+const questionErrors = reactive(new Map<string, string>());
+const resolvedQuestionIds = new Set<string>();
+let questionEventVersion = 0;
 const modelManagerOpen = ref(false);
 
 const active = computed(() => sessions.value.find((item) => item.session_id === activeId.value) ?? null);
+const activeUserQuestion = computed(() => pendingUserQuestions.value.find((item) => item.session_id === activeId.value) ?? null);
+const backgroundUserQuestions = computed(() => pendingUserQuestions.value.filter((item) => item.session_id !== activeId.value));
 // 发送请求中或正在执行 run 时，把发送按钮切换为停止按钮
 const isRunActive = computed(() => sending.value || runActive.value);
 const activeWorkspace = computed(() => workspaces.value.find((item) => item.workspace_id === active.value?.workspace_id) ?? workspace.value);
@@ -451,53 +524,76 @@ function appendTimelineEvent(step: TimelineStep, event: TimelineEvent): Timeline
 }
 // 结构事件微任务批处理（借鉴 dsh web GUI Notifier.markDirty）：同一 tick 内的多个事件
 // （如 run.finished 收尾的 N 步）合并为一次快照替换；流式 token 仍走 RAF 帧级批处理
-const pendingTimeline = new Map<number, TimelineStep>();
+const pendingTimelineBySession = new Map<string, Map<number, TimelineStep>>();
 let timelineFlushScheduled = false;
 function scheduleTimelineFlush() {
   if (timelineFlushScheduled) return;
   timelineFlushScheduled = true;
   queueMicrotask(() => {
     timelineFlushScheduled = false;
-    if (!pendingTimeline.size) return;
-    const next = new Map(timeline.value);
-    for (const [step, item] of pendingTimeline) next.set(step, item);
-    pendingTimeline.clear();
-    timeline.value = next;
+    for (const [sessionId, pending] of pendingTimelineBySession) {
+      if (!pending.size) continue;
+      const view = ensureSessionView(sessionId);
+      const next = new Map(view.timeline);
+      for (const [step, item] of pending) next.set(step, item);
+      view.timeline = next;
+    }
+    pendingTimelineBySession.clear();
   });
 }
-function discardPendingTimeline() {
-  pendingTimeline.clear();
-  timelineFlushScheduled = false;
+function discardPendingTimeline(sessionId: string | null = activeId.value) {
+  if (sessionId) pendingTimelineBySession.delete(sessionId);
 }
-function setStep(step: number, updater: (current: TimelineStep) => TimelineStep) {
-  const base = pendingTimeline.get(step) ?? timeline.value.get(step) ?? emptyStep(step);
-  pendingTimeline.set(step, updater(base));
+function discardAllPendingTimeline() {
+  pendingTimelineBySession.clear();
+}
+function pendingTimelineFor(sessionId: string) {
+  let pending = pendingTimelineBySession.get(sessionId);
+  if (!pending) {
+    pending = new Map();
+    pendingTimelineBySession.set(sessionId, pending);
+  }
+  return pending;
+}
+function maxTimelineStep(sessionId: string): number {
+  return Math.max(0, ...ensureSessionView(sessionId).timeline.keys(), ...(pendingTimelineBySession.get(sessionId)?.keys() ?? []));
+}
+function setSessionStep(step: number, updater: (current: TimelineStep) => TimelineStep, sessionId: string | null = activeId.value) {
+  if (!sessionId) return;
+  const pending = pendingTimelineFor(sessionId);
+  const base = pending.get(step) ?? ensureSessionView(sessionId).timeline.get(step) ?? emptyStep(step);
+  pending.set(step, updater(base));
   scheduleTimelineFlush();
 }
-function stepFor(event: RuntimeEvent): number {
-  const runId = String(event.run_id ?? activeRunId.value ?? "");
+function stepForSession(event: RuntimeEvent, sessionId: string): number {
+  const runId = String(event.run_id ?? ensureSessionView(sessionId).activeRunId ?? "");
   const existing = currentStepByRun.get(runId);
   if (existing !== undefined) return existing;
-  const base = runStepBase.get(runId) ?? Math.max(0, ...timeline.value.keys());
+  const base = runStepBase.get(runId) ?? maxTimelineStep(sessionId);
   const fallback = base + 1;
   currentStepByRun.set(runId, fallback);
   return fallback;
 }
-function addUserMessage(content: string) {
-  const step = Math.max(0, ...timeline.value.keys()) + 1;
+function addUserMessage(content: string, sessionId: string) {
+  const view = ensureSessionView(sessionId);
+  view.loaded = true;
+  const step = maxTimelineStep(sessionId) + 1;
   const startedAt = new Date().toISOString();
-  setStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: startedAt, runStartedAt: startedAt }));
+  setSessionStep(step, (current) => ({ ...current, status: "thinking", userMessage: content, userMessageTime: startedAt, runStartedAt: startedAt }), sessionId);
   return step;
 }
 function hydrateTimeline(
   messages: unknown[],
   runStats: Record<string, { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number; context_pct: number }> = {},
   contextInjections: Array<Record<string, unknown>> = [],
+  sessionId: string | null = activeId.value,
 ) {
-  tokenBatcher.clear();
-  discardPendingTimeline();
+  if (!sessionId) return;
+  const view = ensureSessionView(sessionId);
+  discardPendingTimeline(sessionId);
   const next = new Map<number, TimelineStep>();
   const stepByRunId = new Map<string, number>();
+  for (const runId of Object.keys(runStats)) runToSession.set(runId, sessionId);
   let step = 0;
   for (const message of messages) {
     const role = entryRole(message);
@@ -533,7 +629,12 @@ function hydrateTimeline(
     }
     if (role === "user") {
       step += 1;
-      if (messageRunId) stepByRunId.set(messageRunId, step);
+      if (messageRunId) {
+        stepByRunId.set(messageRunId, step);
+        runToSession.set(messageRunId, sessionId);
+        currentStepByRun.set(messageRunId, step);
+      }
+      const messageTime = String((message as { ts?: unknown })?.ts ?? "");
       next.set(step, {
         ...emptyStep(step),
         status: "done",
@@ -546,12 +647,17 @@ function hydrateTimeline(
           contextPct: Number(runStats[messageRunId].context_pct ?? 0),
         } : undefined,
         userMessage: text,
-        userMessageTime: String((message as { ts?: unknown })?.ts ?? ""),
+        userMessageTime: messageTime,
+        runStartedAt: messageRunId && messageTime ? messageTime : undefined,
       });
       continue;
     }
     if (!step) step = 1;
-    if (messageRunId) stepByRunId.set(messageRunId, step);
+    if (messageRunId) {
+      stepByRunId.set(messageRunId, step);
+      runToSession.set(messageRunId, sessionId);
+      currentStepByRun.set(messageRunId, step);
+    }
     const current = next.get(step) ?? { ...emptyStep(step), status: "done" };
     const thinking = visibleBlocks.filter((block) => String(block.type) === "thinking").map((block) => typeof block.thinking === "string" ? block.thinking : "").filter(Boolean).join("\n\n");
     const calls: ToolCallEntry[] = visibleBlocks.filter((block) => String(block.type) === "tool_use").map((block) => ({
@@ -602,43 +708,142 @@ function hydrateTimeline(
       contextInjections: [...(current.contextInjections ?? []), entry],
     });
   }
-  timeline.value = next;
+  if (view.runActive && view.activeRunId) {
+    const runningStep = [...next.entries()].reverse().find(([, item]) => item.runId === view.activeRunId);
+    if (runningStep) {
+      const [runningStepNumber, item] = runningStep;
+      next.set(runningStepNumber, {
+        ...item,
+        status: item.status === "failed" ? "failed" : "thinking",
+        runStartedAt: item.runStartedAt || item.userMessageTime || new Date().toISOString(),
+      });
+    }
+  }
+  view.timeline = next;
+  view.loaded = true;
+}
+function runtimeSessionIdFor(event: RuntimeEvent): string | null {
+  const runId = String(event.run_id ?? "");
+  const relatedRunId = String(event.parent_run_id ?? runId);
+  const explicitSessionId = String(event.session_id ?? "");
+  if (explicitSessionId) return explicitSessionId;
+  const mapped = runToSession.get(relatedRunId) ?? runToSession.get(runId);
+  if (mapped) return mapped;
+  for (const [sessionId, view] of sessionViews) {
+    if (view.activeRunId === relatedRunId || view.activeRunId === runId) return sessionId;
+  }
+  if (String(event.type ?? "") === "run.started") return runtimeTargetSessionId ?? (sending.value ? activeId.value : null);
+  return null;
+}
+function deferRuntimeEvent(sessionId: string, event: RuntimeEvent) {
+  deferredRuntimeEvents.set(sessionId, [...(deferredRuntimeEvents.get(sessionId) ?? []), event]);
 }
 function applyRuntimeEvent(event: RuntimeEvent) {
   const type = String(event.type ?? "");
   const runId = String(event.run_id ?? "");
   const relatedRunId = String(event.parent_run_id ?? runId);
-  const timelineEvent = event.parent_run_id ? { ...event, run_id: relatedRunId } : event;
-  if (type !== "llm.token" && relatedRunId) tokenBatcher.flushRun(relatedRunId);
-  if (type === "run.started" && !activeRunId.value && sending.value) activeRunId.value = runId;
   if (type === "session.created" || type === "session.closed" || type === "session.waiting_for_input") {
     void refreshIndex();
     return;
   }
+  const sessionId = runtimeSessionIdFor(event);
+  if (!sessionId) return;
+  const view = ensureSessionView(sessionId);
+  if (runId) runToSession.set(runId, sessionId);
+  if (relatedRunId) runToSession.set(relatedRunId, sessionId);
+  if (type === "run.started") {
+    finishedRunIds.delete(runId);
+    view.activeRunId = runId;
+    view.runActive = true;
+  } else if (type === "run.finished") {
+    finishedRunIds.add(runId);
+    if (view.activeRunId === runId) {
+      view.activeRunId = null;
+      view.runActive = false;
+    }
+  }
+  if (type === "permission.requested" && sessionId !== activeId.value) {
+    const toolUseId = String(event.tool_use_id);
+    if (!pendingPermissions.value.some((permission) => permission.toolUseId === toolUseId)) {
+      pendingPermissions.value = [...pendingPermissions.value, {
+        toolUseId,
+        toolName: String(event.tool_name),
+        preview: String(event.param_preview ?? "等待确认"),
+        runId: relatedRunId,
+      }];
+    }
+  } else if (type === "permission.granted" || type === "permission.denied") {
+    const toolUseId = String(event.tool_use_id);
+    pendingPermissions.value = pendingPermissions.value.filter((permission) => permission.toolUseId !== toolUseId);
+  }
+  if (type === "question.requested") {
+    const rpcId = String(event.rpc_id ?? "");
+    if (!rpcId) return;
+    questionEventVersion += 1;
+    resolvedQuestionIds.delete(rpcId);
+    const pending = {
+      rpc_id: rpcId,
+      session_id: sessionId,
+      run_id: runId,
+      questions: Array.isArray(event.questions) ? event.questions : [],
+    } as PendingUserQuestion;
+    pendingUserQuestions.value = [
+      ...pendingUserQuestions.value.filter((item) => item.rpc_id !== rpcId),
+      pending,
+    ];
+    return;
+  }
+  if (type === "question.resolved") {
+    const rpcId = String(event.rpc_id ?? "");
+    questionEventVersion += 1;
+    resolvedQuestionIds.add(rpcId);
+    pendingUserQuestions.value = pendingUserQuestions.value.filter((item) => item.rpc_id !== rpcId);
+    questionErrors.delete(rpcId);
+    if (questionSubmittingId.value === rpcId) questionSubmittingId.value = null;
+    return;
+  }
+  if (!view.loaded || historyLoadPromises.has(sessionId)) {
+    deferRuntimeEvent(sessionId, event);
+    return;
+  }
+  applyRuntimeEventToSession(event, sessionId);
+}
+function applyRuntimeEventToSession(event: RuntimeEvent, sessionId: string) {
+  const view = ensureSessionView(sessionId);
+  const timeline = { get value() { return view.timeline; } };
+  const activeRunId = {
+    get value() { return view.activeRunId; },
+    set value(value: string | null) { view.activeRunId = value; },
+  };
+  const runActive = {
+    get value() { return view.runActive; },
+    set value(value: boolean) { view.runActive = value; },
+  };
+  const setStep = (step: number, updater: (current: TimelineStep) => TimelineStep) => setSessionStep(step, updater, sessionId);
+  const stepFor = (runtimeEvent: RuntimeEvent) => stepForSession(runtimeEvent, sessionId);
+  const type = String(event.type ?? "");
+  const runId = String(event.run_id ?? "");
+  const relatedRunId = String(event.parent_run_id ?? runId);
+  const timelineEvent = event.parent_run_id ? { ...event, run_id: relatedRunId } : event;
+  if (type !== "llm.token" && relatedRunId) tokenBatcher.flushRun(relatedRunId);
+  if (type === "run.finished" && event.parent_run_id) return;
   // run 开始后刷新会话列表，让侧栏中的会话及时从"等待输入"移入"运行中"
   if (type === "run.started") void refreshIndex(false);
   // 权限审批是全局的：即使切到其他会话，后台任务的权限也要能审批，避免任务停滞
   if (type === "permission.requested") {
     const toolUseId = String(event.tool_use_id);
     const perm: PermissionState = { toolUseId, toolName: String(event.tool_name), preview: String(event.param_preview ?? "等待确认"), status: "pending" };
-    if (relatedRunId === activeRunId.value) {
-      const step = stepFor(timelineEvent);
-      setStep(step, (current) => ({ ...current, status: "acting", permission: perm, toolCalls: current.toolCalls.map((call) => call.id === toolUseId ? { ...call, status: "awaiting_permission" } : call) }));
-    } else if (!pendingPermissions.value.some((p) => p.toolUseId === toolUseId)) {
-      pendingPermissions.value = [...pendingPermissions.value, { toolUseId, toolName: perm.toolName, preview: perm.preview, runId: relatedRunId }];
-    }
+    const step = stepFor(timelineEvent);
+    setStep(step, (current) => ({ ...current, status: "acting", permission: perm, toolCalls: current.toolCalls.map((call) => call.id === toolUseId ? { ...call, status: "awaiting_permission" } : call) }));
     return;
   }
   if (type === "permission.granted" || type === "permission.denied") {
     const toolUseId = String(event.tool_use_id);
     pendingPermissions.value = pendingPermissions.value.filter((p) => p.toolUseId !== toolUseId);
-    if (relatedRunId === activeRunId.value) {
-      for (const step of timeline.value.keys()) setStep(step, (current) => current.permission?.toolUseId === toolUseId ? { ...current, permission: { ...current.permission, status: type === "permission.granted" ? "granted" : "denied" } } : current);
-    }
+    for (const step of timeline.value.keys()) setStep(step, (current) => current.permission?.toolUseId === toolUseId ? { ...current, permission: { ...current.permission, status: type === "permission.granted" ? "granted" : "denied" } } : current);
     return;
   }
-  // 运行事件没有 session_id，只消费由当前会话发送消息返回的 run_id，避免串到其他任务。
-  if (!relatedRunId || relatedRunId !== activeRunId.value) return;
+  if (!relatedRunId) return;
   if (type === "run.started") {
     const messageStep = Math.max(0, ...timeline.value.keys());
     setStep(messageStep || 1, (current) => ({ ...current, status: "thinking", runId, runStartedAt: String(event.ts ?? new Date().toISOString()) }));
@@ -672,6 +877,21 @@ function applyRuntimeEvent(event: RuntimeEvent) {
       chars: String(event.message ?? "").length,
       preview: String(event.message ?? "").slice(0, 90),
       text: String(event.message ?? ""),
+    };
+    setStep(step, (current) => ({ ...current, contextInjections: [...(current.contextInjections ?? []), entry] }));
+    return;
+  }
+  if (type === "session.message_steered") {
+    const content = String(event.content ?? "").trim();
+    if (!content) return;
+    const step = stepFor(timelineEvent);
+    const entry: ContextInjectionEntry = {
+      id: `ctx-steering-${runId}-${Date.now()}`,
+      source: "steering",
+      label: "追加指令",
+      chars: content.length,
+      preview: content.slice(0, 100),
+      text: content,
     };
     setStep(step, (current) => ({ ...current, contextInjections: [...(current.contextInjections ?? []), entry] }));
     return;
@@ -889,83 +1109,225 @@ function applyRuntimeEvent(event: RuntimeEvent) {
         },
       } : current);
     }
-    if (runId === activeRunId.value) activeRunId.value = null;
-    runActive.value = false;
+    if (runId === activeRunId.value) {
+      activeRunId.value = null;
+      runActive.value = false;
+    }
     liveRunUsage.delete(relatedRunId);
     runStartedAtByRun.delete(relatedRunId);
     firstTokenByRun.delete(relatedRunId);
     void refreshIndex(false);
+    void drainSessionQueue(sessionId);
     return;
   }
+}
+
+async function loadSessionHistory(sessionId: string) {
+  const view = ensureSessionView(sessionId);
+  if (view.loaded) return;
+  const existing = historyLoadPromises.get(sessionId);
+  if (existing) return existing;
+  const version = (historyLoadVersionBySession.get(sessionId) ?? 0) + 1;
+  historyLoadVersionBySession.set(sessionId, version);
+  const previousTimer = sessionLoadingTimers.get(sessionId);
+  if (previousTimer) window.clearTimeout(previousTimer);
+  const timer = window.setTimeout(() => { view.loading = true; }, 260);
+  sessionLoadingTimers.set(sessionId, timer);
+  const request = (async () => {
+    let hydrated = false;
+    try {
+      const history = await sessionHistory(sessionId);
+      if (historyLoadVersionBySession.get(sessionId) !== version) return;
+      hydrateTimeline(history.messages, history.run_stats, history.context_injections, sessionId);
+      hydrated = true;
+    } catch (error) {
+      console.warn("Failed to load session history", error);
+    } finally {
+      window.clearTimeout(timer);
+      if (sessionLoadingTimers.get(sessionId) === timer) sessionLoadingTimers.delete(sessionId);
+      view.loading = false;
+      historyLoadPromises.delete(sessionId);
+    }
+    if (!hydrated) return;
+    const deferred = deferredRuntimeEvents.get(sessionId) ?? [];
+    deferredRuntimeEvents.delete(sessionId);
+    for (const event of deferred) applyRuntimeEvent(event);
+  })();
+  historyLoadPromises.set(sessionId, request);
+  return request;
 }
 
 async function refreshIndex(loadHistory = false) {
   connected.value = await connectRuntime();
   if (!connected.value) { loading.value = false; return; }
-  const [nextWorkspaces, nextSessions, nextSettings, nextProvider] = await Promise.all([listWorkspaces(), listSessions(), getRuntimeSettings(), getProviderStatus()]);
+  const questionVersion = questionEventVersion;
+  const [nextWorkspaces, nextSessions, nextSettings, nextProvider, questionSnapshot] = await Promise.all([
+    listWorkspaces(), listSessions(), getRuntimeSettings(), getProviderStatus(), listPendingUserQuestions(),
+  ]);
   workspaces.value = nextWorkspaces; sessions.value = nextSessions; runtimeSettings.value = nextSettings; providerStatus.value = nextProvider;
+  const snapshot = questionSnapshot.filter((item) => !resolvedQuestionIds.has(item.rpc_id));
+  if (questionVersion === questionEventVersion) {
+    pendingUserQuestions.value = snapshot;
+  } else {
+    const merged = new Map(snapshot.map((item) => [item.rpc_id, item]));
+    for (const item of pendingUserQuestions.value) {
+      if (!resolvedQuestionIds.has(item.rpc_id)) merged.set(item.rpc_id, item);
+    }
+    pendingUserQuestions.value = [...merged.values()];
+  }
+  for (const session of nextSessions) {
+    const view = ensureSessionView(session.session_id);
+    const latestRunId = session.latest_run_id ?? null;
+    if (latestRunId) {
+      runToSession.set(latestRunId, session.session_id);
+      if (session.status === "active" && !finishedRunIds.has(latestRunId)) {
+        view.activeRunId = latestRunId;
+        view.runActive = true;
+      }
+    } else if (session.status !== "active") {
+      view.activeRunId = null;
+      view.runActive = false;
+    }
+  }
   workspace.value ??= nextWorkspaces[0] ?? null;
   activeId.value ??= nextSessions.find((item) => !item.archived)?.session_id ?? null;
-  if (loadHistory && activeId.value) {
-    const history = await sessionHistory(activeId.value);
-    hydrateTimeline(history.messages, history.run_stats, history.context_injections);
-  }
+  if (loadHistory && activeId.value) await loadSessionHistory(activeId.value);
   loading.value = false;
 }
+
+// 提交当前问题的完整回答批次；后端成功后 question.resolved 会释放 composer
+async function submitUserQuestion(pending: PendingUserQuestion, answers: UserQuestionAnswer[]) {
+  questionSubmittingId.value = pending.rpc_id;
+  questionErrors.delete(pending.rpc_id);
+  try {
+    await respondUserQuestion(pending, answers);
+    pendingUserQuestions.value = pendingUserQuestions.value.filter((item) => item.rpc_id !== pending.rpc_id);
+  } catch (error) {
+    questionErrors.set(pending.rpc_id, error instanceof Error ? error.message : String(error));
+  } finally {
+    if (questionSubmittingId.value === pending.rpc_id) questionSubmittingId.value = null;
+  }
+}
+
 function beginTask(project: Workspace | null = workspace.value) {
-  historyLoadSeq += 1;
   projectActionsOpen.value = null;
   closeLauncherMenus();
   workspace.value = project;
   activeId.value = null;
-  currentStepByRun.clear();
-  runStepBase.clear();
-  liveRunUsage.clear();
-  runStartedAtByRun.clear();
-  firstTokenByRun.clear();
-  discardPendingTimeline();
-  timeline.value = new Map();
-  activeRunId.value = null;
-  runActive.value = false;
+  launcherTimeline.value = new Map();
   attachedFiles.value = [];
   page.value = "work";
   prompt.value = "";
   selectedStarterTask.value = "";
   void nextTick(() => launcherPrompt.value?.focus());
 }
-async function submitTask(content: string, project: Workspace | null = workspace.value, images: ImageBlock[] = []) {
+async function startSessionRun(sessionId: string, content: string, images: ImageBlock[] = [], clearDraft = false): Promise<boolean> {
   const trimmed = content.trim();
-  if (!trimmed || !connected.value || sending.value) return;
+  if (!trimmed || !connected.value || sending.value) return false;
+  const session = sessions.value.find((item) => item.session_id === sessionId);
+  if (session?.archived || session?.status === "closed") return false;
   const clientMessageId = crypto.randomUUID();
+  const view = ensureSessionView(sessionId);
+  const messageStep = addUserMessage(trimmed, sessionId);
+  sending.value = true;
+  if (clearDraft && activeId.value === sessionId) prompt.value = "";
+  try {
+    runtimeTargetSessionId = sessionId;
+    const runId = await sendPrompt(sessionId, trimmed, images, clientMessageId);
+    runToSession.set(runId, sessionId);
+    view.activeRunId = runId;
+    view.runActive = true;
+    setSessionStep(messageStep, (current) => ({ ...current, runId }), sessionId);
+    return true;
+  } catch (error) {
+    setSessionStep(messageStep, (current) => ({
+      ...current,
+      status: "failed",
+      outcome: { status: "failed", reason: error instanceof Error ? error.message : String(error) },
+    }), sessionId);
+    return false;
+  } finally {
+    runtimeTargetSessionId = null;
+    sending.value = false;
+  }
+}
+async function submitTask(content: string, project: Workspace | null = workspace.value, images: ImageBlock[] = []): Promise<boolean> {
+  const trimmed = content.trim();
+  if (!trimmed || !connected.value || sending.value) return false;
+  if (activeId.value) return await startSessionRun(activeId.value, trimmed, images, true);
+
   sending.value = true;
   try {
-    if (!activeId.value) {
-      const sessionId = await createSession(project);
-      activeId.value = sessionId;
-      currentStepByRun.clear();
-      runStepBase.clear();
-      liveRunUsage.clear();
-      runStartedAtByRun.clear();
-      firstTokenByRun.clear();
-      discardPendingTimeline();
-      timeline.value = new Map();
-      activeRunId.value = null;
-      page.value = "work";
-      prompt.value = "";
-      const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(sessionId, trimmed, images, clientMessageId);
-      runActive.value = true;
-      setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
-      await refreshIndex(false);
-    } else {
-      if (active.value?.archived || active.value?.status === "closed") return;
-      prompt.value = "";
-      const messageStep = addUserMessage(trimmed);
-      activeRunId.value = await sendPrompt(activeId.value, trimmed, images, clientMessageId);
-      runActive.value = true;
-      setStep(messageStep, (current) => ({ ...current, runId: activeRunId.value ?? undefined }));
-    }
-  } finally { sending.value = false; }
+    const sessionId = await createSession(project);
+    const view = ensureSessionView(sessionId);
+    view.timeline = new Map();
+    view.activeRunId = null;
+    view.runActive = false;
+    view.loaded = true;
+    activeId.value = sessionId;
+    page.value = "work";
+    prompt.value = "";
+    sending.value = false;
+    const sent = await startSessionRun(sessionId, trimmed, images);
+    if (sent) await refreshIndex(false);
+    return sent;
+  } finally {
+    runtimeTargetSessionId = null;
+    sending.value = false;
+  }
+}
+function enqueueSubmission(sessionId: string, text: string, payload: string, images: ImageBlock[], attachmentCount: number) {
+  const view = ensureSessionView(sessionId);
+  view.queue = [...view.queue, {
+    id: crypto.randomUUID(),
+    text,
+    contentSuffix: payload.startsWith(text) ? payload.slice(text.length) : "",
+    images: images.map((image) => ({ ...image })),
+    attachmentCount,
+  }];
+}
+function editQueuedSubmission(id: string, text: string) {
+  const view = activeView.value;
+  if (!view) return;
+  view.queue = view.queue.map((item) => item.id === id ? { ...item, text: text.trim() } : item);
+}
+function removeQueuedSubmission(id: string) {
+  const view = activeView.value;
+  if (!view || view.queueBusyId === id) return;
+  view.queue = view.queue.filter((item) => item.id !== id);
+}
+async function steerQueuedSubmission(id: string) {
+  const sessionId = activeId.value;
+  const view = activeView.value;
+  const item = view?.queue.find((entry) => entry.id === id);
+  if (!sessionId || !view?.runActive || !item || view.queueBusyId) return;
+  view.queueBusyId = id;
+  try {
+    await steerPrompt(sessionId, item.text + item.contentSuffix, item.images);
+    view.queue = view.queue.filter((entry) => entry.id !== id);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+  } finally {
+    view.queueBusyId = null;
+  }
+}
+async function drainSessionQueue(sessionId: string) {
+  const view = ensureSessionView(sessionId);
+  if (view.runActive || view.queueDispatching || !view.queue.length) return;
+  if (sending.value) {
+    window.setTimeout(() => { void drainSessionQueue(sessionId); }, 180);
+    return;
+  }
+  const item = view.queue[0];
+  view.queueDispatching = true;
+  view.queueBusyId = item.id;
+  try {
+    const sent = await startSessionRun(sessionId, item.text + item.contentSuffix, item.images);
+    if (sent) view.queue = view.queue.filter((entry) => entry.id !== item.id);
+  } finally {
+    view.queueBusyId = null;
+    view.queueDispatching = false;
+  }
 }
 // 停止当前正在执行的 run；后端取消后通过 run.finished 事件更新界面状态
 async function stopActiveRun() {
@@ -978,39 +1340,19 @@ async function stopActiveRun() {
   }
 }
 async function chooseTask(id: string) {
-  const loadSeq = ++historyLoadSeq;
-  // 完整历史已含各轮内容，直接 hydrate 展示；replay 会与各 run 的 step 编号冲突导致旧日志混排
-  const latestRunId = sessions.value.find((item) => item.session_id === id)?.latest_run_id ?? null;
-  window.clearTimeout(sessionLoadingTimer);
-  sessionLoading.value = false;
-  sessionLoadingTimer = window.setTimeout(() => { sessionLoading.value = true; }, 260);
-  let history;
-  try {
-    history = await sessionHistory(id);
-  } catch (error) {
-    if (loadSeq !== historyLoadSeq) return;
-    window.clearTimeout(sessionLoadingTimer);
-    sessionLoading.value = false;
-    console.warn("Failed to load session history", error);
-    return;
+  const session = sessions.value.find((item) => item.session_id === id);
+  const view = ensureSessionView(id);
+  const latestRunId = session?.latest_run_id ?? null;
+  if (latestRunId) {
+    runToSession.set(latestRunId, id);
+    if (session?.status === "active" && !view.activeRunId) {
+      view.activeRunId = latestRunId;
+      view.runActive = true;
+    }
   }
-  // 期间又切换了其他会话：放弃本次结果，且不干扰新请求的加载层
-  if (loadSeq !== historyLoadSeq) return;
-  window.clearTimeout(sessionLoadingTimer);
-  sessionLoading.value = false;
   activeId.value = id;
-  currentStepByRun.clear();
-  runStepBase.clear();
-  liveRunUsage.clear();
-  runStartedAtByRun.clear();
-  firstTokenByRun.clear();
-  activeRunId.value = null;
-  runActive.value = false;
-  hydrateTimeline(history.messages, history.run_stats, history.context_injections);
-  activeRunId.value = latestRunId;
-  // 切到仍在执行的任务时恢复停止按钮；已结束的历史任务不显示
-  runActive.value = !!latestRunId && sessions.value.find((item) => item.session_id === id)?.status === "active";
   page.value = "work";
+  await loadSessionHistory(id);
 }
 async function chooseWorkspace(item: Workspace) { workspace.value = item; projectMenuOpen.value = false; const matching = liveSessions.value.find((session) => session.workspace_id === item.workspace_id); if (matching) await chooseTask(matching.session_id); }
 function isProjectCollapsed(workspaceId: string) { return collapsedProjects.value.has(workspaceId); }
@@ -1037,14 +1379,10 @@ async function showProjectFiles(item: Workspace) {
   } else if (!activeId.value) {
     // 无活动会话：为该工作区建一个会话，保证会话区 UI 不空白、可恢复
     const sessionId = await createSession(item);
+    const view = ensureSessionView(sessionId);
+    view.timeline = new Map();
+    view.loaded = true;
     activeId.value = sessionId;
-    currentStepByRun.clear();
-    runStepBase.clear();
-    liveRunUsage.clear();
-    runStartedAtByRun.clear();
-    firstTokenByRun.clear();
-    discardPendingTimeline();
-    timeline.value = new Map();
     page.value = "work";
     await refreshIndex(false);
   }
@@ -1064,8 +1402,6 @@ async function deleteProject(item: Workspace) {
   if (workspace.value?.workspace_id === item.workspace_id) {
     workspace.value = workspaces.value[0] ?? null;
     activeId.value = null;
-    discardPendingTimeline();
-    timeline.value = new Map();
   }
   await refreshIndex(false);
 }
@@ -1079,7 +1415,7 @@ function handleSessionClosed(sessionId: string) {
   if (sessionId === activeId.value) closeActiveSession();
   else void refreshIndex(false);
 }
-async function submit() {
+async function submit(gesture: ComposerSubmitGesture = "enter") {
   const content = prompt.value.trim();
   if (!content || sending.value) return;
   if (activeId.value && (active.value?.archived || active.value?.status === "closed")) return;
@@ -1092,10 +1428,29 @@ async function submit() {
     return;
   }
   const { content: payload, images } = buildMessagePayload(content);
-  await submitTask(payload, workspace.value, images);
-  attachedFiles.value = [];
+  const attachmentCount = attachedFiles.value.length;
+  const sessionId = activeId.value;
+  if (sessionId && activeView.value?.runActive) {
+    const submitMode = resolveComposerSubmitMode(true, gesture, true);
+    if (submitMode === "queue") {
+      enqueueSubmission(sessionId, content, payload, images, attachmentCount);
+    } else {
+      try {
+        await steerPrompt(sessionId, payload, images);
+      } catch {
+        enqueueSubmission(sessionId, content, payload, images, attachmentCount);
+      }
+    }
+    prompt.value = "";
+    attachedFiles.value = [];
+    slashMenuDismissed.value = false;
+    void nextTick(() => activePrompt.value?.focus());
+    return;
+  }
+  const sent = await submitTask(payload, workspace.value, images);
+  if (sent) attachedFiles.value = [];
 }
-// 回车直接发送；Ctrl/Shift/Alt + 回车保留默认换行行为，且忽略中文输入法候选确认
+// Shift+Enter 换行；运行中 Enter 排队，Ctrl/Cmd+Enter 转入当前轮，并忽略输入法候选确认
 function onComposerKeydown(event: KeyboardEvent) {
   if (slashMenuOpen.value && !event.isComposing) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1115,10 +1470,10 @@ function onComposerKeydown(event: KeyboardEvent) {
       return;
     }
   }
-  if (event.key !== "Enter" || event.isComposing) return;
-  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.key !== "Enter" || event.shiftKey) return;
+  if (event.isComposing || event.keyCode === 229 || event.repeat || event.altKey) return;
   event.preventDefault();
-  void submit();
+  void submit(event.ctrlKey || event.metaKey ? "accelerated" : "enter");
 }
 async function decidePermission(toolUseId: string, decision: PermissionDecision) { await respondPermission(toolUseId, decision); }
 // 撤销后清除该 run 的全部改动，使变更卡片随之消失
@@ -1267,6 +1622,21 @@ async function addBrowserFile(file: File) {
   }).catch(() => "");
   attachedFiles.value = [...attachedFiles.value, { path: file.name, name: file.name, size: file.size, kind: "text", mime: file.type || undefined, textContent: text.slice(0, 32 * 1024) }];
 }
+// 处理输入框粘贴：剪贴板含图片时读取为附件并阻止默认行为，纯文本粘贴正常放行
+function onPasteImage(event: ClipboardEvent) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  for (const item of Array.from(items)) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) {
+        event.preventDefault();
+        void addBrowserFile(file);
+      }
+      break;
+    }
+  }
+}
 function chooseSkill(name: string) {
   prompt.value = "/" + name + " ";
   slashMenuDismissed.value = false;
@@ -1282,7 +1652,7 @@ function chooseStarterTask(id: string, value: string) {
   prompt.value = value;
   void nextTick(() => launcherPrompt.value?.focus());
 }
-function closeActiveSession() { historyLoadSeq += 1; tokenBatcher.clear(); discardPendingTimeline(); activeId.value = null; timeline.value = new Map(); activeRunId.value = null; runActive.value = false; void refreshIndex(false); }
+function closeActiveSession() { activeId.value = null; launcherTimeline.value = new Map(); void refreshIndex(false); }
 async function applyPermissionMode(value: RuntimeSettings["permission_mode"]) {
   permissionSaving.value = true;
   permissionSettingsError.value = "";
@@ -1504,10 +1874,14 @@ onMounted(() => {
   handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
-  void refreshIndex(true).then(() => { stopEvents = onRuntimeEvent(applyRuntimeEvent); });
+  stopEvents = onRuntimeEvent(applyRuntimeEvent);
+  void refreshIndex(true);
 });
 onBeforeUnmount(() => {
   tokenBatcher.clear();
+  discardAllPendingTimeline();
+  for (const timer of sessionLoadingTimers.values()) window.clearTimeout(timer);
+  sessionLoadingTimers.clear();
   stopSidebarDragListeners?.();
   stopMacTitlebandDragArm?.();
   window.clearTimeout(sidebarAnimTimer);
@@ -1516,7 +1890,6 @@ onBeforeUnmount(() => {
   document.body.style.userSelect = "";
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);
   if (inspectorOpenFrame !== undefined) cancelAnimationFrame(inspectorOpenFrame);
-  if (sessionLoadingTimer) clearTimeout(sessionLoadingTimer);
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("resize", handleWindowResize);
   document.removeEventListener("pointerdown", handleDocumentPointerDown);
@@ -1706,10 +2079,18 @@ watch(activeId, () => { streamScrolledUp.value = false; });
                   <button type="button" class="allow" @click="decidePermission(perm.toolUseId, 'allow_once')">允许一次</button>
                 </div>
               </div>
+              <div v-if="backgroundUserQuestions.length" class="global-permission-banner global-question-banner" aria-live="polite">
+                <div v-for="pending in backgroundUserQuestions" :key="pending.rpc_id" class="global-permission-item global-question-item">
+                  <MessageCircle :size="15" /><b>后台任务等待回答</b><span>{{ pending.questions[0]?.question || 'Agent 需要你的选择' }}</span>
+                  <button type="button" class="open" @click="chooseTask(pending.session_id)">打开任务</button>
+                </div>
+              </div>
               <div class="task-conversation" :class="{ 'task-conversation--empty': !orderedTimeline.length }">
                 <div class="task-stream" ref="taskStreamEl" @scroll="handleTaskStreamScroll">
                   <div v-if="!orderedTimeline.length" class="task-intro"><span class="task-intro-icon"><Terminal :size="36" :stroke-width="1.5" /></span><b>开启「{{ activeWorkspace?.name || '当前项目' }}」的构筑之路。</b></div>
-                  <ExecutionTimeline :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
+                  <KeepAlive>
+                    <ExecutionTimeline :key="active.session_id" :steps="orderedTimeline" :workspace-id="activeWorkspace?.workspace_id ?? undefined" @decide="decidePermission" @reverted="handleReverted" @review="handleReview" @continue="handleContinue" />
+                  </KeepAlive>
                 </div>
                 <button v-if="streamScrolledUp" type="button" class="task-stream-to-bottom" title="回到底部" aria-label="回到底部" @click="scrollTaskStreamToBottom"><ChevronDown :size="16" :stroke-width="2" /></button>
                 <!-- 底部统计栏（借鉴 dsh StatsLine）：composer 上方一行全局会话统计 -->
@@ -1722,11 +2103,27 @@ watch(activeId, () => { streamScrolledUp.value = false; });
                   @reverted="handleReverted"
                   @review="handleReview"
                 />
-                <form class="kimi-composer" @submit.prevent="submit">
+                <QueueDock
+                  :items="activeQueueItems"
+                  :running="isRunActive"
+                  :busy-id="activeView?.queueBusyId"
+                  @edit="editQueuedSubmission"
+                  @remove="removeQueuedSubmission"
+                  @steer="steerQueuedSubmission"
+                />
+                <UserQuestionComposer
+                  v-if="activeUserQuestion"
+                  :pending="activeUserQuestion"
+                  :busy="questionSubmittingId === activeUserQuestion.rpc_id"
+                  :error="questionErrors.get(activeUserQuestion.rpc_id)"
+                  @submit="submitUserQuestion(activeUserQuestion, $event)"
+                  @stop="stopActiveRun"
+                />
+                <form v-else class="kimi-composer" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
-                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : '汝之所想，皆以言成'" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'">↑</button></div>
+                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : (isRunActive ? '追加任务：Enter 排队，Ctrl+Enter 转入当前轮' : '汝之所想，皆以言成')" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" @paste="onPasteImage" />
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send queue-send" type="submit" title="加入待处理队列" aria-label="加入待处理队列" :disabled="!prompt.trim() || sending"><ListPlus :size="14" /></button><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'"><ArrowUp :size="15" /></button></div>
                 </form>
               </div>
             </section>
@@ -1757,20 +2154,22 @@ watch(activeId, () => { streamScrolledUp.value = false; });
 
             <form class="kimi-composer landing-composer" @submit.prevent="submit()">
               <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
-              <textarea ref="launcherPrompt" v-model="prompt" placeholder="汝之所想，皆以言成" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" />
-              <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
-              <div class="composer-toolbar launcher-toolbar">
-                <button type="button" class="round" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>
-                <div class="launcher-permission-control">
-                  <button type="button" class="permission" aria-haspopup="menu" :aria-expanded="launcherPermissionMenuOpen" @click.stop="toggleLauncherPermissionMenu"><ShieldCheck :size="15" />{{ permissionModeLabel }}<ChevronDown :size="13" /></button>
-                  <div v-if="launcherPermissionMenuOpen" class="launcher-popover permission-popover" role="menu" aria-label="权限模式">
-                    <button type="button" class="full-access-row" role="menuitemcheckbox" :aria-checked="runtimeSettings?.permission_mode === 'auto'" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><span><b>允许全部权限</b><small>跳过所有操作确认</small></span><i :class="{ active: runtimeSettings?.permission_mode === 'auto' }"><em /></i></button>
-                    <p v-if="permissionSettingsError" class="launcher-menu-error">{{ permissionSettingsError }}</p>
+              <div class="composer-input-shell">
+                <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
+                <textarea ref="launcherPrompt" v-model="prompt" placeholder="汝之所想，皆以言成" rows="4" @input="handlePromptInput" @keydown="onComposerKeydown" @paste="onPasteImage" />
+                <div class="composer-toolbar launcher-toolbar">
+                  <button type="button" class="round launcher-attachment-trigger" title="添加附件" aria-label="添加附件" @click="selectAttachments"><Plus :size="18" /></button>
+                  <div class="launcher-permission-control">
+                    <button type="button" class="permission" aria-haspopup="menu" :aria-expanded="launcherPermissionMenuOpen" @click.stop="toggleLauncherPermissionMenu"><ShieldCheck :size="15" />{{ permissionModeLabel }}<ChevronDown :size="13" /></button>
+                    <div v-if="launcherPermissionMenuOpen" class="launcher-popover permission-popover" role="menu" aria-label="权限模式">
+                      <button type="button" class="full-access-row" role="menuitemcheckbox" :aria-checked="runtimeSettings?.permission_mode === 'auto'" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><span><b>允许全部权限</b><small>跳过所有操作确认</small></span><i :class="{ active: runtimeSettings?.permission_mode === 'auto' }"><em /></i></button>
+                      <p v-if="permissionSettingsError" class="launcher-menu-error">{{ permissionSettingsError }}</p>
+                    </div>
                   </div>
+                  <span />
+                  <ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" />
+                  <button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
                 </div>
-                <span />
-                <ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" />
-                <button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!connected || !prompt.trim()">↑</button>
               </div>
               <div class="launcher-project-control">
                 <button type="button" class="composer-project" aria-haspopup="menu" :aria-expanded="launcherProjectMenuOpen" @click.stop="toggleLauncherProjectMenu"><FolderOpen :size="15" /><span>{{ workspace?.name || '选择本地项目' }}</span><ChevronDown :size="13" /></button>
