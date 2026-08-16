@@ -8,7 +8,7 @@
   3. 收到 permission.requested → 自动回复 allow_once
   4. 等待 run.finished，打印全部事件日志
 
-运行：uv run python trace_permission_flow.py
+运行：uv run python scripts/trace_permission_flow.py
 """
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ async def main() -> None:
                     tool_use_id = event["tool_use_id"]
                     print(f"\n  *** 收到 permission.requested  tool={event['tool_name']}")
                     print(f"      param_preview={event.get('param_preview')!r}")
-                    print(f"      → 自动回复 allow_once\n")
+                    print("      → 自动回复 allow_once\n")
                     # 直接在读循环里发 permission.respond
                     req_id2 = await send(writer, "permission.respond",
                                          {"tool_use_id": tool_use_id, "decision": "allow_once"})

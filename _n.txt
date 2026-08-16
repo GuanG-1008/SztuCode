@@ -1,5 +1,0 @@
-src/sztu_code/core/prompts/system_prompt.py
-src/sztu_code/core/tools/builtin/bash.py
-src/sztu_code/core/tools/invocation.py
-tests/unit/test_bash_permission.py
-tests/unit/test_tool_retry.py
