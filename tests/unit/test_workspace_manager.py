@@ -261,13 +261,13 @@ def test_workspace_git_stage_unstage_discard_and_commit(tmp_path: Path) -> None:
     assert manager.discard(workspace.id, ["tracked.txt", "new.txt"]) == ["tracked.txt", "new.txt"]
     assert tracked.read_text(encoding="utf-8") == "before\n"
     assert untracked.read_text(encoding="utf-8") == "keep me\n"
-    assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?"}]
+    assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?", "additions": 1, "deletions": 0}]
 
     tracked.write_text("committed\n", encoding="utf-8")
     manager.stage(workspace.id, ["tracked.txt"])
     commit_hash = manager.commit(workspace.id, "update tracked file")
     assert len(commit_hash) == 7
-    assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?"}]
+    assert manager.list_changes(workspace.id) == [{"path": "new.txt", "index_status": "?", "worktree_status": "?", "additions": 1, "deletions": 0}]
 
 
 def test_git_output_uses_replacement_decoding(monkeypatch: pytest.MonkeyPatch) -> None:

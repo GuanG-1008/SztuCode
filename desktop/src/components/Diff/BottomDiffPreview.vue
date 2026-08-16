@@ -73,7 +73,7 @@ async function select(path: string) {
   loadingDiff.value = true;
   diffError.value = "";
   try {
-    diff.value = await changeDiff(props.workspaceId, path);
+    diff.value = await changeDiff(props.workspaceId, path, props.runId);
   } catch (error) {
     diffError.value = error instanceof Error ? error.message : String(error);
   } finally {

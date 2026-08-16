@@ -123,6 +123,7 @@ export type ModelProfileInput = ModelRequestSettings & { id?: string; name: stri
 const client = new IpcClient();
 let subscribed = false;
 const PLUGIN_PROTOCOL_ERROR = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
+const GIT_PROTOCOL_ERROR = "本地服务版本过旧，不支持 Git 提交。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
 client.onDisconnect(() => { subscribed = false; });
 const EVENT_TOPICS = [
   "session.*", "run.*", "step.*", "llm.*", "tool.*", "permission.*",
@@ -499,7 +500,13 @@ export async function discardChanges(workspaceId: string, paths: string[]): Prom
 }
 
 export async function commitChanges(workspaceId: string, message: string): Promise<string> {
-  const result = await client.request("git.commit", { workspace_id: workspaceId, message });
+  let result: Record<string, unknown>;
+  try {
+    result = await client.request("git.commit", { workspace_id: workspaceId, message });
+  } catch (reason) {
+    if (reason instanceof IpcRequestError && reason.code === -32601) throw new Error(GIT_PROTOCOL_ERROR);
+    throw reason;
+  }
   return String(result.commit_hash ?? "");
 }
 

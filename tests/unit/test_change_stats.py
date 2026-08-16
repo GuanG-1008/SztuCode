@@ -41,6 +41,11 @@ def test_diff_numstat_counts_tracked_and_untracked(tmp_path: Path) -> None:
 
     assert stats["a.txt"] == (1, 1)
     assert stats["new.txt"] == (3, 0)
+    changes = {change["path"]: change for change in manager.list_changes(workspace.id)}
+    assert changes["a.txt"]["additions"] == 1
+    assert changes["a.txt"]["deletions"] == 1
+    assert changes["new.txt"]["additions"] == 3
+    assert changes["new.txt"]["deletions"] == 0
 
 
 # 功能：验证 diff_numstat 对不存在的文件返回 0/0，且路径越界被拒绝

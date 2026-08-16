@@ -215,6 +215,7 @@ class ChangeDiffCommand(BaseModel):
     type: Literal["change.diff"] = "change.diff"
     workspace_id: str
     path: str | None = None
+    run_id: str | None = None
 
 
 class ChangeRevertCommand(BaseModel):
@@ -269,6 +270,16 @@ class GitCommitCommand(BaseModel):
 
 class GitCommitResult(BaseModel):
     commit_hash: str
+
+
+class GitHistoryCommand(BaseModel):
+    type: Literal["git.history"] = "git.history"
+    workspace_id: str
+    limit: int = Field(default=80, ge=1, le=200)
+
+
+class GitHistoryResult(BaseModel):
+    commits: list[dict[str, Any]]
 
 
 class ChangeDiffResult(BaseModel):
@@ -902,6 +913,7 @@ Command = Annotated[
     | ChangeUnstageCommand
     | ChangeDiscardCommand
     | GitCommitCommand
+    | GitHistoryCommand
     | EventSubscribeCommand
     | SessionCreateCommand
     | SessionListCommand

@@ -316,7 +316,11 @@ class CoreApp:
             server_version=sztu_code.__version__,
             uptime_ms=int((time.monotonic() - self._start_time) * 1000),
             received_at=datetime.datetime.now(datetime.UTC).isoformat(),
-            capabilities=["plugin.lifecycle.v1", "plugin.marketplace.v1"],
+            capabilities=[
+                "plugin.lifecycle.v1",
+                "plugin.marketplace.v1",
+                "git.basic.v1",
+            ],
         )
 
     # 将 EventBus 事件写入 trace（作为 EventBus 订阅者）
@@ -547,16 +551,6 @@ class CoreApp:
             return ChangeListResult(changes=agent_changes)
         owned = {change.path: change for change in agent_changes}
         summaries = [ChangeSummary.model_validate(change) for change in changes]
-        numstat = self._workspaces.diff_numstat(
-            cmd.workspace_id, [change.path for change in summaries]
-        )
-        summaries = [
-            change.model_copy(update={
-                "additions": numstat.get(change.path, (0, 0))[0],
-                "deletions": numstat.get(change.path, (0, 0))[1],
-            })
-            for change in summaries
-        ]
         return ChangeListResult(
             changes=[owned.get(change.path, change) for change in summaries]
         )

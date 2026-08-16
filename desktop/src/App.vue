@@ -1863,14 +1863,47 @@ function handleDocumentPointerDown(event: PointerEvent) {
 }
 let stopEvents: (() => void) | undefined;
 let stopDisconnect: (() => void) | undefined;
+let runtimeReconnectTimer: number | undefined;
+let runtimeReconnectAttempt = 0;
+let runtimeRefreshPromise: Promise<void> | null = null;
+
+function scheduleRuntimeReconnect() {
+  if (runtimeReconnectTimer !== undefined || connected.value) return;
+  const delay = Math.min(500 * (2 ** runtimeReconnectAttempt), 5_000);
+  runtimeReconnectAttempt += 1;
+  runtimeReconnectTimer = window.setTimeout(() => {
+    runtimeReconnectTimer = undefined;
+    void refreshRuntime(false);
+  }, delay);
+}
+
+async function refreshRuntime(loadHistory: boolean) {
+  if (runtimeRefreshPromise) return runtimeRefreshPromise;
+  runtimeRefreshPromise = refreshIndex(loadHistory)
+    .then(() => {
+      if (connected.value) runtimeReconnectAttempt = 0;
+      else scheduleRuntimeReconnect();
+    })
+    .catch((error) => {
+      connected.value = false;
+      console.warn("Failed to reconnect to local service", error);
+      scheduleRuntimeReconnect();
+    })
+    .finally(() => { runtimeRefreshPromise = null; });
+  return runtimeRefreshPromise;
+}
+
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("resize", handleWindowResize);
   handleWindowResize(); // 初始化窗口宽度与窄窗自动收起状态
   document.addEventListener("pointerdown", handleDocumentPointerDown);
-  stopDisconnect = onRuntimeDisconnect(() => { connected.value = false; });
+  stopDisconnect = onRuntimeDisconnect(() => {
+    connected.value = false;
+    scheduleRuntimeReconnect();
+  });
   stopEvents = onRuntimeEvent(applyRuntimeEvent);
-  void refreshIndex(true);
+  void refreshRuntime(true);
 });
 onBeforeUnmount(() => {
   tokenBatcher.clear();
@@ -1881,6 +1914,7 @@ onBeforeUnmount(() => {
   stopMacTitlebandDragArm?.();
   window.clearTimeout(sidebarAnimTimer);
   window.clearTimeout(windowResizeEndTimer);
+  window.clearTimeout(runtimeReconnectTimer);
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   if (inspectorCloseTimer) clearTimeout(inspectorCloseTimer);

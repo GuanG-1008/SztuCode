@@ -262,7 +262,7 @@ class WorkspaceManager:
         return matches
 
     # 返回 Git 工作区中未提交文件的状态摘要，供变更审阅面板展示
-    def list_changes(self, workspace_id: str) -> list[dict[str, str]]:
+    def list_changes(self, workspace_id: str) -> list[dict[str, object]]:
         workspace = self.get(workspace_id)
         raw = self._git(Path(workspace.path), ["status", "--porcelain=v1", "-z"])
         changes: list[dict[str, str]] = []
@@ -288,7 +288,15 @@ class WorkspaceManager:
                 "index_status": index_status,
                 "worktree_status": worktree_status,
             })
-        return changes
+        numstat = self.diff_numstat(workspace_id, [str(change["path"]) for change in changes])
+        return [
+            {
+                **change,
+                "additions": numstat.get(str(change["path"]), (0, 0))[0],
+                "deletions": numstat.get(str(change["path"]), (0, 0))[1],
+            }
+            for change in changes
+        ]
 
     # 返回工作区或指定文件的未提交 Git diff，不执行任何修改操作
     def diff(self, workspace_id: str, relative_path: str | None = None) -> str:
@@ -357,6 +365,66 @@ class WorkspaceManager:
             raise ValueError(result[2].strip() or result[1].strip() or "git commit failed")
         commit_hash = self._git(root, ["rev-parse", "--short", "HEAD"]).strip()
         return commit_hash
+
+    # 返回提交历史和父提交关系，供源代码管理图谱绘制提交节点与分支线。
+    def history(self, workspace_id: str, limit: int = 80) -> list[dict[str, object]]:
+        workspace = self.get(workspace_id)
+        root = Path(workspace.path)
+        head_hash = self._git(root, ["rev-parse", "HEAD"]).strip()
+        upstream = self._git(
+            root,
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        ).strip()
+        outgoing_hashes = set(
+            self._git(root, ["rev-list", f"{upstream}..HEAD"]).splitlines()
+        ) if upstream else set()
+        refs_by_hash: dict[str, list[dict[str, str]]] = {}
+        for line in self._git(root, ["show-ref", "--dereference"]).splitlines():
+            try:
+                object_hash, full_name = line.split(" ", 1)
+            except ValueError:
+                continue
+            peeled = full_name.endswith("^{}")
+            full_name = full_name.removesuffix("^{}")
+            if full_name.startswith("refs/heads/"):
+                kind, name = "head", full_name.removeprefix("refs/heads/")
+            elif full_name.startswith("refs/remotes/"):
+                kind, name = "remote", full_name.removeprefix("refs/remotes/")
+            elif full_name.startswith("refs/tags/"):
+                kind, name = "tag", full_name.removeprefix("refs/tags/")
+            else:
+                continue
+            item = {"name": name, "kind": kind}
+            if peeled:
+                for values in refs_by_hash.values():
+                    if item in values:
+                        values.remove(item)
+            if item not in refs_by_hash.setdefault(object_hash, []):
+                refs_by_hash[object_hash].append(item)
+        raw = self._git(
+            root,
+            [
+                "log", "--all", "--topo-order", "--date=iso-strict", f"-n{limit}",
+                "--pretty=format:%H%x00%h%x00%P%x00%an%x00%ad%x00%s%x1e",
+            ],
+        )
+        commits: list[dict[str, object]] = []
+        for record in raw.split("\x1e"):
+            fields = record.strip("\x00\n").split("\x00")
+            if len(fields) != 6 or not fields[0]:
+                continue
+            commits.append({
+                "hash": fields[0],
+                "short_hash": fields[1],
+                "parents": fields[2].split() if fields[2] else [],
+                "author": fields[3],
+                "date": fields[4],
+                "subject": fields[5],
+                "is_head": fields[0] == head_hash,
+                "is_outgoing": fields[0] in outgoing_hashes,
+                "refs": refs_by_hash.get(fields[0], []),
+            })
+        return commits
 
     def _git_relative_path(self, workspace_id: str, relative_path: str) -> str:
         self._resolve_in_workspace(workspace_id, relative_path)
