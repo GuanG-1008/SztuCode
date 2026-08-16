@@ -172,6 +172,8 @@ const launcherPermissionMenuOpen = ref(false);
 const permissionConfirmOpen = ref(false);
 const permissionSaving = ref(false);
 const permissionSettingsError = ref("");
+// 防止连续按键在 steer 请求尚未返回时重复追加同一条消息。
+const steering = ref(false);
 const projectActionsOpen = ref<string | null>(null);
 const sidebarToolsExpanded = ref(false);
 const collapsedProjects = ref(new Set<string>());
@@ -225,6 +227,8 @@ const activeUserQuestion = computed(() => pendingUserQuestions.value.find((item)
 const backgroundUserQuestions = computed(() => pendingUserQuestions.value.filter((item) => item.session_id !== activeId.value));
 // 发送请求中或正在执行 run 时，把发送按钮切换为停止按钮
 const isRunActive = computed(() => sending.value || runActive.value);
+// 追加模式只代表当前会话已有一个实际运行中的 run；发送请求的短暂窗口仍使用普通发送状态。
+const isAppending = computed(() => Boolean(activeId.value && activeView.value?.runActive));
 const activeWorkspace = computed(() => workspaces.value.find((item) => item.workspace_id === active.value?.workspace_id) ?? workspace.value);
 const activeWorkspaces = computed(() => workspaces.value.filter((item) => !item.archived));
 const archivedProjects = computed(() => workspaces.value.filter((item) => item.archived));
@@ -1222,6 +1226,23 @@ function beginTask(project: Workspace | null = workspace.value) {
   selectedStarterTask.value = "";
   void nextTick(() => launcherPrompt.value?.focus());
 }
+function insertProvisionalSession(sessionId: string, title: string, project: Workspace | null) {
+  const now = new Date().toISOString();
+  const provisional: Session = {
+    session_id: sessionId,
+    title: title.slice(0, 40),
+    status: "waiting_for_input",
+    updated_at: now,
+    archived: false,
+    pinned: false,
+    workspace_id: project?.workspace_id ?? null,
+    latest_run_id: null,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_elapsed_s: 0,
+  };
+  sessions.value = [provisional, ...sessions.value.filter((item) => item.session_id !== sessionId)];
+}
 async function startSessionRun(sessionId: string, content: string, images: ImageBlock[] = [], clearDraft = false): Promise<boolean> {
   const trimmed = content.trim();
   if (!trimmed || !connected.value || sending.value) return false;
@@ -1260,6 +1281,8 @@ async function submitTask(content: string, project: Workspace | null = workspace
   sending.value = true;
   try {
     const sessionId = await createSession(project);
+    // 先把新会话放入本地索引，避免等待下一次 session.list 才能渲染会话区。
+    insertProvisionalSession(sessionId, trimmed, project);
     const view = ensureSessionView(sessionId);
     view.timeline = new Map();
     view.activeRunId = null;
@@ -1270,7 +1293,7 @@ async function submitTask(content: string, project: Workspace | null = workspace
     prompt.value = "";
     sending.value = false;
     const sent = await startSessionRun(sessionId, trimmed, images);
-    if (sent) await refreshIndex(false);
+    if (sent) void refreshIndex(false);
     return sent;
   } finally {
     runtimeTargetSessionId = null;
@@ -1418,7 +1441,7 @@ function handleSessionClosed(sessionId: string) {
 }
 async function submit(gesture: ComposerSubmitGesture = "enter") {
   const content = prompt.value.trim();
-  if (!content || sending.value) return;
+  if (!content || steering.value || (sending.value && !isAppending.value)) return;
   if (activeId.value && (active.value?.archived || active.value?.status === "closed")) return;
   const mode = ({ "/plan": "plan", "/edits": "accept_edits", "/auto": "auto" } as const)[content as "/plan" | "/edits" | "/auto"];
   if (mode) {
@@ -1431,19 +1454,32 @@ async function submit(gesture: ComposerSubmitGesture = "enter") {
   const { content: payload, images } = buildMessagePayload(content);
   const attachmentCount = attachedFiles.value.length;
   const sessionId = activeId.value;
-  if (sessionId && activeView.value?.runActive) {
+  if (sessionId && isAppending.value) {
     const submitMode = resolveComposerSubmitMode(true, gesture, true);
     if (submitMode === "queue") {
       enqueueSubmission(sessionId, content, payload, images, attachmentCount);
+      prompt.value = "";
+      attachedFiles.value = [];
     } else {
+      steering.value = true;
       try {
         await steerPrompt(sessionId, payload, images);
-      } catch {
-        enqueueSubmission(sessionId, content, payload, images, attachmentCount);
+        prompt.value = "";
+        attachedFiles.value = [];
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // run 刚好结束时 steer 会被服务拒绝，此时转入队列；其它错误不能静默吞掉草稿。
+        if (/busy|steer unavailable|session busy|运行中|繁忙/i.test(message)) {
+          enqueueSubmission(sessionId, content, payload, images, attachmentCount);
+          prompt.value = "";
+          attachedFiles.value = [];
+        } else {
+          window.alert(message);
+        }
+      } finally {
+        steering.value = false;
       }
     }
-    prompt.value = "";
-    attachedFiles.value = [];
     slashMenuDismissed.value = false;
     void nextTick(() => activePrompt.value?.focus());
     return;
@@ -2149,11 +2185,12 @@ watch(activeId, () => { streamScrolledUp.value = false; });
                   @submit="submitUserQuestion(activeUserQuestion, $event)"
                   @stop="stopActiveRun"
                 />
-                <form v-else class="kimi-composer" @submit.prevent="submit">
+                <form v-else class="kimi-composer active-composer" :class="{ 'append-mode': isAppending }" @submit.prevent="submit">
                   <SlashCommandMenu v-if="slashMenuOpen" :query="slashQuery ?? ''" :skills="providerStatus?.skills ?? []" :connected="connected" :active-index="slashMenuActiveIndex" @activate="slashMenuActiveIndex = $event" @select="chooseSkill" />
                   <div v-if="attachedFiles.length" class="attachment-strip"><span v-for="(file, index) in attachedFiles" :key="file.path" class="attachment-chip" :class="'attachment-chip--' + file.kind"><img v-if="file.kind === 'image' && file.dataBase64" :src="'data:' + (file.mime || 'image/png') + ';base64,' + file.dataBase64" :alt="file.name" /><template v-else><b>{{ file.name }}</b><small>{{ formatSize(file.size) }}</small></template><button type="button" aria-label="移除附件" @click="removeAttachment(index)"><X :size="12" /></button></span></div>
-                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : (isRunActive ? '追加任务：Enter 排队，Ctrl+Enter 转入当前轮' : '汝之所想，皆以言成')" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" @paste="onPasteImage" />
-                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send queue-send" type="submit" title="加入待处理队列" aria-label="加入待处理队列" :disabled="!prompt.trim() || sending"><ListPlus :size="14" /></button><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'"><ArrowUp :size="15" /></button></div>
+                  <div v-if="isAppending" class="composer-append-status" aria-live="polite"><b>追加模式</b><span>Enter 排队</span><span>Ctrl/⌘ + Enter 转入当前轮</span></div>
+                  <textarea ref="activePrompt" v-model="prompt" :disabled="active.archived || active.status === 'closed'" :placeholder="active.archived || active.status === 'closed' ? '恢复任务后继续' : (isAppending ? '追加任务：Enter 排队，Ctrl+Enter 转入当前轮' : (sending ? '正在发送…' : '汝之所想，皆以言成'))" rows="3" @input="handlePromptInput" @keydown="onComposerKeydown" @paste="onPasteImage" />
+                  <div class="composer-toolbar"><button type="button" class="round" title="添加上下文" aria-label="添加上下文" @click="selectAttachments"><Plus :size="18" /></button><button type="button" class="permission" @click="choosePermissionMode(runtimeSettings?.permission_mode === 'auto' ? 'normal' : 'auto')"><ShieldCheck :size="15" />{{ runtimeSettings?.permission_mode === 'auto' ? '全部允许' : '逐项审批' }}<ChevronDown :size="13" /></button><span /><ModelConfigMenu :settings="runtimeSettings" :status="providerStatus" @updated="handleModelConfigUpdated" @manage="openModelManager" /><button v-if="isRunActive" class="send queue-send" type="submit" title="加入待处理队列" aria-label="加入待处理队列" :disabled="!prompt.trim() || (sending && !isAppending) || steering"><ListPlus :size="14" /></button><button v-if="isRunActive" class="send stop" type="button" title="停止任务" aria-label="停止任务" @click="stopActiveRun"><Square :size="14" /></button><button v-else class="send" type="submit" aria-label="发送任务" :disabled="!prompt.trim() || active.archived || active.status === 'closed'"><ArrowUp :size="15" /></button></div>
                 </form>
               </div>
             </section>

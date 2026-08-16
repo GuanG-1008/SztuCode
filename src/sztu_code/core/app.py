@@ -707,8 +707,6 @@ class CoreApp:
             except Exception:
                 # 上一轮失败也已经完成清理，不应阻止排队的下一轮启动
                 pass
-        await self._sessions.get_history(cmd.session_id)
-
         run_id = new_run_id()
         if cmd.client_message_id:
             self._client_message_runs[(cmd.session_id, cmd.client_message_id)] = run_id
