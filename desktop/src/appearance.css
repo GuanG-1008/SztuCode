@@ -112,7 +112,7 @@
 
 .kimi-sidebar {
   color: var(--text) !important;
-  background: transparent !important;
+  background: var(--chrome-bg) !important;
   border: 0 !important;
   box-shadow: none !important;
 }
@@ -725,7 +725,9 @@
   background: color-mix(in srgb, var(--surface) var(--conversation-surface-opacity), transparent) !important;
 }
 
-:root:not([data-wallpaper="none"]) .kimi-main.work-active {
+/* 工作页存在时整窗让位于壁纸，会话表面由 task-canvas 承担；
+   落地页（无工作页）仍由 kimi-main 提供会话区表面，透明度滑块可直接作用于它。 */
+:root:not([data-wallpaper="none"]) .kimi-main:has(.work-page) {
   background: transparent !important;
 }
 

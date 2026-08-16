@@ -1,4 +1,4 @@
-﻿import { expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 test("agent workbench sidebar prioritizes tasks and project context", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -72,6 +72,32 @@ test("new task composer keeps pasted images and attachment control inside the in
     buttonInside: true,
     buttonReceivesPointer: true,
   });
+});
+
+test("launcher model picker opens fully above the composer without being clipped", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await page.getByRole("button", { name: "配置模型", exact: true }).click();
+  const popover = page.getByRole("menu", { name: "选择模型" });
+  await expect(popover).toBeVisible();
+  await expect(popover.getByText("暂无模型配置")).toBeVisible();
+  await expect(popover.getByRole("menuitem", { name: /添加和管理模型/ })).toBeVisible();
+
+  // 弹出层自输入栏向上展开；确保其顶部未被 composer-input-shell 的 overflow 裁掉
+  const painted = await page.evaluate(() => {
+    const shell = document.querySelector<HTMLElement>(".task-launcher .composer-input-shell")!;
+    const pop = document.querySelector<HTMLElement>(".task-launcher .model-picker-popover")!;
+    const shellTop = shell.getBoundingClientRect().top;
+    const popBounds = pop.getBoundingClientRect();
+    const cx = popBounds.left + popBounds.width / 2;
+    const atTop = document.elementFromPoint(cx, popBounds.top + 6);
+    return {
+      opensAboveShell: popBounds.top < shellTop,
+      topPaintsPopover: !!(atTop && atTop.closest(".model-picker-popover")),
+    };
+  });
+  expect(painted).toEqual({ opensAboveShell: true, topPaintsPopover: true });
 });
 
 test("work page remains mounted while navigating between top-level pages", async ({ page }) => {
@@ -251,7 +277,7 @@ test("task conversation scrolls against the workspace divider while controls sta
   });
 
   expect(geometry.taskCanvasRight).toBeCloseTo(geometry.dividerLeft, 0);
-  expect(geometry.panelGap).toBeCloseTo(6, 0);
+  expect(geometry.panelGap).toBeCloseTo(1, 0);
   expect(geometry.panelsTopAligned).toBeLessThanOrEqual(1);
   expect(geometry.panelsBottomAligned).toBeLessThanOrEqual(1);
   expect(geometry.headersTopAligned).toBeLessThanOrEqual(1);

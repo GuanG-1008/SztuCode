@@ -614,6 +614,9 @@ function hydrateTimeline(
       next.set(step, { ...current, contextInjections: [...(current.contextInjections ?? []), injected] });
       continue;
     }
+    // 模型对压缩摘要的确认消息无信息量，整条丢弃，避免污染该轮总结文本。
+    const plainText = blocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n").trim();
+    if (role === "assistant" && /^Understood, I'll continue from this summary\.$/i.test(plainText)) continue;
     const text = visibleBlocks.filter((block) => String(block.type) === "text").map(blockText).filter(Boolean).join("\n");
     const toolResults = visibleBlocks.filter((block) => String(block.type) === "tool_result");
     if (role === "user" && toolResults.length && !text) {

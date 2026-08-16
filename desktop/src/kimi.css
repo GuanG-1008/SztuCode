@@ -4,7 +4,7 @@ body, #app { height: 100vh; } body { margin: 0; min-width: 680px; overflow: hidd
 button, input, select, textarea { font: inherit; }
 button { border: 0; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .48; }
-.kimi-shell { height: 100vh; overflow: hidden; display: grid; grid-template: 40px minmax(0, 1fr) / 240px minmax(0, 1fr); color: #202124; background: #f7f9fa; border: 1px solid #dfe1e4; border-radius: 12px; }.kimi-shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+.kimi-shell { height: 100vh; overflow: hidden; display: grid; grid-template: 40px minmax(0, 1fr) / 240px minmax(0, 1fr); color: #202124; background: #f7f9fa; border: 1px solid #dfe1e4; border-radius: 12px; }.kimi-shell.sidebar-collapsed { grid-template-columns: var(--sidebar-collapsed-width, 44px) minmax(0, 1fr); }
 .kimi-shell.sidebar-animating { transition: grid-template-columns .2s ease; }
 .kimi-shell.window-resizing,
 .kimi-shell.window-resizing .agent-sidebar,
