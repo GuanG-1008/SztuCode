@@ -131,6 +131,8 @@ const activeQueueItems = computed<QueueDockItem[]>(() => (activeView.value?.queu
 })));
 const runToSession = new Map<string, string>();
 const finishedRunIds = new Set<string>();
+// 发送请求尚未返回 run_id 时记录停止意图，拿到 run_id 后立即补发取消。
+const stopRequestedSessions = new Set<string>();
 const deferredRuntimeEvents = new Map<string, RuntimeEvent[]>();
 const historyLoadVersionBySession = new Map<string, number>();
 const sessionLoadingTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1257,11 +1259,24 @@ async function startSessionRun(sessionId: string, content: string, images: Image
     runtimeTargetSessionId = sessionId;
     const runId = await sendPrompt(sessionId, trimmed, images, clientMessageId);
     runToSession.set(runId, sessionId);
-    view.activeRunId = runId;
-    view.runActive = true;
+    const stopRequested = stopRequestedSessions.delete(sessionId);
+    // run.finished 可能在 session.send_message 响应前到达，不能把已结束的 run 重新标成运行中。
+    if (!finishedRunIds.has(runId)) {
+      view.activeRunId = runId;
+      view.runActive = true;
+    }
     setSessionStep(messageStep, (current) => ({ ...current, runId }), sessionId);
+    if (stopRequested && !finishedRunIds.has(runId)) {
+      try {
+        await cancelRun(runId);
+      } catch (error) {
+        // 取消请求失败不应把已经成功提交的任务误标为发送失败。
+        console.warn("Failed to cancel run requested before run_id was available", error);
+      }
+    }
     return true;
   } catch (error) {
+    stopRequestedSessions.delete(sessionId);
     setSessionStep(messageStep, (current) => ({
       ...current,
       status: "failed",
@@ -1356,11 +1371,25 @@ async function drainSessionQueue(sessionId: string) {
 // 停止当前正在执行的 run；后端取消后通过 run.finished 事件更新界面状态
 async function stopActiveRun() {
   const runId = activeRunId.value;
-  if (!runId) return;
+  if (!runId) {
+    // 发送 RPC 仍在等待 run_id；保留停止意图，避免按钮点击被吞掉。
+    if (sending.value && activeId.value) stopRequestedSessions.add(activeId.value);
+    return;
+  }
+  const sessionId = activeId.value;
+  // 先解除本地运行态，避免取消响应被事件流背压拖住时按钮仍显示为运行中。
+  if (sessionId) {
+    const view = ensureSessionView(sessionId);
+    if (view.activeRunId === runId) {
+      view.activeRunId = null;
+      view.runActive = false;
+    }
+  }
   try {
     await cancelRun(runId);
   } catch (error) {
-    window.alert(error instanceof Error ? error.message : String(error));
+    // daemon 可能已执行取消，但取消响应被高频事件流延迟；run.finished 仍会完成最终收尾。
+    console.warn("停止任务请求未及时返回", error);
   }
 }
 async function chooseTask(id: string) {
