@@ -174,7 +174,8 @@ UI 字体：Microsoft YaHei UI / Noto Sans SC
 
 ### P1：补齐产品协议
 
-以下命令/事件按 JSON-RPC/Pydantic 模型新增，修改后同步生成 `WIRE_PROTOCOL.md`：
+以下命令/事件按 JSON-RPC/Pydantic 模型新增，修改后同步生成
+`docs/reference/wire-protocol.md`：
 
 | 类别 | 新命令 / 事件 | 目的 |
 | --- | --- | --- |

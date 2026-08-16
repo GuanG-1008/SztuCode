@@ -58,7 +58,7 @@ class LoggingConfig:
 
 @dataclass
 class AgentConfig:
-    # 0 = 不限步数；预算由 budget.max_tokens / max_wall_clock_s 兜底
+    # 0 = 不限步数；时间预算和上下文窗口保护仍然生效
     max_steps: int = _DEFAULT_MAX_STEPS
     max_budget_usd: float = 0.0  # 0 = 不限制 USD 成本上限
     repeated_error_threshold: int = 3  # 同一工具同类错误连续 N 次触发熔断
@@ -76,9 +76,8 @@ class AgentConfig:
 
 @dataclass
 class BudgetConfig:
-    # 本 run 累计 input+output tokens 上限；0=不限
-    # 参考 Claude Code task_budget (128K)，但我们的压缩为全量替换，设 500K 更保守
-    max_tokens: int = 500_000
+    # 已废弃：不再使用跨轮累计 Token 预算终止 Agent Run，保留字段仅兼容旧配置。
+    max_tokens: int = 0
     # 本 run 累计墙钟秒数上限；0=不限
     max_wall_clock_s: int = 1_200  # 20 分钟
 

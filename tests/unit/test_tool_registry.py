@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from sztu_code.core.prompts.tool_descriptions import (
+    BUILTIN_TOOL_DESCRIPTION_NAMES,
+    load_tool_descriptions,
+)
 from sztu_code.core.tools.base import BaseTool, ToolResult
+from sztu_code.core.tools.builtin.read_file import ReadFileTool
 from sztu_code.core.tools.registry import ToolRegistry
 
 
@@ -64,6 +69,30 @@ def test_multiple_tools_all_appear_in_schemas() -> None:
     registry.register(_AnotherTool())
     names = {s["name"] for s in registry.tool_schemas()}
     assert names == {"fake", "another"}
+
+
+# 功能：验证第七章索引完整覆盖 SztuCode 的 18 个内置工具描述
+# 设计：同时检查数量、名称集合和非空正文，防止索引漏项或误收扩展工具
+def test_builtin_tool_description_index_contains_exactly_eighteen_tools() -> None:
+    descriptions = load_tool_descriptions()
+
+    assert len(BUILTIN_TOOL_DESCRIPTION_NAMES) == 18
+    assert set(descriptions) == set(BUILTIN_TOOL_DESCRIPTION_NAMES)
+    assert all(description.strip() for description in descriptions.values())
+
+
+# 功能：验证模型看到的内置工具 schema 描述来自 Markdown，而不是类内旧字符串
+# 设计：read_file 类描述较短，索引正文含 Usage 段，可明确区分实际来源
+def test_builtin_tool_schema_uses_indexed_markdown_description() -> None:
+    registry = ToolRegistry()
+    tool = ReadFileTool()
+    registry.register(tool)
+
+    schema = registry.tool_schemas()[0]
+
+    assert schema["description"] == load_tool_descriptions()["read_file"]
+    assert schema["description"] != tool.description
+    assert "Usage:" in str(schema["description"])
 
 
 # 功能：验证一个 Provider 修改公开 Schema 的任意可变层级都不会污染后续 Provider

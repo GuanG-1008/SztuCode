@@ -19,6 +19,7 @@ from sztu_code.core.bus.events import (
 )
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.prompts import build_system_prompt
+from sztu_code.core.prompts.slash_command_prompts import resolve_slash_command_prompt
 from sztu_code.core.runs import new_run_id
 from sztu_code.core.session.model import Session, SessionMode
 from sztu_code.core.session.store import SessionStore
@@ -155,7 +156,7 @@ class SessionManager:
             session.updated_at = _now()
             self._store.write_meta(session)
 
-            # Skill 解析：检测 "/" 前缀，展开为系统提示覆盖和工具白名单
+            # 斜杠命令解析：内建工作流优先，其余名称继续按 Skill 展开
             goal = content
             system_prompt_override: str | None = None
             tool_whitelist: list[str] | None = None
@@ -169,8 +170,19 @@ class SessionManager:
                 parts = content[1:].split(None, 1)
                 skill_name = parts[0]
                 arguments = parts[1] if len(parts) > 1 else ""
-                skill = skill_loader.resolve(skill_name)
-                if skill is not None:
+                slash_prompt = resolve_slash_command_prompt(f"/{skill_name}")
+                if slash_prompt is not None:
+                    _prompt_id, prompt = slash_prompt
+                    goal = arguments or content
+                    system_prompt_override = "\n\n".join(
+                        [
+                            build_system_prompt(workspace_root=workspace_root or Path.cwd()),
+                            f"## Active slash command: /{skill_name}\n{prompt}",
+                        ]
+                    )
+                else:
+                    skill = skill_loader.resolve(skill_name)
+                if slash_prompt is None and skill is not None:
                     rendered_skill = skill_loader.render_prompt(skill, arguments)
                     goal = arguments or content
                     system_prompt_override = "\n\n".join(

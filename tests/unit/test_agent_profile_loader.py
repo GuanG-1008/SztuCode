@@ -67,6 +67,7 @@ max_steps = 7
     assert profile.name == "tester"
     assert profile.description == "测试角色"
     assert profile.system_prompt == "你是测试助手。"
+    assert profile.prompt_id == ""
     assert "read_file" in profile.allowed_tools
     assert "bash" in profile.allowed_tools
     assert profile.model == "test-model-id"
@@ -100,4 +101,6 @@ def test_project_overrides_builtin(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     profile = loader.load("planner")
     assert profile is not None
     assert profile.description == "local planner"
+    assert profile.system_prompt == "local prompt"
+    assert profile.prompt_id == ""
     assert "list_dir" in profile.allowed_tools

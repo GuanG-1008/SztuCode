@@ -71,7 +71,7 @@ uv run mypy src                       # 类型检查
 uv run pytest tests/ -v               # 全量测试
 uv run pytest tests/unit/ -v         # 仅单元测试（无需启动 daemon）
 
-make docs                             # 重新生成 WIRE_PROTOCOL.md
+make docs                             # 重新生成 docs/reference/wire-protocol.md
 make verify-s0                        # 完整验证（lint + 类型 + 测试 + 协议同源检查）
 ```
 

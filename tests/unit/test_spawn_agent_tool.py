@@ -198,8 +198,8 @@ async def test_foreground_publishes_started_event(tmp_path: Path) -> None:
     assert started[0].description == "test task"
 
 
-# 功能：空 subagent_type 默认使用 coder 角色，system prompt 含 coder 标记
-# 设计：捕获 provider.chat 的 system 参数，不带 subagent_type spawn，断言含 coder 系统提示关键词
+# 功能：空 subagent_type 默认使用第八章通用子代理提示词
+# 设计：捕获 provider.chat 的 system 参数，不带 subagent_type spawn，断言含原子提示词标记
 async def test_default_role_is_coder(tmp_path: Path) -> None:
     captured: dict[str, str] = {}
 
@@ -215,11 +215,11 @@ async def test_default_role_is_coder(tmp_path: Path) -> None:
     tool, _, _ = _make_tool(tmp_path, provider)
     result = await tool.invoke({"description": "任务", "prompt": "干活"})
     assert not result.is_error
-    assert "通用软件工程" in captured["system"]
+    assert "You are an agent for SztuCode" in captured["system"]
 
 
-# 功能：subagent_type 指定角色时 system prompt 使用该角色配置
-# 设计：subagent_type="explore"，断言 system 含 explore 的系统提示关键词
+# 功能：subagent_type 指定角色时 system prompt 使用第八章对应原子提示词
+# 设计：subagent_type="explore"，断言 system 含 Explore 只读标记
 async def test_explicit_role_uses_profile(tmp_path: Path) -> None:
     captured: dict[str, str] = {}
 
@@ -235,7 +235,8 @@ async def test_explicit_role_uses_profile(tmp_path: Path) -> None:
     tool, _, _ = _make_tool(tmp_path, provider)
     result = await tool.invoke({"description": "任务", "prompt": "探索", "subagent_type": "explore"})
     assert not result.is_error
-    assert "代码库探索专家" in captured["system"]
+    assert "file search specialist for SztuCode" in captured["system"]
+    assert "READ-ONLY MODE" in captured["system"]
 
 
 # 功能：spawn 时应用 skill，skill 系统提示合并进子 agent 的 system prompt
@@ -255,7 +256,7 @@ async def test_skill_merge(tmp_path: Path) -> None:
     tool, _, _ = _make_tool(tmp_path, provider)
     result = await tool.invoke({"description": "任务", "prompt": "分析 X", "skill": "orchestrate"})
     assert not result.is_error
-    assert "通用软件工程" in captured["system"]  # coder 基础提示
+    assert "You are an agent for SztuCode" in captured["system"]  # coder 基础提示
     assert "Multi-agent 协调者" in captured["system"]  # orchestrate 技能提示
 
 

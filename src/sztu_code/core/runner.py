@@ -38,6 +38,8 @@ from sztu_code.core.tools.builtin import (
     AskUserQuestionTool,
     BashTool,
     EditFileTool,
+    GlobSearchTool,
+    GrepSearchTool,
     ListDirTool,
     MemoryReadTool,
     NoteSaveTool,
@@ -123,8 +125,13 @@ class AgentRunner:
 
         registry = ToolRegistry()
         for t in [
-            ReadFileTool(workspace_root), BashTool(workspace_root), WriteFileTool(workspace_root),
-            EditFileTool(workspace_root), ListDirTool(workspace_root),
+            ReadFileTool(workspace_root),
+            BashTool(workspace_root),
+            WriteFileTool(workspace_root),
+            EditFileTool(workspace_root),
+            ListDirTool(workspace_root),
+            GlobSearchTool(workspace_root),
+            GrepSearchTool(workspace_root),
         ]:
             if _ok(t.name):
                 registry.register(t)
@@ -134,14 +141,8 @@ class AgentRunner:
             and run_id is not None
             and _ok("ask_user_question")
         ):
-            registry.register(
-                AskUserQuestionTool(self._user_question_manager, session_id, run_id)
-            )
-        if (
-            memory_catalog is not None
-            and memory_catalog.requires_reader()
-            and _ok("memory_read")
-        ):
+            registry.register(AskUserQuestionTool(self._user_question_manager, session_id, run_id))
+        if memory_catalog is not None and memory_catalog.requires_reader() and _ok("memory_read"):
             registry.register(MemoryReadTool(memory_catalog))
         for t in [
             TaskCreateTool(task_manager, bus, run_id or "", session_id),
@@ -270,6 +271,28 @@ class AgentRunner:
             # injection so CLAUDE.md is available even without an explicit workspace.
             base_prompt = build_system_prompt(workspace_root=project_root)
 
+        from sztu_code.core.prompts.harness import (
+            DEFAULT_PROMPT_HARNESS,
+            PromptRuntimeContext,
+        )
+
+        permission_mode = (
+            self._permission_manager.get_mode().value
+            if self._permission_manager is not None
+            else self._config.permission.mode
+        )
+        memory_enabled = session is not None and store is not None
+        runtime_prompt_context = PromptRuntimeContext(
+            permission_mode=permission_mode,
+            memory_enabled=memory_enabled,
+        )
+        if system_prompt_override:
+            system_prompt_override = DEFAULT_PROMPT_HARNESS.compose(
+                system_prompt_override, runtime_prompt_context
+            )
+        else:
+            base_prompt = DEFAULT_PROMPT_HARNESS.compose(base_prompt, runtime_prompt_context)
+
         context = ExecutionContext(
             run_id=run_id,
             goal=goal,
@@ -282,7 +305,9 @@ class AgentRunner:
             project_profile_context=project_profile_context,
             base_system_prompt=base_prompt,
             system_prompt_override=system_prompt_override,
-            max_tokens=self._config.budget.max_tokens,
+            # Cumulative Token budgets are intentionally disabled. Usage is still
+            # recorded for telemetry, while wall-clock/context/step guards remain.
+            max_tokens=0,
             max_wall_clock_s=self._config.budget.max_wall_clock_s,
         )
         prefill_len = len(history)
@@ -360,7 +385,9 @@ class AgentRunner:
                 compactor = Compactor(bus, session_dir, session_id_str)
                 denial_tracker = DenialTracker()
                 loop = AgentLoop(
-                    provider, registry, bus,
+                    provider,
+                    registry,
+                    bus,
                     permission_manager=self._permission_manager,
                     denial_tracker=denial_tracker,
                     compactor=compactor,

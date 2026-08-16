@@ -717,8 +717,6 @@ class CoreApp:
             except Exception:
                 # 上一轮失败也已经完成清理，不应阻止排队的下一轮启动
                 pass
-        await self._sessions.get_history(cmd.session_id)
-
         run_id = new_run_id()
         if self._run_store is not None:
             self._run_store.start(run_id, goal=cmd.content, session_id=cmd.session_id)

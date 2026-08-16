@@ -985,6 +985,12 @@ class KamaTuiApp(App[None]):
     def _builtin_slash_items(self) -> list[tuple[str, str]]:
         return [
             ("compact", "compress context window"),
+            ("security-review", "review branch changes for security issues"),
+            ("batch", "orchestrate independent work in parallel"),
+            ("review-pr", "review a GitHub pull request"),
+            ("pr-comments", "fetch GitHub pull request comments"),
+            ("commit", "commit the intended git changes"),
+            ("create-pr", "create a GitHub pull request"),
             ("new", "start a fresh task"),
             ("workspace", "open a local repository"),
             ("files", "show workspace file tree"),

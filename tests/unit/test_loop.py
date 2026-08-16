@@ -1140,24 +1140,28 @@ async def test_blocking_limit_termination() -> None:
 # ============================================================
 
 
-# 功能：验证 token 预算耗尽优先于 max_steps，不做 wrap_up 额外调用
-# 设计：设 max_tokens=1 且 max_steps=10，应首先触发 max_tokens_exceeded
-async def test_token_budget_stops_before_max_steps() -> None:
+# 功能：验证累计 Token 不再作为主循环终止条件
+# 设计：即使累计 usage 远超旧预算，也继续执行到模型 end_turn
+async def test_cumulative_token_budget_does_not_stop_loop() -> None:
     tc = _tc()
     provider = _MockProvider([
         LlmResponse(
             stop_reason="tool_use", tool_calls=[tc],
             usage=UsageStats(input_tokens=100_000, output_tokens=100, context_pct=0.5),
         ),
-    ] * 10)
+        LlmResponse(
+            stop_reason="end_turn", text="done",
+            usage=UsageStats(input_tokens=100_000, output_tokens=100, context_pct=0.5),
+        ),
+    ])
     registry = ToolRegistry()
     registry.register(_EchoTool())
     loop, _ = _make_loop(provider, registry)
     ctx = _ctx(max_steps=10)
-    ctx.max_tokens = 1  # token 预算立即耗尽，应跳过 max_steps 的 wrap_up
+    ctx.max_tokens = 1  # 旧配置值不应再截断主 Agent Run
     await loop.run(ctx)
-    assert ctx.status == "interrupted"
-    assert ctx.reason == "max_tokens_exceeded"
+    assert ctx.status == "success"
+    assert ctx.result == "done"
 
 
 # 功能：验证未知模型价格不会回退旧 3/15 美元默认估价

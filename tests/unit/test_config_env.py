@@ -231,7 +231,7 @@ def test_max_steps_env_accepts_zero_rejects_negative(tmp_path: Path, monkeypatch
         get_config()
 
 
-# 功能：验证 SZTU_BUDGET_* 环境变量覆盖 budget 配置
+# 功能：验证 SZTU_BUDGET_* 环境变量仍可读取旧配置（但主 Agent 不再使用 Token 上限）
 # 设计：直接设环境变量，断言 get_config 读到对应值
 def test_budget_env_vars_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SZTU_BUDGET_MAX_TOKENS", "999")
@@ -294,13 +294,13 @@ def test_workflow_concurrency_rejects_zero(
 # ============================================================
 
 
-# 功能：验证预算默认值非零 — max_tokens=500K, max_wall_clock_s=1200
+# 功能：验证累计 Token 预算默认关闭，墙钟预算仍有安全默认值
 # 设计：无覆盖时默认值提供硬止损，不再全零
 def test_budget_defaults_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for env in ("SZTU_BUDGET_MAX_TOKENS", "SZTU_BUDGET_MAX_WALL_CLOCK_S"):
         monkeypatch.delenv(env, raising=False)
     cfg = get_config()
-    assert cfg.budget.max_tokens == 500_000
+    assert cfg.budget.max_tokens == 0
     assert cfg.budget.max_wall_clock_s == 1_200
 
 

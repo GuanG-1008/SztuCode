@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from sztu_code.core.compact.compactor import Compactor
+from sztu_code.core.compact.compactor import Compactor, _summary_is_well_formed
 from sztu_code.core.context import ExecutionContext
 from sztu_code.core.events.bus import EventBus
 from sztu_code.core.llm.types import LlmResponse, UsageStats
@@ -27,6 +27,17 @@ def _make_messages(n: int = 5) -> list[dict[str, Any]]:
         msgs.append({"role": "user", "content": "user message " + "x" * 200})
         msgs.append({"role": "assistant", "content": "assistant reply " + "y" * 200})
     return msgs
+
+
+# 功能：验证第八章新版对话摘要标题能通过摘要质量检查
+# 设计：构造只含新版关键标题的最小有效摘要，防止校验逻辑仍绑定旧六段格式
+def test_chapter_eight_summary_headings_are_well_formed() -> None:
+    summary = (
+        "## 1. Primary Request and Intent\nImplement chapter eight prompts.\n"
+        "## 7. Pending Tasks\nNo pending work remains."
+    )
+
+    assert _summary_is_well_formed(summary)
 
 
 # 功能：验证 compact_messages 成功时 provider.chat 被调用一次且不传工具 schema

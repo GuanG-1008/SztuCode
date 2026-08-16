@@ -186,9 +186,7 @@ class SpawnAgentTool(BaseTool):
         if p.allowed_tools is not None:
             workflow_tools = set(p.allowed_tools)
             allowed_tools = (
-                workflow_tools
-                if allowed_tools is None
-                else allowed_tools & workflow_tools
+                workflow_tools if allowed_tools is None else allowed_tools & workflow_tools
             )
         # 子代理继承静态基础规则 + 角色提示 + 技能 + 后台身份段
         from sztu_code.core.prompts.system_prompt import build_static_base
@@ -201,8 +199,29 @@ class SpawnAgentTool(BaseTool):
         system_prompt = "\n\n".join(
             part for part in (build_static_base(), role_prompt, skill_prompt, identity) if part
         )
-        system_prompt_override = system_prompt or None
 
+        # 非 normal 权限模式使用独立 PermissionManager，避免污染父 session 缓存
+        child_permission_manager = self._permission_manager
+        if profile is not None and profile.permission_mode != "normal":
+            from sztu_code.core.permissions.manager import PermissionManager as ChildPM
+            from sztu_code.core.permissions.policy import PermissionMode
+
+            child_permission_manager = ChildPM(mode=PermissionMode(profile.permission_mode))
+
+        from sztu_code.core.prompts.harness import (
+            DEFAULT_PROMPT_HARNESS,
+            PromptRuntimeContext,
+        )
+
+        child_permission_mode = (
+            child_permission_manager.get_mode().value
+            if child_permission_manager is not None
+            else "normal"
+        )
+        system_prompt = DEFAULT_PROMPT_HARNESS.compose(
+            system_prompt,
+            PromptRuntimeContext(permission_mode=child_permission_mode),
+        )
         child_run_id = new_run_id()
         child_context = ExecutionContext(
             run_id=child_run_id,
@@ -213,16 +232,16 @@ class SpawnAgentTool(BaseTool):
                 if self._parent_context is not None
                 else ""
             ),
-            system_prompt_override=system_prompt_override,
+            system_prompt_override=system_prompt or None,
             max_tokens=(
-                p.max_tokens
-                if p.max_tokens > 0
-                else self._budget.max_tokens if self._budget else 0
+                p.max_tokens if p.max_tokens > 0 else self._budget.max_tokens if self._budget else 0
             ),
             max_wall_clock_s=(
                 p.max_wall_clock_s
                 if p.max_wall_clock_s > 0
-                else self._budget.max_wall_clock_s if self._budget else 0
+                else self._budget.max_wall_clock_s
+                if self._budget
+                else 0
             ),
         )
 
@@ -233,13 +252,6 @@ class SpawnAgentTool(BaseTool):
             await self._parent_bus.publish(event)
 
         child_bus.subscribe(_bridge)
-
-        # 非 normal 权限模式使用独立 PermissionManager，避免污染父 session 缓存
-        child_permission_manager = self._permission_manager
-        if profile is not None and profile.permission_mode != "normal":
-            from sztu_code.core.permissions.manager import PermissionManager as ChildPM
-            from sztu_code.core.permissions.policy import PermissionMode
-            child_permission_manager = ChildPM(mode=PermissionMode(profile.permission_mode))
 
         child_registry = self._build_child_registry(
             child_bus,
@@ -254,6 +266,7 @@ class SpawnAgentTool(BaseTool):
         )
         # 子 agent 使用独立的 DenialTracker，避免父子 agent 拒绝计数互相干扰
         from sztu_code.core.permissions.denial_tracker import DenialTracker
+
         child_loop = AgentLoop(
             self._provider,
             child_registry,
