@@ -22,7 +22,7 @@ flow first and only then switch to this reinstall flow.
 1. Update the plugin manifest to a single Codex cachebuster suffix:
 
 ```bash
-python3 scripts/update_plugin_cachebuster.py \
+npx tsx scripts/update_plugin_cachebuster.ts \
   <plugin-path>
 ```
 
@@ -33,7 +33,7 @@ Only use a manual cachebuster override when the user explicitly asks for one or 
 outside Codex depends on a specific token:
 
 ```bash
-python3 scripts/update_plugin_cachebuster.py \
+npx tsx scripts/update_plugin_cachebuster.ts \
   <plugin-path> \
   --cachebuster local-20260519-184516
 ```
@@ -41,7 +41,7 @@ python3 scripts/update_plugin_cachebuster.py \
 2. For the default scaffolded flow, read the marketplace name from the personal marketplace file:
 
 ```bash
-python3 scripts/read_marketplace_name.py
+npx tsx scripts/read_marketplace_name.ts
 ```
 
 Here, "personal marketplace" means the marketplace whose file is at
@@ -52,7 +52,7 @@ constructing the install command.
 To read the name from a different marketplace file, pass the path directly:
 
 ```bash
-python3 scripts/read_marketplace_name.py --marketplace-path <path-to-marketplace.json>
+npx tsx scripts/read_marketplace_name.ts --marketplace-path <path-to-marketplace.json>
 ```
 
 3. Reinstall from that marketplace name:
@@ -115,10 +115,10 @@ numeric version components just to trigger reinstall behavior.
   or `config.toml` during this update/reinstall flow.
 - Prefer the personal marketplace file for the default scaffolded flow.
 - Read the personal marketplace name with
-  `python3 scripts/read_marketplace_name.py` and use the printed value when constructing
+  `npx tsx scripts/read_marketplace_name.ts` and use the printed value when constructing
   `codex plugin add <plugin-name>@<marketplace-name>`.
 - For non-default marketplace files, use
-  `python3 scripts/read_marketplace_name.py --marketplace-path <path-to-marketplace.json>` to read
+  `npx tsx scripts/read_marketplace_name.ts --marketplace-path <path-to-marketplace.json>` to read
   the name before constructing reinstall commands.
 - Do not tell the user to run `codex plugin marketplace add` for the default personal-marketplace
   flow. That marketplace is discovered implicitly by Codex.

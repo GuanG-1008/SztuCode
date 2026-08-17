@@ -16,7 +16,7 @@ Run all `gh` commands with elevated network access. If CLI auth is required, con
    - If the request is about the current branch PR, use local git context plus `gh auth status` and `gh pr view --json number,url` to resolve it.
 2. Inspect review context with thread-aware reads.
    - Use the GitHub app from this plugin to fetch PR metadata and patch context when the repo and PR are known.
-   - Use the bundled `scripts/fetch_comments.py` workflow whenever the task depends on unresolved review threads, inline review locations, or resolution state. That script fetches `reviewThreads`, `isResolved`, `isOutdated`, and file and line anchors that the connector comment surface does not preserve.
+   - Use the bundled `scripts/fetch_comments.ts` workflow whenever the task depends on unresolved review threads, inline review locations, or resolution state. Run it with `npx tsx scripts/fetch_comments.ts`; it fetches `reviewThreads`, `isResolved`, `isOutdated`, and file and line anchors that the connector comment surface does not preserve.
    - Use connector-only comment reads only for lightweight top-level PR comment summaries.
 3. Cluster actionable review threads.
    - Group comments by file or behavior area.

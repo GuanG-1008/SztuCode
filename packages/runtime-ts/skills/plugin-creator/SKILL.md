@@ -72,7 +72,7 @@ For updates to an existing local plugin during development, keep the scaffold fl
 reference instead of hand-editing marketplace files:
 
 ```bash
-python3 scripts/update_plugin_cachebuster.py <plugin-path>
+npx tsx scripts/update_plugin_cachebuster.ts <plugin-path>
 ```
 
 Prefer the helper default cachebuster unless the user explicitly asks for a specific override.
@@ -112,7 +112,7 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 - Do not use `--marketplace-name` to rename an existing marketplace file in place. If the file
   already exists, its top-level `name` must already match.
 - If the user specifies a different marketplace path, treat that marketplace as needing explicit installation via `codex plugin marketplace add`.
-- Prefer `scripts/read_marketplace_name.py` when you need the marketplace name from any
+- Prefer `scripts/read_marketplace_name.ts` when you need the marketplace name from any
   `marketplace.json` file. With no argument it reads the default personal marketplace; with an
   explicit path it works for repo/team marketplaces too.
 - In either location, the generated source path remains `./plugins/<plugin-name>`.
@@ -200,7 +200,7 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
   vague.
 - For updates to an existing local plugin during development, do not hand-edit marketplace config
   or `marketplace.json`. Use the update flow documented in
-  `references/installing-and-updating.md` and `scripts/update_plugin_cachebuster.py`.
+  `references/installing-and-updating.md` and `scripts/update_plugin_cachebuster.ts`.
 - Do not tell the user to run `codex plugin marketplace add` for the default personal-marketplace
   flow. That command is for explicit non-default marketplace configuration, not for the standard
   `~/.agents/plugins/marketplace.json` path.
