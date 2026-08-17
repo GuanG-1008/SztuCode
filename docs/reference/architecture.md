@@ -65,6 +65,8 @@ Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-
 
 `task_create`、`task_update`、`task_list` 和 `task_get` 由 TypeScript `TaskManager` 提供。任务以 JSON 保存在当前 run 目录中，进程重启后仍可恢复；主 Agent 和声明这些工具的子 Agent 使用相同契约。
 
+多 Agent workflow 使用与普通 Agent 相同的 `run.cancel` 和 `run.get` 控制面。取消信号会传播到所有正在执行的子任务，并将尚未调度的任务标记为 `cancelled`；daemon 关闭时也会取消活动 workflow。
+
 ### 工具
 
 内置工具通过 Tool Registry 注册。工具参数在调用边界校验，运行时根据工具类型和具体输入计算权限：

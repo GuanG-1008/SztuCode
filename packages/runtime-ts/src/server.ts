@@ -60,6 +60,7 @@ export class RuntimeServer {
   private readonly subscriptions = new Map<net.Socket, { id: string; topics: string[]; scope: string }>();
   private readonly clientMessageRuns = new Map<string, string>();
   private readonly runSessions = new Map<string, string>();
+  private readonly workflows = new Map<string, { controller: AbortController; status: "running" | "completed" | "cancelled" }>();
   private startedAt = Date.now();
 
   constructor(private readonly host = "127.0.0.1", private readonly port = 7438, provider?: ModelProvider) {
@@ -84,6 +85,7 @@ export class RuntimeServer {
   }
 
   async close(): Promise<void> {
+    for (const workflow of this.workflows.values()) if (workflow.status === "running") workflow.controller.abort();
     for (const client of this.clients) client.destroy();
     await this.mcp.close(); await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
@@ -139,15 +141,17 @@ export class RuntimeServer {
         const params = request.params as { role?: import("@sztucode/protocol").WorkflowRole; goal?: string; workspace_id?: string };
         if (!params.goal?.trim()) throw new Error("goal is required");
         const workspaceRoot = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd();
-        const manager = new SubagentManager(new ConfigurableProvider(this.settings), workspaceRoot, this.events, this.runs.permissions);
+        const manager = new SubagentManager(this.provider, workspaceRoot, this.events, this.runs.permissions);
         return ok(request.id, await manager.run(params.role ?? "coder", params.goal));
       }
       case "workflow.run": {
         const params = request.params as { graph?: import("@sztucode/protocol").WorkflowGraph; workspace_id?: string };
         if (!params.graph) throw new Error("graph is required");
         const workspaceRoot = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd();
-        const manager = new SubagentManager(new ConfigurableProvider(this.settings), workspaceRoot, this.events, this.runs.permissions);
-        return ok(request.id, await manager.runWorkflow(params.graph));
+        const manager = new SubagentManager(this.provider, workspaceRoot, this.events, this.runs.permissions);
+        const runId = randomUUID(); const controller = new AbortController(); const state = { controller, status: "running" as const }; this.workflows.set(runId, state);
+        try { const result = await manager.runWorkflow(params.graph, { runId, signal: controller.signal }); this.workflows.set(runId, { controller, status: result.status === "cancelled" ? "cancelled" : "completed" }); return ok(request.id, result); }
+        catch (error) { this.workflows.set(runId, { controller, status: controller.signal.aborted ? "cancelled" : "completed" }); throw error; }
       }
       case "session.create": {
         const params = request.params as unknown as SessionCreateParams;
@@ -265,11 +269,17 @@ export class RuntimeServer {
       }
       case "run.cancel": {
         const params = request.params as unknown as RunCancelParams;
-        return ok(request.id, { run_id: params.run_id, status: this.runs.cancel(params.run_id) });
+        const status = this.runs.cancel(params.run_id);
+        if (status === "cancelling") return ok(request.id, { run_id: params.run_id, status });
+        const workflow = this.workflows.get(params.run_id);
+        if (!workflow || workflow.status !== "running") return ok(request.id, { run_id: params.run_id, status: "not_running" });
+        workflow.status = "cancelled"; workflow.controller.abort();
+        return ok(request.id, { run_id: params.run_id, status: "cancelling" });
       }
       case "run.get": {
         const params = request.params as unknown as RunGetParams;
-        return ok(request.id, this.runs.get(params.run_id));
+        const workflow = this.workflows.get(params.run_id);
+        return ok(request.id, workflow ? { run_id: params.run_id, status: workflow.status } : this.runs.get(params.run_id));
       }
       case "run.replay": {
         const params = request.params as unknown as RunReplayParams;

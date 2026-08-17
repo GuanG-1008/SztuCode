@@ -34,8 +34,8 @@ export class SubagentManager {
     try { const result = await loop.run(runId, goal, profile.maxSteps || 20, [{ role: "system", content: `${basePrompt}\n\n# Role instructions\n${rolePrompt}` }, ...history], options.signal); this.events.publish({ type: "subagent.finished", run_id: runId, parent_run_id: parentRunId, status: "success", ts: new Date().toISOString() }); return { runId, text: result.text, tokens: result.usage.input_tokens + result.usage.output_tokens }; }
     catch (error) { this.events.publish({ type: "subagent.finished", run_id: runId, parent_run_id: parentRunId, status: "failed", ts: new Date().toISOString() }); throw error; }
   }
-  async runWorkflow(graph: WorkflowGraph): Promise<import("@sztucode/protocol").WorkflowResult> {
-    const workflowRunId = randomUUID(); const started = new Date().toISOString();
+  async runWorkflow(graph: WorkflowGraph, options: { runId?: string; signal?: AbortSignal } = {}): Promise<import("@sztucode/protocol").WorkflowResult> {
+    const workflowRunId = options.runId ?? randomUUID(); const started = new Date().toISOString();
     this.events.publish({ type: "workflow.started", run_id: workflowRunId, workflow_id: graph.workflow_id, goal: graph.goal, planner_summary: graph.planner_summary, tasks: graph.tasks.map((task) => snapshot(task, "pending", 0, "")), ts: started });
     const orchestrator = new WorkflowOrchestrator(
       (task, execution) => this.executeTask(graph.workflow_id, task, execution.completed, workflowRunId, execution.attempt, execution.signal),
@@ -48,7 +48,7 @@ export class SubagentManager {
         },
       },
     );
-    const result = await orchestrator.run(graph); this.events.publish({ type: "workflow.finished", run_id: workflowRunId, workflow_id: graph.workflow_id, status: result.status, reason: result.reason, total_tokens: result.total_tokens, elapsed_s: result.elapsed_s, ts: new Date().toISOString() }); return result;
+    const result = await orchestrator.run(graph, options.signal); this.events.publish({ type: "workflow.finished", run_id: workflowRunId, workflow_id: graph.workflow_id, status: result.status, reason: result.reason, total_tokens: result.total_tokens, elapsed_s: result.elapsed_s, ts: new Date().toISOString() }); return result;
   }
   private async executeTask(workflowId: string, task: WorkflowTask, completed: ReadonlyMap<string, HandoffArtifact>, parentRunId: string, attempt: number, signal: AbortSignal): Promise<HandoffArtifact> {
     const dependencyArtifacts = task.dependencies.map((id) => completed.get(id)).filter((artifact): artifact is HandoffArtifact => Boolean(artifact)); const started = Date.now(); const changedPaths = new Set<string>(); const scopeEscalations = new Set<string>();

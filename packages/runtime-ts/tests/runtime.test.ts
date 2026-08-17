@@ -205,6 +205,19 @@ test("workflow respects the concurrency limit", async () => {
   assert.equal(result.status, "succeeded");
 });
 
+test("workflow cancellation aborts running tasks and cancels pending work", async () => {
+  const controller = new AbortController(); let observedAbort = false;
+  const tasks = [task("running"), task("pending", ["running"])];
+  const resultPromise = new WorkflowOrchestrator((_current, execution) => new Promise((_resolve, reject) => {
+    execution.signal.addEventListener("abort", () => { observedAbort = true; reject(execution.signal.reason); }, { once: true });
+  })).run({ workflow_id: "cancel", goal: "g", planner_summary: "p", tasks }, controller.signal);
+  setTimeout(() => controller.abort(), 10);
+  const result = await resultPromise;
+  assert.equal(observedAbort, true);
+  assert.equal(result.status, "cancelled");
+  assert.deepEqual(result.tasks.map((item) => item.status), ["cancelled", "cancelled"]);
+});
+
 test("workflow rejects mismatched and incomplete handoff evidence", async () => {
   const coder = { ...task("coder"), max_retries: 1 };
   let coderCalls = 0;

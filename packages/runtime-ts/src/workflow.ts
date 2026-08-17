@@ -19,6 +19,10 @@ class WorkflowTimeoutError extends Error {
   constructor(taskId: string) { super(`task timed out: ${taskId}`); this.name = "WorkflowTimeoutError"; }
 }
 
+class WorkflowCancelledError extends Error {
+  constructor() { super("workflow cancelled"); this.name = "WorkflowCancelledError"; }
+}
+
 export class WorkflowOrchestrator {
   private readonly maxConcurrency: number;
 
@@ -26,7 +30,7 @@ export class WorkflowOrchestrator {
     this.maxConcurrency = Math.max(1, Math.floor(maxConcurrency));
   }
 
-  async run(graph: WorkflowGraph): Promise<WorkflowResult> {
+  async run(graph: WorkflowGraph, signal?: AbortSignal): Promise<WorkflowResult> {
     const errors = validateWorkflowGraph(graph);
     if (errors.length) throw new Error(errors.join("; "));
 
@@ -36,6 +40,7 @@ export class WorkflowOrchestrator {
     for (const task of graph.tasks) results.set(task.id, { task, status: "pending", attempts: 0, artifact: null, error: "", tokens: 0 });
 
     while ([...results.values()].some((result) => result.status === "pending" || result.status === "running")) {
+      if (signal?.aborted) { this.cancelUnfinished(results); break; }
       const ready = readyTaskIds([...results.values()].map((result) => ({ id: result.task.id, dependencies: result.task.dependencies, status: result.status }))).slice(0, this.maxConcurrency);
       if (!ready.length) {
         for (const result of results.values()) {
@@ -46,7 +51,7 @@ export class WorkflowOrchestrator {
         }
         break;
       }
-      await Promise.all(ready.map((id) => this.runTask(graph.workflow_id, results.get(id)!, completed)));
+      await Promise.all(ready.map((id) => this.runTask(graph.workflow_id, results.get(id)!, completed, signal)));
     }
 
     const values = [...results.values()];
@@ -54,26 +59,29 @@ export class WorkflowOrchestrator {
     return {
       workflow_id: graph.workflow_id,
       status,
-      reason: status === "succeeded" ? "" : "one or more tasks did not succeed",
+      reason: status === "succeeded" ? "" : status === "cancelled" ? "workflow cancelled" : "one or more tasks did not succeed",
       tasks: values,
       total_tokens: values.reduce((sum, result) => sum + result.tokens, 0),
       elapsed_s: (Date.now() - startedAt) / 1000,
     };
   }
 
-  private async runTask(workflowId: string, result: WorkflowTaskResult, completed: Map<string, HandoffArtifact>): Promise<void> {
+  private async runTask(workflowId: string, result: WorkflowTaskResult, completed: Map<string, HandoffArtifact>, parentSignal?: AbortSignal): Promise<void> {
     const task = result.task;
     const maximumAttempts = 1 + (task.max_retries ?? 0);
 
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      if (parentSignal?.aborted) { result.status = "cancelled"; result.error = "workflow cancelled"; this.notify(result); return; }
       result.status = "running";
       result.attempts = attempt;
       result.error = "";
       this.notify(result);
 
       const controller = new AbortController();
+      const cancel = () => controller.abort(new WorkflowCancelledError());
+      parentSignal?.addEventListener("abort", cancel, { once: true });
       try {
-        const artifact = await this.executeWithTimeout(task, { attempt, completed, signal: controller.signal }, controller);
+        const artifact = await this.executeWithTimeout(task, { attempt, completed, signal: controller.signal }, controller, parentSignal);
         const normalized = { ...artifact, attempt };
         result.artifact = normalized;
         result.tokens += Math.max(0, normalized.tokens);
@@ -98,13 +106,16 @@ export class WorkflowOrchestrator {
         if (result.status === "rejected") { this.notify(result); return; }
       } catch (error) {
         const timedOut = error instanceof WorkflowTimeoutError;
-        result.status = timedOut ? "timed_out" : "failed";
+        const cancelled = error instanceof WorkflowCancelledError || parentSignal?.aborted;
+        result.status = cancelled ? "cancelled" : timedOut ? "timed_out" : "failed";
         result.error = error instanceof Error ? error.message : String(error);
       } finally {
+        parentSignal?.removeEventListener("abort", cancel);
         controller.abort();
       }
 
       this.notify(result);
+      if (result.status === "cancelled") return;
       if (task.token_budget > 0 && result.tokens >= task.token_budget) {
         result.status = "rejected";
         result.error = `token budget exhausted: used ${result.tokens}, budget ${task.token_budget}`;
@@ -115,26 +126,35 @@ export class WorkflowOrchestrator {
     }
   }
 
-  private async executeWithTimeout(task: WorkflowTask, execution: WorkflowTaskExecution, controller: AbortController): Promise<HandoffArtifact> {
-    if (task.time_budget_s <= 0) return this.executeTask(task, execution);
-
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        const error = new WorkflowTimeoutError(task.id);
-        controller.abort(error);
-        reject(error);
-      }, task.time_budget_s * 1000);
+  private async executeWithTimeout(task: WorkflowTask, execution: WorkflowTaskExecution, controller: AbortController, parentSignal?: AbortSignal): Promise<HandoffArtifact> {
+    let cancel: (() => void) | undefined;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      if (parentSignal?.aborted) reject(new WorkflowCancelledError());
+      else if (parentSignal) { cancel = () => reject(new WorkflowCancelledError()); parentSignal.addEventListener("abort", cancel, { once: true }); }
     });
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = task.time_budget_s > 0 ? new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { const error = new WorkflowTimeoutError(task.id); controller.abort(error); reject(error); }, task.time_budget_s * 1000);
+    }) : new Promise<never>(() => {});
     try {
-      return await Promise.race([this.executeTask(task, execution), timeout]);
+      return await Promise.race([this.executeTask(task, execution), timeout, cancellation]);
     } finally {
       if (timer) clearTimeout(timer);
+      if (cancel) parentSignal?.removeEventListener("abort", cancel);
     }
   }
 
   private notify(result: WorkflowTaskResult): void {
     this.hooks.onTaskUpdated?.({ ...result });
+  }
+
+  private cancelUnfinished(results: Map<string, WorkflowTaskResult>): void {
+    for (const result of results.values()) {
+      if (result.status !== "pending" && result.status !== "running") continue;
+      result.status = "cancelled";
+      result.error = "workflow cancelled";
+      this.notify(result);
+    }
   }
 }
 

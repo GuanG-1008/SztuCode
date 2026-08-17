@@ -29,6 +29,25 @@ test("runtime server exposes JSON-RPC and classified errors over NDJSON", async 
   } finally { socket.destroy(); await server.close(); process.env.SZTU_DATA_DIR = previous; await rm(root, { recursive: true, force: true }); }
 });
 
+test("workflow runs can be cancelled and queried through the shared run controls", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-workflow-cancel-server-")); const previous = process.env.SZTU_DATA_DIR; process.env.SZTU_DATA_DIR = root;
+  const provider = { complete: async (_messages: unknown, _tools: unknown, signal?: AbortSignal) => new Promise<never>((_resolve, reject) => { signal?.addEventListener("abort", () => reject(signal.reason), { once: true }); }) };
+  const server = new RuntimeServer("127.0.0.1", 0, provider as never); await server.listen();
+  try {
+    let workflowRunId = "";
+    const started = new Promise<void>((resolve) => { server.events.subscribe((event) => { if (event.type === "workflow.started") { workflowRunId = event.run_id; resolve(); } }); });
+    const graph = { workflow_id: "cancel-rpc", goal: "cancel me", planner_summary: "one task", tasks: [{ id: "plan", title: "plan", description: "wait", owner: "planner", dependencies: [], completion_criteria: ["done"], allowed_paths: [], depth: 0, token_budget: 0, time_budget_s: 0, max_retries: 0 }] };
+    const dispatch = (server as any).dispatch.bind(server) as (request: Record<string, unknown>, socket: net.Socket) => Promise<any>;
+    const workflow = dispatch({ jsonrpc: "2.0", id: "workflow", method: "workflow.run", params: { graph } }, {} as net.Socket);
+    await started;
+    const cancel = await dispatch({ jsonrpc: "2.0", id: "cancel", method: "run.cancel", params: { run_id: workflowRunId } }, {} as net.Socket);
+    assert.equal(cancel.result.status, "cancelling");
+    assert.equal((await workflow).result.status, "cancelled");
+    const current = await dispatch({ jsonrpc: "2.0", id: "get", method: "run.get", params: { run_id: workflowRunId } }, {} as net.Socket);
+    assert.equal(current.result.status, "cancelled");
+  } finally { await server.close(); process.env.SZTU_DATA_DIR = previous; await rm(root, { recursive: true, force: true }); }
+});
+
 test("manual session.compact uses provider summary and persists continuation messages", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sztu-runtime-compact-test-")); const previous = process.env.SZTU_DATA_DIR; process.env.SZTU_DATA_DIR = root;
   let compactionPrompt = "";
