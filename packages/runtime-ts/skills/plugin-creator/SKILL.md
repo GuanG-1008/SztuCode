@@ -14,7 +14,7 @@ description: Create and scaffold plugin directories for Codex with a required `.
 # The generated folder and plugin.json name are always the same.
 # Run from the skill root (the directory containing this `SKILL.md`).
 # By default creates in `~/plugins/<plugin-name>`.
-python3 scripts/create_basic_plugin.py <plugin-name>
+npx tsx scripts/create_basic_plugin.ts <plugin-name>
 ```
 
 2. Edit `<plugin-path>/.codex-plugin/plugin.json` when the request gives specific metadata.
@@ -24,14 +24,14 @@ python3 scripts/create_basic_plugin.py <plugin-name>
 
 ```bash
 # Personal marketplace entries default to `~/.agents/plugins/marketplace.json`.
-python3 scripts/create_basic_plugin.py my-plugin --with-marketplace
+npx tsx scripts/create_basic_plugin.ts my-plugin --with-marketplace
 ```
 
 Only specify `--marketplace-name <name>` when the default `personal` marketplace name is already
 taken or installed and you need to seed a different new marketplace file:
 
 ```bash
-python3 scripts/create_basic_plugin.py my-plugin \
+npx tsx scripts/create_basic_plugin.ts my-plugin \
   --with-marketplace \
   --marketplace-name team-local
 ```
@@ -39,7 +39,7 @@ python3 scripts/create_basic_plugin.py my-plugin \
 Only use a repo/team marketplace when the user specifically asks for that destination:
 
 ```bash
-python3 scripts/create_basic_plugin.py my-plugin \
+npx tsx scripts/create_basic_plugin.ts my-plugin \
   --path <repo-root>/plugins \
   --marketplace-path <repo-root>/.agents/plugins/marketplace.json \
   --with-marketplace
@@ -53,7 +53,7 @@ On Windows, use the equivalent path under the user profile.
 4. Generate/adjust optional companion folders as needed:
 
 ```bash
-python3 scripts/create_basic_plugin.py my-plugin \
+npx tsx scripts/create_basic_plugin.ts my-plugin \
   --path <parent-plugin-directory> \
   --marketplace-path <marketplace-json-path> \
   --with-skills --with-hooks --with-scripts --with-assets --with-mcp --with-apps --with-marketplace
@@ -65,7 +65,7 @@ created (for example `~/plugins`).
 5. Before handing back a generated plugin, run:
 
 ```bash
-python3 scripts/validate_plugin.py <plugin-path>
+npx tsx scripts/validate_plugin.ts <plugin-path>
 ```
 
 For updates to an existing local plugin during development, keep the scaffold flow as-is and use the
@@ -239,5 +239,5 @@ python3 ../skill-creator/scripts/quick_validate.py .
 Before handing back a generated plugin, run:
 
 ```bash
-python3 scripts/validate_plugin.py <plugin-path>
+npx tsx scripts/validate_plugin.ts <plugin-path>
 ```

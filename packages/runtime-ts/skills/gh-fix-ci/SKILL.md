@@ -24,7 +24,7 @@ Prereq: authenticate with GitHub CLI once, then confirm with `gh auth status`. R
 
 ## Quick start
 
-- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "<number-or-url>"`
+- `npx tsx "<path-to-skill>/scripts/inspect_pr_checks.ts" --repo "." --pr "<number-or-url>"`
 - Add `--json` if you want machine-friendly output for summarization.
 
 ## Workflow
@@ -38,7 +38,7 @@ Prereq: authenticate with GitHub CLI once, then confirm with `gh auth status`. R
    - When repo and PR are known, fetch PR metadata and patch context through the GitHub app from this plugin.
 3. Inspect failing checks (GitHub Actions only).
    - Preferred: run the bundled script (handles gh field drift and job-log fallbacks):
-     - `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "<number-or-url>"`
+     - `npx tsx "<path-to-skill>/scripts/inspect_pr_checks.ts" --repo "." --pr "<number-or-url>"`
      - Add `--json` for machine-friendly output.
    - Manual fallback:
      - `gh pr checks <pr> --json name,state,bucket,link,startedAt,completedAt,workflow`
@@ -65,14 +65,14 @@ Prereq: authenticate with GitHub CLI once, then confirm with `gh auth status`. R
 
 ## Bundled Resources
 
-### scripts/inspect_pr_checks.py
+### scripts/inspect_pr_checks.ts
 
 Fetch failing PR checks, pull GitHub Actions logs, and extract a failure snippet. Exits non-zero when failures remain so it can be used in automation.
 
 Usage examples:
-- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "123"`
-- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --pr "https://github.com/org/repo/pull/123" --json`
-- `python "<path-to-skill>/scripts/inspect_pr_checks.py" --repo "." --max-lines 200 --context 40`
+- `npx tsx "<path-to-skill>/scripts/inspect_pr_checks.ts" --repo "." --pr "123"`
+- `npx tsx "<path-to-skill>/scripts/inspect_pr_checks.ts" --repo "." --pr "https://github.com/org/repo/pull/123" --json`
+- `npx tsx "<path-to-skill>/scripts/inspect_pr_checks.ts" --repo "." --max-lines 200 --context 40`
 
 ## Guardrails
 

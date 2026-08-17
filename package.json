@@ -3,7 +3,12 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/protocol", "packages/runtime-ts", "packages/cli", "packages/evaluation"],
+  "workspaces": [
+    "packages/protocol",
+    "packages/runtime-ts",
+    "packages/cli",
+    "packages/evaluation"
+  ],
   "scripts": {
     "build": "npm run build --workspace @sztucode/protocol && npm run build --workspace @sztucode/runtime-ts && npm run build --workspace @sztucode/cli",
     "typecheck": "npm run typecheck --workspace @sztucode/protocol && tsc -p packages/runtime-ts/tsconfig.json --noEmit && npm run typecheck --workspace @sztucode/cli && npm run typecheck --workspace @sztucode/evaluation && tsc -p scripts/tsconfig.json && tsc -p desktop/tsconfig.json --noEmit",
@@ -15,5 +20,10 @@
     "docs:links": "tsx scripts/check_markdown_links.ts",
     "trace:permission": "tsx scripts/trace_permission_flow.ts"
   },
-  "devDependencies": { "@types/node": "^22.10.2", "tsx": "^4.23.10", "typescript": "~5.6.3" }
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.23.10",
+    "typescript": "~5.6.3",
+    "yaml": "^2.9.0"
+  }
 }

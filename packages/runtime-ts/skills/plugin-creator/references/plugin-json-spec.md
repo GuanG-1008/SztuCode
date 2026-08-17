@@ -214,5 +214,5 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
   `plugin.json`.
 - Validation rejects unsupported manifest fields such as `hooks`, so the scaffold keeps them out of
   generated manifests.
-- Run `scripts/validate_plugin.py <plugin-path>` before handing back a generated plugin. It adds one
+- Run `npx tsx scripts/validate_plugin.ts <plugin-path>` before handing back a generated plugin. It adds one
   intentional preflight check that rejects leftover `[TODO: ...]` placeholders.
