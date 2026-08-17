@@ -250,8 +250,20 @@ test("agent profiles load role prompts and enforce tool allowlists", async () =>
     assert.equal(profile.systemPrompt, "Only validate.");
     assert.equal(profile.maxSteps, 7);
     assert.equal(profile.permissionMode, null);
-    const tools = createWorkspaceTools().restrictTo(profile.allowedTools);
+    const tools = createWorkspaceTools().restrictTo(profile.allowedTools ?? []);
     assert.deepEqual(tools.list().map((tool) => tool.name).sort(), ["bash", "read_file"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("agent profiles parse inline tool arrays and preserve the empty-means-default contract", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-inline-tools-"));
+  try {
+    await mkdir(path.join(root, ".sztu", "agents"), { recursive: true });
+    await writeFile(path.join(root, ".sztu", "agents", "inline.toml"), '[agent]\nallowed_tools = ["read_file", "task_get"]\n', "utf8");
+    assert.deepEqual((await loadAgentProfile(root, "inline")).allowedTools, ["read_file", "task_get"]);
+    assert.ok(createWorkspaceTools().restrictTo([]).list().some((tool) => tool.name === "write_file"));
+    await writeFile(path.join(root, ".sztu", "agents", "unspecified.toml"), "[agent]\nmax_steps = 3\n", "utf8");
+    assert.equal((await loadAgentProfile(root, "unspecified")).allowedTools, null);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -279,6 +291,19 @@ test("subagents apply profile permission modes without mutating the global mode"
     await new SubagentManager(provider(), root, events, permissions).run("coder", "write result.txt");
     assert.equal(await readFile(path.join(root, "result.txt"), "utf8"), "written");
     assert.equal(permissions.getMode(), "plan");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("planner subagents receive the task tools declared by their profile", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-subagent-plan-tools-"));
+  try {
+    await mkdir(path.join(root, ".sztu", "agents"), { recursive: true });
+    await writeFile(path.join(root, ".sztu", "agents", "planner.toml"), '[agent]\nallowed_tools = ["task_create", "task_get", "task_list", "task_update"]\nmax_steps = 2\n', "utf8");
+    let names: string[] = [];
+    const provider: ModelProvider = { complete: async (_messages, tools) => { names = tools.list().map((tool) => tool.name).sort(); return { text: "done", tool_calls: [], stop_reason: "end_turn" }; } };
+    const events = new EventBus(path.join(root, "events.jsonl"));
+    await new SubagentManager(provider, root, events, new PermissionManager(events, 20)).run("planner", "plan");
+    assert.deepEqual(names, ["read_ref", "task_create", "task_get", "task_list", "task_update"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

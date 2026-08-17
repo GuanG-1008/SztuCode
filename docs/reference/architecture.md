@@ -63,6 +63,8 @@ Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-
 
 默认卸载阈值为 2,000 字符或 50 行，`bash`、`grep_search` 和 `glob_search` 始终卸载。可通过 `SZTU_OFFLOAD_ENABLED`、`SZTU_OFFLOAD_MIN_CHARS` 和 `SZTU_OFFLOAD_MIN_LINES` 调整。
 
+`task_create`、`task_update`、`task_list` 和 `task_get` 由 TypeScript `TaskManager` 提供。任务以 JSON 保存在当前 run 目录中，进程重启后仍可恢复；主 Agent 和声明这些工具的子 Agent 使用相同契约。
+
 ### 工具
 
 内置工具通过 Tool Registry 注册。工具参数在调用边界校验，运行时根据工具类型和具体输入计算权限：

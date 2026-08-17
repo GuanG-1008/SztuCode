@@ -11,7 +11,7 @@ const promptRoot = path.resolve(moduleDirectory, "../prompts/content");
 const agentRoot = path.resolve(moduleDirectory, "../agents/builtin");
 const instructionNames = ["AGENT.md", "AGENTS.md", "CLAUDE.md", "SZTUCODE.md", "CLAW.md"];
 
-export type AgentProfile = { name: string; description: string; systemPrompt: string; allowedTools: string[]; permissionMode: PermissionMode | null; maxSteps: number };
+export type AgentProfile = { name: string; description: string; systemPrompt: string; allowedTools: string[] | null; permissionMode: PermissionMode | null; maxSteps: number };
 
 async function markdownGroup(group: string): Promise<string[]> {
   const root = path.join(promptRoot, group);
@@ -81,7 +81,8 @@ function parseTomlProfile(text: string, name: string): AgentProfile {
   const parsedMode = text.match(/^permission_mode\s*=\s*["']([^"']*)["']/m)?.[1];
   const permissionMode: PermissionMode | null = parsedMode && ["normal", "plan", "accept_edits", "auto"].includes(parsedMode) ? parsedMode as PermissionMode : null;
   const maxSteps = Number(text.match(/^max_steps\s*=\s*(\d+)/m)?.[1] ?? 20);
-  const allowedTools = [...text.matchAll(/^[ \t]*"([^"]+)"[ \t]*,?$/gm)].map((match) => match[1]);
+  const allowedMatch = text.match(/^allowed_tools\s*=\s*\[([\s\S]*?)\]/m);
+  const allowedTools = allowedMatch ? [...allowedMatch[1].matchAll(/["']([^"']+)["']/g)].map((match) => match[1]) : null;
   const inlinePrompt = text.match(/system_prompt\s*=\s*"""([\s\S]*?)"""/)?.[1]?.trim() ?? "";
   return { name, description, systemPrompt: promptId || inlinePrompt, allowedTools, permissionMode, maxSteps };
 }
@@ -98,5 +99,5 @@ export async function loadAgentProfile(workspaceRoot: string, name: string): Pro
       return profile;
     } catch { /* try lower-priority profile */ }
   }
-  return { name, description: `${name} agent`, systemPrompt: "", allowedTools: [], permissionMode: null, maxSteps: 20 };
+  return { name, description: `${name} agent`, systemPrompt: "", allowedTools: null, permissionMode: null, maxSteps: 20 };
 }
