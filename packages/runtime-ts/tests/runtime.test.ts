@@ -107,6 +107,20 @@ test("agent loop injects a traceable intervention after the same tool failure re
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("agent loop canonicalizes tool aliases before permissions and telemetry", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-tool-alias-"));
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl")); const names: string[] = []; events.subscribe((event) => { if (event.type.startsWith("tool.call_")) names.push(event.tool_name); });
+    const permissions: string[] = []; let calls = 0;
+    const provider: ModelProvider = { complete: async () => { calls += 1; return calls === 1 ? { text: "", tool_calls: [{ id: "alias-write", name: "write", input: { path: "alias.txt", content: "written" } }], stop_reason: "tool_use" } : { text: "done", tool_calls: [], stop_reason: "end_turn" }; } };
+    const loop = new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async (_runId, _callId, toolName) => { permissions.push(toolName); return true; } });
+    assert.equal((await loop.run("alias", "write", 3)).text, "done");
+    assert.equal(await readFile(path.join(root, "alias.txt"), "utf8"), "written");
+    assert.deepEqual(permissions, ["write_file"]);
+    assert.deepEqual(names, ["write_file", "write_file"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("stuck tracking preserves nested tool arguments and supports a hard-stop threshold", () => {
   assert.equal(stuckSignature({ id: "a", name: "custom", input: { nested: { z: 1, a: 2 }, b: true } }), stuckSignature({ id: "b", name: "custom", input: { b: true, nested: { a: 2, z: 1 } } }));
   const tracker = new StuckLoopTracker(2, 1);

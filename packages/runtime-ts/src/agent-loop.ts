@@ -81,7 +81,9 @@ export class AgentLoop {
       for (const call of response.tool_calls) {
         signal?.throwIfAborted();
         const tool = this.tools.get(call.name);
-        this.publish({ type: "tool.call_started", run_id: runId, tool_use_id: call.id, tool_name: call.name, params: call.input, ts: now() });
+        const toolName = tool?.name ?? call.name;
+        const canonicalCall = tool ? { ...call, name: toolName } : call;
+        this.publish({ type: "tool.call_started", run_id: runId, tool_use_id: call.id, tool_name: toolName, params: call.input, ts: now() });
         if (!tool) {
           stuck.recordFailure(stuckSignature(call));
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "unknown_tool", error_message: `Unknown tool: ${call.name}`, elapsed_ms: 0, ts: now() });
@@ -90,15 +92,15 @@ export class AgentLoop {
         }
         const validation = validateSchema(call.input, tool.schema);
         if (!validation.valid) {
-          stuck.recordFailure(stuckSignature(call));
-          this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "schema_error", error_message: validation.error, elapsed_ms: 0, ts: now() });
+          stuck.recordFailure(stuckSignature(canonicalCall));
+          this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: "schema_error", error_message: validation.error, elapsed_ms: 0, ts: now() });
           messages.push({ role: "tool", tool_call_id: call.id, content: validation.error });
           continue;
         }
-        const allowed = await this.permissions.check(runId, call.id, call.name, call.input, tool.permission, signal);
+        const allowed = await this.permissions.check(runId, call.id, toolName, call.input, tool.permission, signal);
         if (!allowed) {
-          denials.recordDenial(call.name);
-          this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "permission_denied", error_message: "Permission denied or approval timed out", elapsed_ms: 0, ts: now() });
+          denials.recordDenial(toolName);
+          this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: "permission_denied", error_message: "Permission denied or approval timed out", elapsed_ms: 0, ts: now() });
           messages.push({ role: "tool", tool_call_id: call.id, content: "Permission denied" });
           continue;
         }
@@ -107,16 +109,16 @@ export class AgentLoop {
         const elapsedMs = Date.now() - started;
         const rawOutput = result.ok ? result.output : [result.output, result.error].filter(Boolean).join("\n") || "Tool failed";
         let contextOutput = rawOutput;
-        if (offload.shouldOffload(call.name, rawOutput)) {
-          try { contextOutput = offload.placeholder(await offload.offload(call.name, call.id, rawOutput, runId, !result.ok)); } catch { /* Context truncation remains the fallback. */ }
+        if (offload.shouldOffload(toolName, rawOutput)) {
+          try { contextOutput = offload.placeholder(await offload.offload(toolName, call.id, rawOutput, runId, !result.ok)); } catch { /* Context truncation remains the fallback. */ }
         }
         if (result.ok) {
-          denials.recordSuccess(call.name);
-          stuck.recordSuccess(stuckSignature(call));
-          this.publish({ type: "tool.call_finished", run_id: runId, tool_use_id: call.id, tool_name: call.name, elapsed_ms: elapsedMs, output: contextOutput, ts: now() });
+          denials.recordSuccess(toolName);
+          stuck.recordSuccess(stuckSignature(canonicalCall));
+          this.publish({ type: "tool.call_finished", run_id: runId, tool_use_id: call.id, tool_name: toolName, elapsed_ms: elapsedMs, output: contextOutput, ts: now() });
           if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "passed", summary: testSummary(String(call.input.command ?? ""), result.output), ts: now() });
         }
-        else { stuck.recordFailure(stuckSignature(call)); this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: result.errorType ?? "runtime_error", error_message: result.error ?? "Tool failed", elapsed_ms: elapsedMs, ts: now() }); if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "failed", summary: testSummary(String(call.input.command ?? ""), result.error ?? "Tool failed"), ts: now() }); }
+        else { stuck.recordFailure(stuckSignature(canonicalCall)); this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: result.errorType ?? "runtime_error", error_message: result.error ?? "Tool failed", elapsed_ms: elapsedMs, ts: now() }); if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "failed", summary: testSummary(String(call.input.command ?? ""), result.error ?? "Tool failed"), ts: now() }); }
         messages.push({ role: "tool", tool_call_id: call.id, content: contextOutput });
       }
       this.publish({ type: "step.finished", run_id: runId, step, ts: now() });

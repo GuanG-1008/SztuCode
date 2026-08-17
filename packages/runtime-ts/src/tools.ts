@@ -9,7 +9,7 @@ import { TaskManager, type TaskStatus } from "./task-manager.js";
 export type { ToolPermission } from "./tools-types.js";
 export type ToolResult = { ok: boolean; output: string; error?: string; errorType?: "runtime_error" | "timeout" | "schema_error" | "permission_denied" };
 export type ToolContext = { workspace: Workspace; signal?: AbortSignal; onFileChanged?: (relativePath: string) => void };
-export interface Tool { readonly name: string; readonly description: string; readonly permission: ToolPermission; readonly schema: Record<string, unknown>; invoke(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult>; }
+export interface Tool { readonly name: string; readonly aliases?: readonly string[]; readonly description: string; readonly permission: ToolPermission; readonly schema: Record<string, unknown>; invoke(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult>; }
 
 const ok = (output: string): ToolResult => ({ ok: true, output });
 const fail = (error: string, errorType: ToolResult["errorType"] = "runtime_error"): ToolResult => ({ ok: false, output: "", error, errorType });
@@ -17,14 +17,25 @@ const str = (params: Record<string, unknown>, key: string): string | null => typ
 const ignored = new Set([".git", "node_modules", "__pycache__", ".venv", ".codegraph", "dist", "build"]);
 const escapeRegex = (value: string) => value.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 const globMatch = (value: string, pattern: string): boolean => new RegExp(`^${pattern.split("**").map((part) => part.split("*").map(escapeRegex).join("[^/]*")).join(".*")}$`).test(value);
+const builtinAliases: Readonly<Record<string, string>> = {
+  read: "read_file", Read: "read_file",
+  write: "write_file", Write: "write_file",
+  edit: "edit_file", Edit: "edit_file",
+  glob: "glob_search", Glob: "glob_search",
+  grep: "grep_search", Grep: "grep_search",
+  ls: "list_dir", List: "list_dir",
+};
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
-  register(tool: Tool): void { if (this.tools.has(tool.name)) throw new Error(`Tool already registered: ${tool.name}`); this.tools.set(tool.name, tool); }
-  replace(tool: Tool): void { this.tools.set(tool.name, tool); }
-  get(name: string): Tool | undefined { return this.tools.get(name); }
+  private readonly aliases = new Map<string, string>();
+  register(tool: Tool): void { if (this.tools.has(tool.name)) throw new Error(`Tool already registered: ${tool.name}`); this.tools.set(tool.name, tool); this.registerAliases(tool); }
+  replace(tool: Tool): void { this.tools.set(tool.name, tool); for (const [alias, target] of this.aliases) if (target === tool.name) this.aliases.delete(alias); this.registerAliases(tool); }
+  get(name: string): Tool | undefined { const canonical = this.tools.has(name) ? name : this.aliases.get(name) ?? builtinAliases[name]; return canonical ? this.tools.get(canonical) : undefined; }
+  canonicalName(name: string): string | undefined { return this.get(name)?.name; }
   list(): Tool[] { return [...this.tools.values()]; }
-  restrictTo(names: string[]): this { if (!names.length) return this; const allowed = new Set(names); for (const name of this.tools.keys()) if (!allowed.has(name)) this.tools.delete(name); return this; }
+  restrictTo(names: string[]): this { if (!names.length) return this; const allowed = new Set(names.map((name) => this.canonicalName(name) ?? name)); for (const name of this.tools.keys()) if (!allowed.has(name)) this.tools.delete(name); return this; }
+  private registerAliases(tool: Tool): void { for (const alias of tool.aliases ?? []) this.aliases.set(alias, tool.name); }
 }
 
 export function registerQuestionTool(registry: ToolRegistry, ask: (questions: Array<Record<string, unknown>>) => Promise<unknown[]>): void {
