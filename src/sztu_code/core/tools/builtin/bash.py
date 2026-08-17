@@ -14,7 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sztu_code.core.tools.base import BaseTool, ToolPermission, ToolResult
 
 _MAX_OUTPUT_BYTES = 64 * 1024  # 64 KB
-_DEFAULT_TIMEOUT = 60
+_DEFAULT_TIMEOUT = 30
+_DEFAULT_GIT_TIMEOUT = 20
 
 
 class BashParams(BaseModel):
@@ -86,6 +87,13 @@ def _has_dangerous_paths(command: str) -> bool:
     return any(pat.search(command) for pat in _DANGEROUS_RE)
 
 
+# 根据命令类型和显式参数选择唯一一层子进程超时
+def _effective_timeout(params: BashParams, command: str) -> int:
+    if "timeout" not in params.model_fields_set and _extract_cmd_name(command) == "git":
+        return _DEFAULT_GIT_TIMEOUT
+    return params.timeout
+
+
 # 返回 Windows 上可用的 git-bash 路径；未找到返回 None（缓存，可用 SZTU_BASH_PATH 覆盖）
 @functools.lru_cache(maxsize=1)
 def _git_bash_path() -> str | None:
@@ -146,6 +154,7 @@ class BashTool(BaseTool):
     params_model = BashParams
     name = "bash"
     required_permission = ToolPermission.DANGER_FULL_ACCESS
+    manages_timeout = True
     aliases: ClassVar[list[str]] = []
     description = (
         "Execute a shell command and return its output (stdout + stderr combined). "
@@ -175,7 +184,7 @@ class BashTool(BaseTool):
     async def invoke(self, params: dict[str, object]) -> ToolResult:
         p = BashParams.model_validate(params)
         command = _preprocess_command(p.command)
-        timeout = p.timeout
+        timeout = _effective_timeout(p, command)
 
         # 安装/更新依赖命令直接拦截，不执行：环境已就绪，安装必然失败并浪费步骤
         if _BLOCKED_INSTALL_RE.search(command):

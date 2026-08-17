@@ -282,17 +282,6 @@ class AgentRunner:
             else self._config.permission.mode
         )
         memory_enabled = session is not None and store is not None
-        runtime_prompt_context = PromptRuntimeContext(
-            permission_mode=permission_mode,
-            memory_enabled=memory_enabled,
-        )
-        if system_prompt_override:
-            system_prompt_override = DEFAULT_PROMPT_HARNESS.compose(
-                system_prompt_override, runtime_prompt_context
-            )
-        else:
-            base_prompt = DEFAULT_PROMPT_HARNESS.compose(base_prompt, runtime_prompt_context)
-
         context = ExecutionContext(
             run_id=run_id,
             goal=goal,
@@ -316,24 +305,6 @@ class AgentRunner:
         async with EventWriter(run_path / "events.jsonl") as writer:
             writer.subscribe(bus)
             await bus.publish(RunStartedEvent(run_id=run_id, goal=goal, ts=_now()))
-            # 与 LLM 调用共用同一组装逻辑，确保展开内容就是本次 run 实际注入的 system 上下文。
-            injected_context = context.system_prompt(context.base_system_prompt)
-            first_line = next(
-                (line.strip() for line in injected_context.splitlines() if line.strip()),
-                "",
-            )[:80]
-            await bus.publish(
-                ContextInjectedEvent(
-                    run_id=run_id,
-                    source="system",
-                    label="上下文注入",
-                    chars=len(injected_context),
-                    preview=first_line,
-                    text=injected_context,
-                    ts=_now(),
-                )
-            )
-
             cancelled = False
             try:
                 try:
@@ -381,6 +352,37 @@ class AgentRunner:
                     parent_context=context,
                     offload_manager=offload_manager,
                     memory_catalog=memory_catalog,
+                )
+                runtime_prompt_context = PromptRuntimeContext(
+                    permission_mode=permission_mode,
+                    memory_enabled=memory_enabled,
+                    tool_names=frozenset(tool.name for tool in registry),
+                    task_text=goal,
+                )
+                if context.system_prompt_override:
+                    context.system_prompt_override = DEFAULT_PROMPT_HARNESS.compose(
+                        context.system_prompt_override, runtime_prompt_context
+                    )
+                else:
+                    context.base_system_prompt = DEFAULT_PROMPT_HARNESS.compose(
+                        context.base_system_prompt, runtime_prompt_context
+                    )
+                # 注册表确定后再注入工具规则，事件内容与实际 LLM system prompt 保持一致。
+                injected_context = context.system_prompt(context.base_system_prompt)
+                first_line = next(
+                    (line.strip() for line in injected_context.splitlines() if line.strip()),
+                    "",
+                )[:80]
+                await bus.publish(
+                    ContextInjectedEvent(
+                        run_id=run_id,
+                        source="system",
+                        label="上下文注入",
+                        chars=len(injected_context),
+                        preview=first_line,
+                        text=injected_context,
+                        ts=_now(),
+                    )
                 )
                 compactor = Compactor(bus, session_dir, session_id_str)
                 denial_tracker = DenialTracker()

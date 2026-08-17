@@ -1,5 +1,7 @@
 # SztuCode 客户端 Codex 化优化方案
 
+> 历史设计记录：本文保留早期桌面工作台规划。当前实现以 TypeScript daemon、Tauri 2 + Vue 3 桌面端和 Node CLI 为准；其中与当前代码冲突的 Python daemon、Pydantic 协议和 React 方案不再是实施依据。
+
 ## 1. 结论与目标
 
 SztuCode 已经具备 Agent 产品的核心能力：daemon 与客户端分离、会话持久化、工具调用与权限策略、实时事件流、上下文压缩、Skills、子 Agent 和 MCP。当前短板不在 Agent 内核，而在桌面端没有把这些能力组织成一个开发者可以长期使用的工作台。
@@ -191,24 +193,24 @@ UI 字体：Microsoft YaHei UI / Noto Sans SC
 
 ### P2：客户端技术架构
 
-推荐将产品级桌面端从 Tkinter 迁移到 **Tauri 2 + React + TypeScript**，Python daemon 保持为本地服务。Tauri 负责窗口、文件选择、系统通知和安全的系统桥接；React 负责可组合布局、虚拟化列表、Monaco diff、快捷键和可访问性；WebSocket/SSE 或现有 TCP 协议的受控桥接负责事件流。
+当前落地为 **Tauri 2 + Vue 3 + TypeScript** 桌面端，TypeScript daemon 作为本地服务。Tauri 负责窗口、文件选择、系统通知和安全的系统桥接；Vue 负责工作台布局、时间线、Diff、快捷键和可访问性；TCP 上的 NDJSON/JSON-RPC 协议负责事件流。
 
-保留 Textual TUI 作为 SSH/终端用户界面，但让桌面端成为主产品面。两端共享：Pydantic 协议、会话/运行领域模型、事件命名、设置格式与端到端场景测试。
+Node CLI 与桌面端共享 `packages/protocol` 的 TypeScript 类型、会话/运行领域模型、事件命名、设置格式与端到端场景测试。旧 Textual/Python 客户端已经从产品代码中移除，仅有截图和归档文档保留其历史记录。
 
 建议分层：
 
 ```text
-React 页面 / 组件
+Vue 页面 / 组件
   ├── 状态层：WorkspaceStore、SessionStore、RunStore、PermissionStore
   ├── Client SDK：类型化 RPC、事件订阅、重连、事件去重、缓存
   └── Tauri bridge：窗口、目录选择、通知、打开外部编辑器
-Python daemon
+TypeScript daemon
   ├── JSON-RPC 命令处理器 / EventBus
   ├── Session、Run、Workspace、Change 服务
   └── Agent / Tool / Permission / Trace（现有能力）
 ```
 
-迁移期不建议“把 Tkinter 堆功能”。先完成 P0，再用独立 `desktop/` 前端包接入相同 daemon；旧 `sztu-desktop` 标记为 legacy，直到核心场景验收完成后移除。
+这段规划中的迁移步骤已完成；后续桌面功能应直接扩展现有 `desktop/` 前端和 TypeScript daemon，不再新增 Python/Tkinter 产品入口。
 
 ## 7. 组件、状态与可访问性规范
 

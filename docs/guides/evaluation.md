@@ -2,7 +2,7 @@
 
 [返回文档中心](../README.md)
 
-`sztu-eval` 是统一评测入口。它负责加载版本化任务、为每次运行创建隔离工作区、调用可替换
+`npm run eval` 是统一的 TypeScript 评测入口。它负责加载版本化任务、为每次运行创建隔离工作区、调用可替换
 runner、执行独立验证，并同时生成机器可读 JSON 与人类可读 Markdown 报告。
 
 评测结果区分三件事：
@@ -15,18 +15,19 @@ runner、执行独立验证，并同时生成机器可读 JSON 与人类可读 M
 
 ## 环境准备
 
-内部基准只需要项目标准 Python 环境，不调用真实模型 API，也不需要 Docker：
+TypeScript 评测主链不需要 Python 环境，不调用真实模型 API，也不需要 Docker：
 
 ```bash
-uv sync --frozen
-uv run sztu-eval validate --suite internal
+npm install
+npm run eval -- validate --manifest packages/evaluation/tasks/internal-v1.json
 ```
 
 使用 `sztucode-rpc` runner 时，需要先按[配置参考](../getting-started/configuration.md)配置模型并启动
 daemon：
 
 ```bash
-uv run sztu-code
+npm run build
+npm run daemon
 ```
 
 SWE-bench 的最终评分必须使用官方 Docker harness。官方文档建议准备 x86_64 环境、Docker、至少
@@ -37,24 +38,19 @@ SWE-bench 的最终评分必须使用官方 Docker harness。官方文档建议�
 列出任务：
 
 ```bash
-uv run sztu-eval list --suite internal
-uv run sztu-eval list --suite swebench-lite --json
+npm run eval -- list --manifest packages/evaluation/tasks/internal-v1.json
 ```
 
 用离线 reference runner 验证 10 个内部任务，每个重复三次：
 
 ```bash
-uv run sztu-eval run \
-  --suite internal \
-  --runner reference \
-  --repeat 3 \
-  --output-dir eval/reports/internal-reference
+npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval/internal-reference
 ```
 
 输出目录包含：
 
 ```text
-eval/reports/internal-reference/
+tmp/eval/internal-reference/
 ├── report.json   # 完整运行记录、聚合指标和失败原因
 └── summary.md    # 面向人类的指标表和稳定性汇总
 ```
@@ -75,14 +71,14 @@ reference runner 只证明任务 fixture、验证器、指标聚合和报告链�
 `auto` 模式：
 
 ```bash
-uv run sztu-eval run \
+npm run eval -- run \
   --suite internal \
   --runner sztucode-rpc \
   --permission-mode auto \
   --allow-auto-permissions \
   --repeat 3 \
   --timeout 600 \
-  --output-dir eval/reports/internal-agent
+  --output-dir tmp/eval/internal-agent
 ```
 
 缺少 `--allow-auto-permissions` 时命令会在连接 daemon 前拒绝执行。runner 会先保存 daemon 当前
@@ -95,11 +91,11 @@ uv run sztu-eval run \
 command runner 直接执行解析后的 argv，不经过 Shell：
 
 ```bash
-uv run sztu-eval run \
+npm run eval -- run \
   --suite internal \
   --runner command \
-  --command "python path/to/agent_adapter.py" \
-  --output-dir eval/reports/custom-agent
+  --command "node path/to/agent_adapter.mjs" \
+  --output-dir tmp/eval/custom-agent
 ```
 
 外部进程从环境变量取得契约：
@@ -145,30 +141,30 @@ command runner 是接入接口，不是操作系统沙箱；只应运行受信�
   "title": "Fix a boundary condition",
   "category": "general",
   "prompt": "Fix can_retry without editing the verifier.",
-  "tags": ["python"],
+  "tags": ["typescript"],
   "workspace_files": {
-    "retry.py": "def can_retry(attempt, limit): return attempt < limit\n",
-    "verify.py": "from retry import can_retry\nassert can_retry(1, 1)\n"
+    "retry.mjs": "export const canRetry = (attempt, limit) => attempt < limit;\n",
+    "verify.mjs": "import assert from 'node:assert/strict';\nimport { canRetry } from './retry.mjs';\nassert.equal(canRetry(1, 1), true);\n"
   },
   "validation": {
-    "command": ["{python}", "verify.py"],
+    "command": ["node", "verify.mjs"],
     "timeout_seconds": 10
   },
-  "expected_modified_files": ["retry.py"],
+  "expected_modified_files": ["retry.mjs"],
   "reference_changes": [
-    {"path": "retry.py", "content": "def can_retry(attempt, limit): return attempt <= limit\n"}
+    {"path": "retry.mjs", "content": "export const canRetry = (attempt, limit) => attempt <= limit;\n"}
   ]
 }
 ```
 
-`{python}` 会替换为运行 `sztu-eval` 的解释器。所有清单路径必须使用 `/`，绝对路径、`..` 和
+验证命令直接使用 Node 执行 TypeScript/JavaScript fixture；评测调度器和内部任务均由 TypeScript/Node 运行。所有清单路径必须使用 `/`，绝对路径、`..` 和
 Windows 反斜杠会在创建工作区前被拒绝。公开任务文件不会包含 `workspace_files` 或
 `reference_changes`，外部 Agent 无法通过 runner 契约读取参考答案。
 
 随包提供的清单位于：
 
-- `src/sztu_code/evaluation/tasks/internal-v1.json`：10 个离线任务；
-- `src/sztu_code/evaluation/tasks/swebench-lite-smoke.json`：3 个固定 SWE-bench Lite 实例。
+- `packages/evaluation/tasks/internal-v1.json`：10 个离线任务；
+- `packages/evaluation/tasks/swebench-lite-smoke.json`：3 个固定 SWE-bench Lite 实例。
 
 可用 `--manifest path/to/tasks.json` 加载自定义清单，并用 `--task-id` 或 `--max-tasks` 筛选。
 内部任务的验证命令会被直接执行，因此自定义清单也必须来自可信来源。
@@ -194,23 +190,23 @@ Windows 反斜杠会在创建工作区前被拒绝。公开任务文件不会包
 先让 SztuCode 在三个固定实例上生成 patch：
 
 ```bash
-uv run sztu-eval run \
+npm run eval -- run \
   --suite swebench-lite \
   --runner sztucode-rpc \
   --permission-mode auto \
   --allow-auto-permissions \
   --max-tasks 3 \
-  --output-dir eval/reports/swebench-smoke
+  --output-dir tmp/eval/swebench-smoke
 ```
 
 这一步会克隆公开仓库并调用真实模型，必须显式执行。生成的运行记录仍是 `unscored`。随后导出
 官方预测格式：
 
 ```bash
-uv run sztu-eval export-swebench \
+npm run eval -- export-swebench \
   --suite swebench-lite \
-  --report eval/reports/swebench-smoke/report.json \
-  --output eval/reports/swebench-smoke/predictions.jsonl \
+  --report tmp/eval/swebench-smoke/report.json \
+  --output tmp/eval/swebench-smoke/predictions.jsonl \
   --model-name sztu-code
 ```
 
@@ -220,7 +216,7 @@ uv run sztu-eval export-swebench \
 python -m swebench.harness.run_evaluation \
   --dataset_name princeton-nlp/SWE-bench_Lite \
   --split test \
-  --predictions_path eval/reports/swebench-smoke/predictions.jsonl \
+  --predictions_path tmp/eval/swebench-smoke/predictions.jsonl \
   --instance_ids astropy__astropy-12907 astropy__astropy-14182 astropy__astropy-14365 \
   --max_workers 1 \
   --run_id sztucode-smoke
@@ -234,16 +230,14 @@ resolved。参见 [SWE-bench Harness Reference](https://www.swebench.com/SWE-ben
 Markdown 模板可以独立于评测重新生成：
 
 ```bash
-uv run sztu-eval report \
-  --input eval/reports/internal-agent/report.json \
-  --output eval/reports/internal-agent/summary.md
+npm run eval -- report \
+  --input tmp/eval/internal-agent/report.json \
+  --output tmp/eval/internal-agent/summary.md
 ```
 
 `report.json` 可能包含 patch 和有界 runner 输出。公开报告前仍应检查其中是否包含外部仓库内容、
 个人路径或敏感信息；评测工作区、缓存和大型 Docker 产物不得提交。
 
-## 旧入口
+## 运行时边界
 
-`python -m eval.swebench.adapter`、`python -m eval.trajectory.analyzer` 和
-`python -m eval.reports.generator` 暂时保留，便于读取历史实验。新评测和跨版本比较应使用
-`sztu-eval` 的版本化 JSON 报告；旧脚本输出不具备相同的失败与稳定性语义。
+评测调度器、报告生成器和 SWE-bench patch 导出均由 `packages/evaluation` 的 TypeScript 实现负责。官方 SWE-bench Docker harness 仍按其上游要求使用 Python 命令，但这不属于 SztuCode 的运行时。

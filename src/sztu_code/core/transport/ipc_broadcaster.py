@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # 仅当客户端写缓冲超过阈值才等待排空（有界背压），避免 LLM 流式输出被慢客户端拖住
 _DRAIN_THRESHOLD = 64 * 1024
 _STREAM_EVENT_TYPES = frozenset({"llm.token", "llm.thinking"})
+_DRAIN_TIMEOUT_S = 2.0
 
 
 def _now() -> str:
@@ -74,7 +75,7 @@ class IpcEventBroadcaster:
             try:
                 sub.writer.write(payload)
                 if not is_stream or self._buffered_bytes(sub.writer) > _DRAIN_THRESHOLD:
-                    await sub.writer.drain()
+                    await asyncio.wait_for(sub.writer.drain(), timeout=_DRAIN_TIMEOUT_S)
                 if self._trace is not None:
                     client_id = str(sub.writer.get_extra_info("peername", "<unknown>"))
                     self._trace.emit(
@@ -88,7 +89,7 @@ class IpcEventBroadcaster:
                             data={"sub_id": sub.sub_id, "event_type": event_type},
                         )
                     )
-            except (ConnectionResetError, BrokenPipeError, OSError):
+            except (ConnectionResetError, BrokenPipeError, OSError, TimeoutError):
                 logger.debug("dead connection for sub %s, scheduling cleanup", sub.sub_id)
                 dead.append(sub.writer)
 

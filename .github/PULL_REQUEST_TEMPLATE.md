@@ -11,10 +11,14 @@
 <!-- 列出实际运行过的命令和结果；未运行的检查说明原因。 -->
 
 ```text
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest ...
+npm run typecheck
+npm test
+npm run build
+npm run docs:protocol
+npm run docs:links
 ```
+
+如只修改 Skill 的 Python artifact helper，再补充该 Skill 文档要求的专项检查。
 
 ## Risk
 

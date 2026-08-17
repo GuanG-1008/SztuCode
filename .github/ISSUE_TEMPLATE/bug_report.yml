@@ -19,9 +19,9 @@ body:
     attributes:
       label: 客户端
       options:
-        - TUI (sztucode / sztu-tui)
+        - Terminal chat (sztucode / sztucode-tui)
         - Desktop (Tauri)
-        - CLI (sztu)
+        - Node CLI
         - Daemon / IPC
         - 其他
     validations:
@@ -30,7 +30,7 @@ body:
     id: environment
     attributes:
       label: 环境
-      description: 操作系统、Python、uv，以及相关 Node/Rust 版本。
+      description: 操作系统、Node.js 版本；桌面问题另附 Rust/Tauri 版本。若问题来自 artifact Skill，再补充对应工具版本。
     validations:
       required: true
   - type: textarea

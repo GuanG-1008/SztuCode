@@ -4,12 +4,12 @@
 
 ## 系统边界
 
-SztuCode 是本地优先的双进程 Agent 系统：常驻 Python daemon 管理会话和运行，TUI、桌面端与 CLI 通过 TCP 上的 NDJSON/JSON-RPC 2.0 连接。客户端负责交互和展示，Agent 执行状态以 daemon 为准。
+SztuCode 是本地优先的 daemon/client Agent 系统。TypeScript 与 Python 各自提供 daemon 和 CLI 入口；桌面端连接 TypeScript runtime。客户端通过 TCP 上的 NDJSON/JSON-RPC 2.0 连接，Agent 执行状态以所选 daemon 为准。
 
 ```text
 Tauri Desktop ─┐
-Textual TUI ───┼─ TCP / NDJSON / JSON-RPC 2.0 ─ sztu-code daemon
-CLI ───────────┘                                  │
+Node CLI ──────┼─ TCP / NDJSON / JSON-RPC 2.0 ─ TypeScript daemon
+Eval Runner ───┘                                  │
                                                   ├─ Session / Workspace
                                                   ├─ Agent Runner / Loop
                                                   ├─ LLM Provider
@@ -21,9 +21,9 @@ CLI ───────────┘                                  │
 
 ## 进程与客户端
 
-### `sztu-code`
+### TypeScript daemon
 
-daemon 入口位于 `src/sztu_code/core/app.py`，负责：
+daemon 入口位于 `packages/runtime-ts/src/main.ts`，负责：
 
 - 加载配置和日志；
 - 初始化 Provider、Session Store、Workspace Manager 和 Permission Manager；
@@ -32,24 +32,28 @@ daemon 入口位于 `src/sztu_code/core/app.py`，负责：
 - 执行 Agent run 并广播事件；
 - 在退出时取消并等待后台任务。
 
-### `sztucode` / `sztu-tui`
+### `sztucode` / Node CLI
 
-Textual TUI 是终端产品入口。`sztucode` 接受项目目录、处理信任并在需要时自动启动 daemon；`sztu-tui` 直接连接已配置的 daemon。
+npm 发布入口会启动 TypeScript daemon，并让 Node CLI 创建绑定到目标项目的会话。仓库内可使用 `npm run cli -- chat`。
+
+显式 TypeScript 命令为 `sztu-ts`，默认端口为 `7438`。
+
+### `sztu-py` / Python CLI
+
+Python 包入口连接 `src/sztu_code` 中的 Python daemon，默认端口为 `7437`。仓库内可使用 `npm run cli:py -- ...` 和 `npm run daemon:py`。
 
 ### Tauri Desktop
 
 `desktop/` 使用 Tauri 2、Vue 3 和 TypeScript。Rust 层负责原生窗口、目录选择和受控 TCP 桥；前端负责工作区、会话、执行时间线、权限、文件预览和 Diff 审阅。
 
-### `sztu`
-
-CLI 用于连通性检查、脚本调用和调试，不承载完整交互体验。
+两套 runtime 使用不同的命令名和默认端口，因此可以并行安装和运行。桌面产品路径仍使用 TypeScript runtime。
 
 ## 请求与事件链路
 
 1. 客户端发送 JSON-RPC 命令，例如 `session.send_message`。
-2. Socket Server 解析 envelope，并用 Pydantic 校验参数。
-3. `CoreApp` handler 操作会话或启动后台 run。
-4. `AgentRunner` 构建上下文、工具、权限和 Provider。
+2. Socket Server 解析 envelope，并按共享 TypeScript 协议校验关键参数。
+3. `RuntimeServer` handler 操作会话或启动后台 run。
+4. `RunManager` 构建上下文、工具、权限和 Provider。
 5. `AgentLoop` 迭代模型响应与工具结果。
 6. EventBus 发布 run、step、tool、permission、LLM 和 change 事件。
 7. IPC Broadcaster 将订阅事件推送到客户端。
@@ -61,11 +65,21 @@ CLI 用于连通性检查、脚本调用和调试，不承载完整交互体验�
 
 ### 上下文
 
-Runner 组合系统提示词、全局与项目 context、会话消息、notes 和当前目标。上下文预算由 `core/compact/` 计算；达到阈值时可截断工具结果并执行压缩。
+Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-ts/src/context.ts` 计算；工具结果超过阈值时，`packages/runtime-ts/src/offload.ts` 将完整内容保存到当前 run 的 `refs/`，上下文保留摘要并可通过只读 `read_ref` 分页回读。写盘失败时才回退到有标记的截断；达到整体上下文阈值时再执行压缩。
+
+默认卸载阈值为 2,000 字符或 50 行，`bash`、`grep_search` 和 `glob_search` 始终卸载。可通过 `SZTU_OFFLOAD_ENABLED`、`SZTU_OFFLOAD_MIN_CHARS` 和 `SZTU_OFFLOAD_MIN_LINES` 调整。
+
+`task_create`、`task_update`、`task_list` 和 `task_get` 由 TypeScript `TaskManager` 提供。任务以 JSON 保存在当前 run 目录中，进程重启后仍可恢复；主 Agent 和声明这些工具的子 Agent 使用相同契约。
+
+多 Agent workflow 使用与普通 Agent 相同的 `run.cancel` 和 `run.get` 控制面。取消信号会传播到所有正在执行的子任务，并将尚未调度的任务标记为 `cancelled`；daemon 关闭时也会取消活动 workflow。
+
+Prompt Harness 从 `prompts/content/*/index.json` 加载原子提示，并按实际注册工具、权限模式、记忆能力与任务风险动态组合。标记为 `reference-only` 的提示不会进入模型上下文，避免向 Agent 声明运行时并不存在的 IDE、Hook 或沙箱能力。
+
+模型生成的工具参数不会因 TypeScript 类型声明而被假定可信。AgentLoop 在权限审批和调用前按工具 JSON Schema 做运行时校验；缺失字段、错误类型、非法枚举和越界数值会作为 `schema_error` 写入 trace，并反馈给模型修正。
 
 ### 工具
 
-内置工具通过 Tool Registry 注册。工具参数使用 Pydantic 校验，运行时根据工具类型和具体输入计算权限：
+内置工具通过 Tool Registry 注册。工具参数在调用边界校验，运行时根据工具类型和具体输入计算权限：
 
 - `read_only`：读取、列表和搜索；
 - `workspace_write`：受工作区约束的写入和编辑；
@@ -103,10 +117,9 @@ Permission Manager 结合当前模式、持久化策略、工具权限和用户�
 | --- | --- | --- |
 | `~/.sztu/sessions/` | Session Store | 会话、消息、notes、runs 和事件 |
 | `~/.sztu/workspaces.json` | Workspace Manager | 最近和归档工作区 |
-| `~/.sztu/policy.toml` | Permission Manager | 持久化允许/拒绝策略 |
-| `~/.sztu/trusted-projects.json` | Trust | 已信任项目 |
-| `~/.sztu/traces/daemon.jsonl` | Trace Writer | IPC、Event 和 LLM trace |
-| `~/.sztu/client-settings.json` | 客户端设置 | Provider、模型、端点、凭据和权限模式 |
+| `~/.sztu/runtime-settings.json` | Settings Store | Provider、模型、端点、凭据和权限模式 |
+| `~/.sztu/model-profiles.json` | Model Profile Store | 模型列表与当前 profile ID |
+| `~/.sztu/traces/runtime-ts-events.jsonl` | EventBus | runtime 事件 trace |
 
 会话与 trace 可能包含源码、提示词和模型响应，应按敏感数据处理。
 
@@ -124,12 +137,12 @@ Permission Manager 结合当前模式、持久化策略、工具权限和用户�
 
 | 目标 | 主要位置 |
 | --- | --- |
-| 新命令/事件 | `core/bus/`、`core/app.py`、客户端 SDK |
-| 新工具 | `core/tools/` |
-| 新 Provider | `core/llm/` |
-| 新权限规则 | `core/permissions/` |
+| 新命令/事件 | `packages/protocol/`、`packages/runtime-ts/src/server.ts`、客户端 SDK |
+| 新工具 | `packages/runtime-ts/src/tools.ts` |
+| 新 Provider | `packages/runtime-ts/src/providers/` |
+| 新权限规则 | `packages/runtime-ts/src/permissions.ts` |
 | 新 Skill | `.sztu/skills/`、`~/.sztu/skills/` 或内置 Skills |
-| 新 Agent 角色 | `core/agents/` |
-| 新 MCP 接入 | `core/mcp/` 与配置文件 |
+| 新 Agent 角色 | `packages/runtime-ts/src/subagent.ts` |
+| 新 MCP 接入 | `packages/runtime-ts/src/mcp.ts` 与 JSON 配置 |
 
 实现细节和提交标准见 [开发环境](../development/development.md) 与 [贡献指南](../CONTRIBUTING.md)。

@@ -199,8 +199,8 @@ class AgentLoop:
         self._denial_tracker = denial_tracker
         self._compactor = compactor
         self._compact_threshold = compact_threshold
-        self._auto_compact_min_tokens = auto_compact_min_tokens
-        self._auto_compact_min_steps = auto_compact_min_steps
+        # 保留旧参数以兼容配置和扩展调用方；自动压缩只由上下文占用率触发。
+        _ = auto_compact_min_tokens, auto_compact_min_steps
         self._tool_result_limit = tool_result_limit
         self._tool_result_keep = tool_result_keep
         self._session_id = session_id
@@ -620,7 +620,7 @@ class AgentLoop:
 
             # 工具结果追加完毕（messages 末尾为 user）后检查压缩，仅在 run 继续时触发
             # 此时压缩结果 [user_summary, assistant_ack] 对下一次 LLM 调用是合法输入
-            # 多条件触发（Claude Code 风格）：context_pct OR 累计 tokens OR 步数 OR turn 数
+            # 仅在上下文占用率达到阈值时压缩，避免短任务因 turn 数产生额外模型请求
             if (
                 not context.is_done()
                 and response.stop_reason != "end_turn"
@@ -628,7 +628,6 @@ class AgentLoop:
                 and response.usage is not None
             ):
                 should_compact = False
-                # 条件 A: context_pct 超过百分比阈值
                 if self._compact_threshold > 0:
                     trigger_pct = response.usage.context_pct
                     if response.usage.input_tokens > 0 and added_estimate:
@@ -638,30 +637,6 @@ class AgentLoop:
                             / response.usage.input_tokens
                         )
                     if trigger_pct >= self._compact_threshold:
-                        should_compact = True
-                # 条件 B: 累计 input tokens 超过绝对值阈值
-                if (
-                    not should_compact
-                    and self._auto_compact_min_tokens > 0
-                    and context.total_input_tokens >= self._auto_compact_min_tokens
-                ):
-                    should_compact = True
-                # 条件 C: 步数超过阈值
-                if (
-                    not should_compact
-                    and self._auto_compact_min_steps > 0
-                    and context.step >= self._auto_compact_min_steps
-                ):
-                    should_compact = True
-                # 条件 D: 滑动窗口 — turn 数超过窗口 + 缓冲
-                if (
-                    not should_compact
-                    and self._sliding_window_size > 0
-                ):
-                    from sztu_code.core.compact.compactor import _split_into_turns
-                    turns = _split_into_turns(context.messages)
-                    body_turns = turns[1:] if turns else []
-                    if len(body_turns) > self._sliding_window_size + 2:
                         should_compact = True
                 if should_compact:
                     # 熔断器检查：连续压缩失败超阈值则禁用自动压缩

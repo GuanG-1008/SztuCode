@@ -4,27 +4,45 @@
 
 ## 环境要求
 
-- Python `3.12.x`
-- [uv](https://docs.astral.sh/uv/)
+- Node.js 20+
+- Python 3.12 与 `uv`（使用 Python runtime 时）
 - Git
 - Anthropic 或 OpenAI-compatible API 凭据
-- 可选：Node.js 20+、Rust 与平台对应的 Tauri 构建依赖
+- 桌面安装包当前还要求系统可执行 `node`（Node.js 20+）；开发构建另需 Rust 与平台对应的 Tauri 依赖
 
-## 安装 Python 运行时
+## 安装 TypeScript 运行时
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
 cd SztuCode
-uv sync
+npm install
+npm run build
 ```
 
 确认命令可用：
 
 ```bash
-uv run sztu --version
-uv run sztu --help
-uv run sztucode --help
+npm run cli:ts -- --version
+npm run cli:py -- --version
 ```
+
+## 两个运行时入口
+
+安装后的命令互不冲突：
+
+```bash
+# TypeScript，默认端口 7438
+sztu-ts core start
+sztu-ts chat
+
+# Python，默认端口 7437
+sztu-py core start
+sztu-py chat
+```
+
+源码开发时使用 `npm run daemon:ts` / `npm run cli:ts -- ...`，或
+`npm run daemon:py` / `npm run cli:py -- ...`。Python 脚本通过锁定的
+`uv` 环境运行。
 
 ## 配置模型
 
@@ -34,41 +52,54 @@ cp .env.example .env
 
 在 `.env` 中配置 Provider、模型 ID 和凭据。不要提交 `.env`。完整字段见 [配置参考](configuration.md)。
 
-## 启动 TUI
+## 启动终端客户端
 
 推荐入口：
 
 ```bash
-uv run sztucode /path/to/project
+npm run daemon
 ```
 
-该命令会检查 daemon，并在未运行时自动启动。首次打开目录时，TUI 会要求选择是否信任工作区。
+另一个终端使用 Node 终端客户端：
 
 常用选项：
 
 ```bash
-uv run sztucode . --trust
-uv run sztucode . --read-only
-uv run sztucode . --replay RUN_ID
+npm run cli -- ping
+npm run cli -- run --goal "inspect the repository"
+npm run cli -- chat
 ```
 
 也可以手动分开运行 daemon 和客户端：
 
 ```bash
 # 终端 1
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
-uv run sztu-tui
+npm run cli -- chat
+```
+
+全局安装的 npm 包会在需要时自动启动随包发布的 TypeScript daemon，并复用当前端口上已经运行的 SztuCode daemon：
+
+```bash
+npm install --global sztucode-tui
+sztu-ts /path/to/project
+sztucode ping
+sztucode run --goal "inspect the repository"
+sztucode core status
+sztucode core stop
 ```
 
 ## 启动桌面端
 
-桌面工作台目前不会自动启动 Python daemon：
+桌面工作台会从安装资源启动 TypeScript daemon；当前版本需要系统 PATH 中存在 Node.js 20+。也可手动分开调试：
 
 ```bash
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -88,11 +119,10 @@ Tauri 在不同操作系统上的系统依赖不同，请按 [Tauri prerequisite
 ## 验证连通性
 
 ```bash
-uv run sztu ping
-uv run sztu core status
+npm run cli -- ping
 ```
 
-默认服务地址为 `127.0.0.1:7437`。若端口冲突，可在 `.env` 或环境变量中修改 `SZTU_PORT`，daemon 与客户端必须使用相同配置。
+TypeScript 默认服务地址为 `127.0.0.1:7438`，Python 默认为 `127.0.0.1:7437`。若端口冲突，可分别通过 `SZTU_TS_PORT` 和 `SZTU_PORT` 修改，daemon 与对应客户端必须使用相同配置。
 
 ## 下一步
 

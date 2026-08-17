@@ -1,24 +1,36 @@
 # sztucode-tui
 
-The npm installer for the SztuCode terminal coding agent.
+The npm package for the SztuCode TypeScript terminal coding agent. Despite the legacy package name, the current interface is the Node terminal chat client, not the Python Textual application.
 
 ## Install
 
-Python 3.12 or 3.13 and Node.js 18 or newer are required.
+Node.js 20 or newer is required. Python is not required for the agent runtime.
 
 ```sh
 npm install --global sztucode-tui
-sztucode .
+sztucode /path/to/project
 ```
 
-The installer creates a private Python environment inside the npm package. It does not modify your
-global Python environment.
+The package includes the compiled TypeScript daemon and CLI. It does not create a virtual environment.
 
 Both command names are available:
 
 ```sh
-sztucode .
-sztucode-tui .
+sztucode /path/to/project
+sztucode-tui /path/to/project
+sztu-ts /path/to/project
+```
+
+`sztu-ts` is the explicit TypeScript entry point. The separately installed
+Python package uses `sztu-py`, so both implementations can coexist.
+
+The launcher starts the bundled TypeScript daemon when needed and reuses an existing daemon on the configured loopback port. CLI subcommands are forwarded unchanged:
+
+```sh
+sztucode ping
+sztucode run --goal "inspect this repository"
+sztucode core status
+sztucode core stop
 ```
 
 See the [SztuCode repository](https://github.com/rojim666/SztuCode) for configuration and usage.

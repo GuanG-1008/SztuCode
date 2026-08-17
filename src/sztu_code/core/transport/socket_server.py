@@ -42,6 +42,7 @@ def get_connection_writer() -> asyncio.StreamWriter:
     return _writer_var.get()
 
 _MAX_LINE_BYTES = 64 * 1024 * 1024  # 64 MB per frame，兼容 MCP 大文件工具结果
+_WRITE_DRAIN_TIMEOUT_S = 5.0
 
 
 class SocketServer:
@@ -193,13 +194,13 @@ class SocketServer:
         result_data: Any = result.model_dump() if isinstance(result, BaseModel) else result
         try:
             await self._send(writer, JsonRpcSuccess(id=req.id, result=result_data))
-        except (ConnectionResetError, BrokenPipeError, OSError):
+        except (ConnectionResetError, BrokenPipeError, OSError, TimeoutError):
             logger.debug("client disconnected before response for %s", req.method)
 
     # 将 pydantic 消息序列化为 JSON 行并写入流，随后刷新缓冲区
     async def _send(self, writer: asyncio.StreamWriter, msg: BaseModel) -> None:
         writer.write(msg.model_dump_json().encode() + b"\n")
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), timeout=_WRITE_DRAIN_TIMEOUT_S)
         if self._trace is not None:
             kind = "error" if isinstance(msg, JsonRpcError) else "response"
             client_id = str(writer.get_extra_info("peername", "<unknown>"))

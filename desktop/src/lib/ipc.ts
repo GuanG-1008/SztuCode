@@ -1,13 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { EventEnvelope, JsonRpcResponse, RuntimeEvent } from "../protocol";
 
-export type IpcEvent = Record<string, unknown>;
-type JsonRpcResponse = {
-  jsonrpc?: string;
-  id?: string;
-  result?: Record<string, unknown>;
-  error?: { code: number; message: string };
-};
+export type IpcEvent = RuntimeEvent;
 
 type PendingRequest = {
   resolve: (value: Record<string, unknown>) => void;
@@ -92,23 +87,23 @@ export class IpcClient {
   }
 
   private receive(line: string): void {
-    let message: JsonRpcResponse | { kind?: string; event?: IpcEvent };
+    let message: JsonRpcResponse<Record<string, unknown>> | EventEnvelope;
     try {
-      message = JSON.parse(line) as JsonRpcResponse | { kind?: string; event?: IpcEvent };
+      message = JSON.parse(line) as JsonRpcResponse<Record<string, unknown>> | EventEnvelope;
     } catch {
       return;
     }
-    if ("jsonrpc" in message && message.id) {
+    if ("jsonrpc" in message && typeof message.id === "string") {
       const pending = this.pending.get(message.id);
       if (!pending) return;
       this.pending.delete(message.id);
       window.clearTimeout(pending.timeout);
-      if (message.error) pending.reject(new IpcRequestError(message.error.code, message.error.message));
+      if ("error" in message) pending.reject(new IpcRequestError(message.error.code, message.error.message));
       else pending.resolve(message.result ?? {});
       return;
     }
-    if ("kind" in message && message.kind === "event" && message.event) {
-      this.eventHandlers.forEach((handler) => handler(message.event!));
+    if ("kind" in message && message.kind === "event") {
+      this.eventHandlers.forEach((handler) => handler(message.event));
     }
   }
 

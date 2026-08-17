@@ -2,6 +2,7 @@
 
 > 一个本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
 
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
@@ -15,7 +16,7 @@
 
 ![SztuCode 桌面工作台任务界面](docs/images/image2.png)
 
-### TUI 终端界面
+### 历史 Textual 界面
 
 ![SztuCode TUI 欢迎界面](docs/images/image3.png)
 
@@ -23,7 +24,7 @@
 
 ![SztuCode TUI 任务结果](docs/images/image5.png)
 
-SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 CLI 提交任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。
+SztuCode 面向真实代码仓库工作。桌面工作台使用 TypeScript daemon；命令行可选择 TypeScript 或 Python runtime。后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。
 
 它既是一个持续完善的本地 AI 编程工具，也是一个用于学习 Agent 工程、软件协作与可信 AI Coding 的开放项目。
 
@@ -62,7 +63,7 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 | 能力          | 当前实现                                                        |
 | ------------- | --------------------------------------------------------------- |
 | Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制             |
-| 多种客户端    | Textual TUI、Tauri 2 + Vue 3 桌面工作台，以及调试用 CLI         |
+| 多种客户端    | Tauri 2 + Vue 3 桌面工作台、Node 终端 chat 与脚本化 CLI         |
 | 模型接入      | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商         |
 | 工作区工具    | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行       |
 | 权限系统      | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式   |
@@ -81,8 +82,8 @@ SztuCode 使用 daemon 与客户端分离的架构。长任务不依赖某个界
 
 ```text
 Tauri Desktop ─┐
-Textual TUI ───┼─ TCP / NDJSON / JSON-RPC 2.0 ─ sztu-code daemon
-CLI ───────────┘                                  │
+Node CLI ──────┼─ TCP / NDJSON / JSON-RPC 2.0 ─ TypeScript daemon
+Eval Runner ───┘                                  │
                                                   ├─ Workspace / Session
                                                   ├─ Agent Runner / Loop
                                                   ├─ LLM Provider
@@ -92,24 +93,25 @@ CLI ───────────┘                                  │
                                                   └─ EventBus / Trace
 ```
 
-默认监听 `127.0.0.1:7437`。IPC 命令和事件使用 Pydantic v2 模型定义，详情见 [架构说明](docs/reference/architecture.md)和自动生成的 [Wire Protocol](docs/reference/wire-protocol.md)。架构取舍记录在 [ADR](docs/adr/README.md) 中。
+TypeScript runtime 默认监听 `127.0.0.1:7438`，Python runtime 默认监听 `127.0.0.1:7437`，可以同时运行。IPC 命令和事件详情见[架构说明](docs/reference/architecture.md)。
 
 ## 快速开始
 
 ### 环境要求
 
 - Git；
-- Python `3.12.x`；
-- [uv](https://docs.astral.sh/uv/)；
+- Node.js 20+；
+- Python 3.12 与 `uv`（使用 Python runtime 时）；
 - Anthropic 或 OpenAI-compatible API 凭据；
-- 可选：Node.js 20+、Rust 和 Tauri 平台依赖，用于桌面端开发。
+- 可选：Rust 和 Tauri 平台依赖，用于桌面端开发。专业 artifact Skill 可能按需调用 Python，但不属于项目运行时依赖。
 
 ### 安装
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
 cd SztuCode
-uv sync
+npm install
+npm run build
 ```
 
 复制配置模板：
@@ -139,42 +141,27 @@ ANTHROPIC_API_KEY=<your-api-key>
 # OPENAI_BASE_URL=https://api.example.com
 ```
 
+使用免密 OpenAI-compatible 端点时还需设置 `SZTU_LLM_KEYLESS=true`，或直接在桌面模型管理页选择内置免费 profile。
+
 不要提交 `.env`。完整字段和优先级见[配置参考](docs/getting-started/configuration.md)。
 
-### 启动 TUI
+### 启动终端客户端
 
 推荐直接在目标项目目录启动：
 
 ```bash
-uv run sztucode /path/to/your/project
+npm run daemon
 ```
 
-首次打开目录时需要确认信任。常用选项：
+另一个终端中：
 
 ```bash
-uv run sztucode . --trust
-uv run sztucode . --read-only
-uv run sztucode . --replay RUN_ID
+npm run cli -- ping
+npm run cli -- run --goal "分析当前项目并修复测试失败"
+npm run cli -- chat
 ```
 
-也可以分别启动 daemon 和 TUI：
-
-```bash
-# 终端 1
-uv run sztu-code
-
-# 终端 2
-uv run sztu-tui
-```
-
-CLI 主要用于连通性检查和调试：
-
-```bash
-uv run sztu ping
-uv run sztu run --goal "分析当前项目并修复测试失败"
-uv run sztu chat
-uv run sztu trace --follow
-```
+TypeScript 发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztu-ts [项目路径]`（`sztucode` 仍是兼容别名）。Python 包安装后使用 `sztu-py`。两套入口互不覆盖。
 
 更完整的安装说明见[安装与启动](docs/getting-started/installation.md)。
 
@@ -184,7 +171,7 @@ uv run sztu trace --follow
 
 ```bash
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -209,15 +196,14 @@ cargo check
 
 ```text
 SztuCode/
-├─ src/sztu_code/
-│  ├─ core/          # daemon、Agent Loop、协议、工具、权限与扩展系统
-│  ├─ evaluation/    # 统一评测协议、runner、任务集与报告
-│  ├─ tui/           # Textual 终端界面
-│  └─ cli/           # 命令行客户端
+├─ packages/
+│  ├─ protocol/      # TypeScript JSON-RPC、事件和工作流契约
+│  ├─ runtime-ts/    # daemon、Agent Loop、工具、权限与扩展系统
+│  ├─ cli/           # Node 命令行客户端
+│  └─ evaluation/    # TypeScript 评测 runner 与报告
 ├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
-├─ tests/            # 单元测试与集成测试
-├─ eval/             # 轨迹分析、报告和 SWE-bench 适配
 ├─ scripts/          # 协议生成等工程脚本
+├─ tmp/              # 本地评测产物（不提交）
 └─ docs/             # 使用、开发、架构、运维、评测和历史文档
 ```
 
@@ -225,22 +211,21 @@ SztuCode/
 
 ## 开发与验证
 
-Python 基础检查：
+TypeScript 主链检查：
 
 ```bash
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest tests/unit -v
-uv run pytest tests/integration -v
-uv run python scripts/gen_protocol_doc.py --check
+npm run typecheck
+npm test
+npm run build
+npm run build --prefix desktop
 ```
 
-修改协议模型时，先运行 `uv run python scripts/gen_protocol_doc.py` 更新生成文档。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
+共享协议修改位于 `packages/protocol`。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
 
-离线运行 10 个内部 Coding Agent 基准并生成 JSON/Markdown 报告：
+离线运行 10 个内部 TypeScript Coding Agent 基准并生成 JSON/Markdown 报告：
 
 ```bash
-uv run sztu-eval run --suite internal --runner reference --repeat 3
+npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval
 ```
 
 任务格式、真实 daemon runner、指标定义和 SWE-bench Lite 小样本流程见

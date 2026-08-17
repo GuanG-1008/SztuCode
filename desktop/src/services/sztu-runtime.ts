@@ -178,23 +178,27 @@ export async function sandboxPtyClose(sessionId: string): Promise<void> {
 export async function connectRuntime(): Promise<boolean> {
   await waitForDaemon();
   const attempts = "__TAURI_INTERNALS__" in window ? 12 : 1;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      await client.connect("127.0.0.1", 7437);
-      if (!subscribed) {
-        await client.request("event.subscribe", { topics: EVENT_TOPICS, scope: "global" });
-        subscribed = true;
+  for (const port of [7438]) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await client.connect("127.0.0.1", port);
+        if (!subscribed) {
+          await client.request("event.subscribe", { topics: EVENT_TOPICS, scope: "global" });
+          subscribed = true;
+        }
+        return true;
+      } catch {
+        if (attempt + 1 < attempts) await new Promise((resolve) => window.setTimeout(resolve, 250));
       }
-      return true;
-    } catch {
-      if (attempt + 1 < attempts) await new Promise((resolve) => window.setTimeout(resolve, 250));
     }
   }
   return false;
 }
 
 export function onRuntimeEvent(handler: (event: Record<string, unknown>) => void): () => void {
-  return client.onEvent(handler);
+  // Keep legacy UI consumers permissive while the IPC transport validates the
+  // discriminated RuntimeEvent union at its boundary.
+  return client.onEvent((event) => handler(event as unknown as Record<string, unknown>));
 }
 
 export function onRuntimeDisconnect(handler: (reason: string) => void): () => void {
@@ -277,8 +281,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await client.request("session.delete", { session_id: sessionId });
 }
 
-export async function compactSession(sessionId: string, focus = ""): Promise<{ summary_tokens: number; saved_tokens: number }> {
-  return await client.request("session.compact", { session_id: sessionId, focus }) as { summary_tokens: number; saved_tokens: number };
+export async function compactSession(sessionId: string, focus = ""): Promise<{ summary_tokens: number; saved_tokens: number; removed_messages?: number; used_model?: boolean }> {
+  return await client.request("session.compact", { session_id: sessionId, focus }) as { summary_tokens: number; saved_tokens: number; removed_messages?: number; used_model?: boolean };
 }
 
 export async function replayRun(runId: string): Promise<Record<string, unknown>[]> {

@@ -53,8 +53,8 @@ class BaseTool(ABC):
     is_interactive: bool = False
     # 用户交互等待由 run 取消控制，不受普通工具执行超时限制
     allows_indefinite_wait: bool = False
-    # 工具实现者显式确认重复执行安全时才可设为 True；默认绝不重试。
-    retry_safe: bool = False
+    # 自行管理子进程生命周期的工具不再套通用调用超时
+    manages_timeout: bool = False
     # 工具名称别名列表（如 "read" → "read_file"）
     aliases: ClassVar[list[str]] = []
 

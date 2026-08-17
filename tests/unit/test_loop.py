@@ -1261,19 +1261,16 @@ async def test_wall_clock_exceeded_preserves_result() -> None:
     assert ctx.result == "final answer"
 
 
-# 功能：验证压缩通过累计 input tokens 绝对值触发
-# 设计：设 auto_compact_min_tokens=50000，第一步 input=60000 应触发压缩
+# 功能：验证累计 input tokens 不再单独触发压缩
+# 设计：低 context_pct 下即使 input_tokens 很高，也只执行原始任务流程
 async def test_auto_compact_by_token_count(tmp_path: Path) -> None:
     compactor = Compactor(EventBus(), tmp_path, "sess-c")
-    # 压缩流程会额外调用一次 provider.chat（run_id="compact"）生成摘要，
-    # 因此除主调用和最终 end_turn 外，还需提供摘要响应
     provider = _MockProvider([
         LlmResponse(
             stop_reason="tool_use",
             tool_calls=[_tc()],
             usage=UsageStats(input_tokens=60_000, output_tokens=10, context_pct=0.3),
         ),
-        LlmResponse(stop_reason="end_turn", text="summarized"),
         LlmResponse(stop_reason="end_turn", text="done"),
     ])
     registry = ToolRegistry()
@@ -1288,8 +1285,8 @@ async def test_auto_compact_by_token_count(tmp_path: Path) -> None:
     assert ctx.status == "success"
 
 
-# 功能：验证压缩通过步数绝对值触发
-# 设计：设 auto_compact_min_steps=3，第 3 步应触发压缩
+# 功能：验证步数和 turn 数不再单独触发压缩
+# 设计：低 context_pct 下连续多步执行不调用 compactor
 async def test_auto_compact_by_step_count(tmp_path: Path) -> None:
     compactor = Compactor(EventBus(), tmp_path, "sess-d")
     provider = _MockProvider([
@@ -1316,9 +1313,9 @@ async def test_auto_compact_by_step_count(tmp_path: Path) -> None:
     loop = AgentLoop(
         provider, registry, EventBus(),
         compactor=compactor,
-        compact_threshold=0.0,  # 禁用百分比触发
-        auto_compact_min_tokens=0,  # 禁用 token 触发
-        auto_compact_min_steps=3,  # 第 3 步触发
+        compact_threshold=0.70,
+        auto_compact_min_tokens=1,
+        auto_compact_min_steps=1,
     )
     ctx = _ctx(max_steps=10)
     await loop.run(ctx)

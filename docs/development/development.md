@@ -2,36 +2,34 @@
 
 [返回文档中心](../README.md)
 
-## Python 开发
+## TypeScript 主链开发
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
 cd SztuCode
-uv sync
+npm install
 ```
 
 常用命令：
 
 ```bash
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest tests/unit -v
-uv run pytest tests/integration -v
-uv run python scripts/gen_protocol_doc.py --check
+npm run typecheck
+npm test
+npm run build
 ```
 
 启动 daemon 进行手动调试：
 
 ```bash
-uv run sztu-code
+npm run daemon
 ```
 
 另一个终端中：
 
 ```bash
-uv run sztu ping
-uv run sztu run --goal "inspect the repository"
-uv run sztu trace --follow
+npm run cli -- ping
+npm run cli -- run --goal "inspect the repository"
+npm run cli -- chat
 ```
 
 ## 桌面端开发
@@ -52,7 +50,7 @@ cd desktop/src-tauri
 cargo check
 ```
 
-桌面端依赖正在运行的 Python daemon。前端开发服务器端口由 `desktop/vite.config.ts` 决定，Tauri 开发入口由 `desktop/src-tauri/tauri.conf.json` 配置；macOS 专用窗口样式在 `desktop/src-tauri/tauri.macos.conf.json`。
+桌面端依赖 TypeScript daemon，Tauri 启动器会运行 `packages/runtime-ts/dist/main.js`。前端开发服务器端口由 `desktop/vite.config.ts` 决定，Tauri 开发入口由 `desktop/src-tauri/tauri.conf.json` 配置。
 
 ### macOS
 
@@ -66,15 +64,15 @@ cargo check
 
 ### 协议层
 
-- 修改 `core/bus/commands.py` 或 `events.py`；
-- 更新联合类型和 daemon handler；
+- 修改 `packages/protocol/src` 的共享类型；
+- 更新 TypeScript daemon handler；
 - 检查 CLI、TUI 与桌面 Client SDK；
 - 重新生成 Wire Protocol；
 - 添加 round-trip 和集成测试。
 
 ### 工具层
 
-- 实现参数 Pydantic 模型；
+- 实现 TypeScript 参数类型和运行时校验；
 - 声明静态权限或实现动态权限分类；
 - 注册工具；
 - 覆盖参数错误、运行失败、超时和权限拒绝；
@@ -89,7 +87,7 @@ cargo check
 
 ### 配置层
 
-- 更新 dataclass、TOML 校验和环境变量覆盖；
+- 更新 TypeScript Settings 类型、JSON 持久化和环境变量覆盖；
 - 更新 `.env.example` 和配置参考；
 - 为无效类型、边界值和优先级添加测试；
 - 明确是否包含凭据及其持久化方式。
@@ -99,9 +97,7 @@ cargo check
 开发时常用位置：
 
 ```text
-~/.sztu/logs/core.log
-~/.sztu/logs/tui.log
-~/.sztu/traces/daemon.jsonl
+~/.sztu/traces/runtime-ts-events.jsonl
 ~/.sztu/sessions/
 ```
 

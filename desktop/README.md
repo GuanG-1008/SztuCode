@@ -6,7 +6,7 @@
 
 - Node.js 20+
 - Rust stable（`rustup`）
-- 正在运行的 Python daemon（仓库根目录 `uv run sztu-code`）
+- Node.js 20+ 用于运行随桌面应用打包的 TypeScript daemon resource
 - 按 [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) 安装平台依赖：
   - **macOS**：Xcode Command Line Tools（`xcode-select --install`）
   - **Windows**：WebView2、Visual Studio C++ 构建工具
@@ -14,13 +14,14 @@
 
 ## 开发
 
-先在另一个终端启动 Python daemon，再启动桌面端。
+桌面端会自动构建并启动 TypeScript daemon。需要观察 daemon 输出时也可以手动分开运行。
 
 macOS / Linux：
 
 ```bash
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -32,7 +33,8 @@ Windows PowerShell：
 
 ```powershell
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -70,6 +72,8 @@ cd desktop
 npm run tauri build
 ```
 
+构建脚本会把单文件 TypeScript daemon 以及内置 Skills、Prompts、Agent profiles 放入 Tauri resources。当前安装包不内置 Node 可执行文件，因此目标机器仍需安装 Node.js 20+。
+
 产物位置大致为：
 
 - macOS：`desktop/src-tauri/target/release/bundle/macos/*.app`，以及 `bundle/dmg/*.dmg`（若启用 dmg）
@@ -78,4 +82,4 @@ npm run tauri build
 
 当前不要求代码签名或公证；未签名的 macOS `.app` 可能需要在「隐私与安全性」中允许打开。
 
-旧的 Tkinter `sztu-desktop` 保留为兼容入口；新功能应优先加入此目录的 Tauri + Vue 3 客户端与共享 IPC 协议。
+桌面端唯一实现是此目录的 Tauri + Vue 3 客户端；新功能应通过共享 TypeScript IPC 协议接入 daemon。

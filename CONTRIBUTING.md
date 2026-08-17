@@ -13,9 +13,12 @@
 快速检查：
 
 ```bash
-uv sync
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest tests/unit -v
-uv run python scripts/gen_protocol_doc.py --check
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run docs:protocol
+npm run docs:links
 ```
+
+专业 artifact Skill 若修改了 Python helper，应按对应 Skill 文档运行其自带检查；项目主链不需要 Python、uv、Ruff、mypy 或 pytest。

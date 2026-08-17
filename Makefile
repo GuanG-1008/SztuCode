@@ -1,22 +1,18 @@
-.PHONY: lint test integration-test docs verify-s0
+.PHONY: typecheck test build docs docs-links verify
 
-lint:
-	uv run ruff check src tests scripts
-	uv run mypy src
+typecheck:
+	npm run typecheck
 
 test:
-	uv run pytest tests/unit -v
+	npm test
 
-integration-test:
-	uv run pytest tests/integration -v
+build:
+	npm run build
 
 docs:
-	uv run python scripts/gen_protocol_doc.py
+	npm run docs:protocol
 
-verify-s0:
-	uv sync --frozen
-	uv run ruff check src tests scripts
-	uv run mypy src
-	uv run pytest tests/unit -v
-	uv run pytest tests/integration -k ping -v
-	uv run python scripts/gen_protocol_doc.py --check
+docs-links:
+	npm run docs:links
+
+verify: typecheck test build docs docs-links

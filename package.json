@@ -1,0 +1,30 @@
+{
+  "name": "sztucode",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/protocol", "packages/runtime-ts", "packages/cli", "packages/evaluation"],
+  "scripts": {
+    "build": "npm run build --workspace @sztucode/protocol && npm run build --workspace @sztucode/runtime-ts && npm run build --workspace @sztucode/cli",
+    "typecheck": "npm run build --workspace @sztucode/protocol && tsc -p packages/runtime-ts/tsconfig.json --noEmit && npm run typecheck --workspace @sztucode/cli && npm run typecheck --workspace @sztucode/evaluation && tsc -p scripts/tsconfig.json && tsc -p desktop/tsconfig.json --noEmit",
+    "test": "tsx --test packages/runtime-ts/tests/*.test.ts packages/evaluation/tests/*.test.ts",
+    "test:e2e:ts": "npm run build && tsx scripts/runtime_ts_e2e.ts",
+    "daemon": "node packages/runtime-ts/dist/main.js",
+    "daemon:ts": "node packages/runtime-ts/dist/main.js",
+    "daemon:py": "uv run --offline python -m sztu_code.core",
+    "cli": "tsx packages/cli/src/main.ts",
+    "cli:ts": "tsx packages/cli/src/main.ts",
+    "cli:py": "uv run --offline python -m sztu_code.cli",
+    "eval": "tsx packages/evaluation/src/main.ts",
+    "docs:protocol": "tsx scripts/gen_protocol_doc.ts",
+    "docs:links": "tsx scripts/check_markdown_links.ts",
+    "trace:permission": "tsx scripts/trace_permission_flow.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "fflate": "^0.8.3",
+    "tsx": "^4.23.10",
+    "typescript": "~5.6.3",
+    "yaml": "^2.9.0"
+  }
+}

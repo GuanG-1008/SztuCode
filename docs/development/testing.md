@@ -4,71 +4,46 @@
 
 SztuCode 的测试范围应与变更风险匹配。不要把“全量测试通过”作为替代针对性测试的理由，也不要为纯文档改动运行会触发外部模型或写入大量状态的测试。
 
-## 单元测试
+## TypeScript 主链测试
 
 ```bash
-uv run pytest tests/unit -v
+npm run typecheck
+npm test
 ```
 
-适用于协议模型、配置、工具、权限、上下文、会话存储和纯 UI 状态逻辑。单个测试：
+适用于协议、配置、工具、权限、上下文和会话存储。单个文件：
 
 ```bash
-uv run pytest tests/unit/test_envelope.py::test_request_roundtrip -v
+npx tsx --test packages/runtime-ts/tests/context-tools.test.ts
 ```
 
 新增测试应覆盖正常路径、输入边界和关键失败路径。涉及权限时至少覆盖允许和拒绝。
 
-## 集成测试
+## Runtime and CLI diagnostics
+
+运行时协议和权限链路可以通过 Node 客户端验证：
 
 ```bash
-uv run pytest tests/integration -v
+npm run trace:permission
 ```
 
-集成 fixture 会选择随机本地端口、启动真实 daemon 子进程并等待 TCP 就绪；运行前不应已有依赖固定端口的测试 daemon。集成测试适合验证：
-
-- JSON-RPC 请求响应；
-- 会话创建、消息和事件流；
-- 权限审批闭环；
-- daemon 启停与断线行为；
-- 多模块协作产生的状态。
-
-带 `integration` marker 的用例可能调用真实模型 API，需要对应凭据。提交 PR 时应在验证说明中区分本地 daemon 集成测试和真实 Provider 测试。
-
-## 全量 Python 测试
-
-```bash
-uv run pytest tests/ -v
-```
-
-跨模块契约、共享基础设施或发布前变更应运行全量测试。
-
-## 静态检查
-
-```bash
-uv run ruff check src tests scripts
-uv run mypy src
-```
-
-Ruff 检查代码规范和导入；mypy 使用 strict 模式检查 `src/`。不要用全局 ignore 绕过单个真实类型问题。
+该命令连接本地 daemon，订阅事件，自动批准一次权限请求，并在 `run.finished` 后输出事件计数。专业 artifact Skill 的 Python helper 只按其自身文档单独验证，不属于项目测试门禁。
 
 ## 协议一致性
 
 ```bash
-uv run python scripts/gen_protocol_doc.py
-uv run python scripts/gen_protocol_doc.py --check
+npm run typecheck
 ```
 
-第一条重新生成 `docs/reference/wire-protocol.md`，第二条验证生成结果与模型一致。协议变更必须提交生成文件。
+协议变更从 `packages/protocol/src` 开始，并同步 runtime、CLI 和桌面消费者。
 
 ## 文档链接
 
 ```bash
-uv run python scripts/check_markdown_links.py
-uv run pytest tests/unit/test_markdown_links.py -v
+npm run docs:links
 ```
 
-第一条检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效，第二条覆盖解析与退出行为。
-移动或重命名文档后应运行，规则见[文档规范](documentation.md)。
+该命令检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效。移动或重命名文档后应运行，规则见[文档规范](documentation.md)。
 
 ## 桌面端
 
@@ -104,8 +79,8 @@ UI 变更应验证至少一个常规桌面宽度和一个窄窗口，重点检�
 Agent 任务质量评估与普通回归测试用途不同。无需模型凭据的基础设施门禁为：
 
 ```bash
-uv run sztu-eval validate --suite internal
-uv run sztu-eval run --suite internal --runner reference --repeat 3
+npm run eval -- validate --manifest packages/evaluation/tasks/internal-v1.json
+npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval
 ```
 
 真实 daemon、外部 command runner、SWE-bench 和指标语义见
@@ -117,10 +92,10 @@ uv run sztu-eval run --suite internal --runner reference --repeat 3
 
 ```text
 Validation
-- uv run ruff check src tests scripts
-- uv run mypy src
-- uv run pytest tests/unit/test_permission_manager.py -v
-- npm run build (desktop)
+- npm run typecheck
+- npm test
+- npm run build
+- npm run build --prefix desktop
 
 Not run
 - full integration suite: change does not touch daemon behavior
