@@ -18,6 +18,7 @@ import { AgentLoop } from "../src/agent-loop.js";
 import { createMemoryTools, MemoryCatalog } from "../src/memory.js";
 import { SessionStore } from "../src/session-store.js";
 import { RunManager } from "../src/run-manager.js";
+import { StuckLoopTracker, stuckSignature } from "../src/stuck-tracker.js";
 
 const task = (id: string, dependencies: string[] = []) => ({ id, title: id, description: id, owner: "coder" as const, dependencies, completion_criteria: ["done"], allowed_paths: ["src"], depth: 0, token_budget: 0, time_budget_s: 0, max_retries: null });
 const artifact = (workflowTask: WorkflowTask, status: HandoffArtifact["status"] = "succeeded", tokens = 0): HandoffArtifact => ({ workflow_id: "w", task_id: workflowTask.id, role: workflowTask.owner, status, summary: status === "succeeded" ? "done" : "failed", changed_paths: [], scope_escalations: [], commands: [], output: "", conclusion: status, diff_summary: "", test_summary: "", security_summary: "", review_decision: null, tokens, elapsed_s: 0, attempt: 0, child_run_id: "" });
@@ -90,6 +91,28 @@ test("agent loop injects a traceable intervention after repeated permission deni
     assert.match(seenMessages[3] ?? "", /repeatedly rejected/);
     assert.ok(trace.includes("denial.intervention"));
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("agent loop injects a traceable intervention after the same tool failure repeats", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-stuck-intervention-"));
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl")); const trace: string[] = []; events.subscribe((event) => trace.push(event.type));
+    const prompts: string[] = []; let calls = 0;
+    const provider: ModelProvider = { complete: async (messages) => { prompts.push(messages.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n")); calls += 1; return calls <= 2 ? { text: "", tool_calls: [{ id: `missing-${calls}`, name: "read_file", input: { path: "missing.txt" } }], stop_reason: "tool_use" } : { text: "changed approach", tool_calls: [], stop_reason: "end_turn" }; } };
+    const loop = new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async () => true });
+    assert.equal((await loop.run("stuck-run", "read missing", 4)).text, "changed approach");
+    assert.match(prompts[2] ?? "", /appears to be stuck/);
+    assert.ok(trace.includes("stuck.loop"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("stuck tracking preserves nested tool arguments and supports a hard-stop threshold", () => {
+  assert.equal(stuckSignature({ id: "a", name: "custom", input: { nested: { z: 1, a: 2 }, b: true } }), stuckSignature({ id: "b", name: "custom", input: { b: true, nested: { a: 2, z: 1 } } }));
+  const tracker = new StuckLoopTracker(2, 1);
+  tracker.recordFailure("read_file:missing.txt"); tracker.recordFailure("read_file:missing.txt");
+  const intervention = tracker.intervention();
+  assert.equal(intervention?.totalInterventions, 1);
+  assert.equal(intervention?.hardStop, true);
 });
 
 test("memory catalog progressively discloses long context and returns bounded excerpts", () => {

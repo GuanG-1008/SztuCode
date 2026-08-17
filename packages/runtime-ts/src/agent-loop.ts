@@ -4,13 +4,14 @@ import { ToolRegistry, type ToolContext } from "./tools.js";
 import type { PermissionGate } from "./permissions.js";
 import { ContextManager, sanitizeContextMessages, type ContextMessage } from "./context.js";
 import { DenialTracker } from "./denial-tracker.js";
+import { StuckLoopTracker, stuckSignature } from "./stuck-tracker.js";
 
 export type ChatMessage = ContextMessage;
 export type ModelToolCall = { id: string; name: string; input: Record<string, unknown> };
 export type ModelUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
 export type ModelResponse = { text: string; tool_calls: ModelToolCall[]; stop_reason: "end_turn" | "tool_use"; usage?: Partial<ModelUsage>; model?: string; streamed?: boolean };
 export interface ModelProvider { complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void): Promise<ModelResponse> }
-export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean };
+export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number };
 
 export class EchoProvider implements ModelProvider {
   async complete(messages: ChatMessage[]): Promise<ModelResponse> {
@@ -29,6 +30,7 @@ export class AgentLoop {
     if (initialSystem) { const text = typeof initialSystem.content === "string" ? initialSystem.content : JSON.stringify(initialSystem.content); this.publish({ type: "context.injected", run_id: runId, source: "system", label: "上下文注入", chars: text.length, preview: text.slice(0, 160), text, ts: now() }); }
     const usage: ModelUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     const denials = new DenialTracker();
+    const stuck = new StuckLoopTracker(this.options.stuckMaxFailures ?? nonNegativeEnv("SZTU_STUCK_MAX_FAILURES", 2), this.options.stuckMaxTotal ?? nonNegativeEnv("SZTU_STUCK_MAX_TOTAL", 0));
     for (let step = 1; step <= maxSteps; step += 1) {
       signal?.throwIfAborted();
       if (context.needsCompaction()) {
@@ -42,6 +44,12 @@ export class AgentLoop {
       if (intervention) {
         messages.push({ role: "user", content: intervention.message });
         this.publish({ type: "denial.intervention", run_id: runId, tool_name: intervention.toolName, consecutive_count: intervention.consecutiveCount, total_denials: intervention.totalDenials, message: intervention.message, ts: now() });
+      }
+      const stuckIntervention = stuck.intervention();
+      if (stuckIntervention) {
+        messages.push({ role: "user", content: stuckIntervention.message });
+        this.publish({ type: "stuck.loop", run_id: runId, signature: stuckIntervention.signature, consecutive_count: stuckIntervention.consecutiveCount, total_interventions: stuckIntervention.totalInterventions, message: stuckIntervention.message, ts: now() });
+        if (stuckIntervention.hardStop) throw new Error(`Agent stopped after ${stuckIntervention.totalInterventions} stuck-loop intervention(s)`);
       }
       const steering = takeSteering?.() ?? [];
       if (steering.length) {
@@ -70,6 +78,7 @@ export class AgentLoop {
         const tool = this.tools.get(call.name);
         this.publish({ type: "tool.call_started", run_id: runId, tool_use_id: call.id, tool_name: call.name, params: call.input, ts: now() });
         if (!tool) {
+          stuck.recordFailure(stuckSignature(call));
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "unknown_tool", error_message: `Unknown tool: ${call.name}`, elapsed_ms: 0, ts: now() });
           messages.push({ role: "tool", tool_call_id: call.id, content: `Unknown tool: ${call.name}` });
           continue;
@@ -86,10 +95,11 @@ export class AgentLoop {
         const elapsedMs = Date.now() - started;
         if (result.ok) {
           denials.recordSuccess(call.name);
+          stuck.recordSuccess(stuckSignature(call));
           this.publish({ type: "tool.call_finished", run_id: runId, tool_use_id: call.id, tool_name: call.name, elapsed_ms: elapsedMs, output: result.output, ts: now() });
           if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "passed", summary: testSummary(String(call.input.command ?? ""), result.output), ts: now() });
         }
-        else { this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: result.errorType ?? "runtime_error", error_message: result.error ?? "Tool failed", elapsed_ms: elapsedMs, ts: now() }); if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "failed", summary: testSummary(String(call.input.command ?? ""), result.error ?? "Tool failed"), ts: now() }); }
+        else { stuck.recordFailure(stuckSignature(call)); this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: result.errorType ?? "runtime_error", error_message: result.error ?? "Tool failed", elapsed_ms: elapsedMs, ts: now() }); if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "failed", summary: testSummary(String(call.input.command ?? ""), result.error ?? "Tool failed"), ts: now() }); }
         messages.push({ role: "tool", tool_call_id: call.id, content: result.ok ? result.output : result.error ?? "Tool failed" });
       }
       this.publish({ type: "step.finished", run_id: runId, step, ts: now() });
@@ -101,5 +111,6 @@ export class AgentLoop {
 }
 
 const now = () => new Date().toISOString();
+const nonNegativeEnv = (name: string, fallback: number): number => { const value = Number(process.env[name]); return Number.isInteger(value) && value >= 0 ? value : fallback; };
 const isTestCommand = (command: string): boolean => /(^|\s)(pytest|vitest|jest|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test)(\s|$)/i.test(command);
 const testSummary = (command: string, output: string): string => { const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const relevant = lines.filter((line) => /passed|failed|error|test/i.test(line)); return (relevant.at(-1) ?? lines.at(-1) ?? command).slice(0, 300); };

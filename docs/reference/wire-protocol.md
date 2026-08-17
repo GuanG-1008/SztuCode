@@ -515,6 +515,18 @@
 | `message` | `string` | yes |
 | `ts` | `string` | yes |
 
+### StuckLoopEvent
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `"stuck.loop"` | yes |
+| `run_id` | `string` | yes |
+| `signature` | `string` | yes |
+| `consecutive_count` | `number` | yes |
+| `total_interventions` | `number` | yes |
+| `message` | `string` | yes |
+| `ts` | `string` | yes |
+
 ### ToolCallStartedEvent
 
 | Field | Type | Required |
