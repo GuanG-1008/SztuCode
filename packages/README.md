@@ -1,7 +1,7 @@
 # TypeScript Runtime Migration
 
-The repository's default product path uses the TypeScript runtime. Python is
-retained only for legacy clients and specialized artifact scripts:
+The repository's product path is TypeScript. Python is retained only inside
+isolated Skill artifact helpers:
 
 - `protocol/` is the shared JSON-RPC, event and workflow contract.
 - `runtime-ts/` is a Node.js daemon with TCP/NDJSON transport, an event bus,
@@ -23,9 +23,9 @@ Start the TypeScript daemon on port `7438`:
 npm run --prefix packages/runtime-ts dev
 ```
 
-The runtime keeps the same JSON-RPC envelope as the legacy daemon. It supports
+The runtime keeps the same JSON-RPC envelope and supports
 OpenAI-compatible and Anthropic providers, context budgeting, session history,
 workspace tools, permissions, Git operations, skills, MCP clients, subagents,
 and typed workflow orchestration. The Tauri desktop and Node terminal client
-are the supported product surfaces. Python remains only for legacy validation,
-SWE-bench fixtures, and specialized artifact scripts.
+are the supported product surfaces. There is no Python daemon, CLI, TUI, or
+evaluation runtime in the repository.

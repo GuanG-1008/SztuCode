@@ -82,4 +82,4 @@ npm run tauri build
 
 当前不要求代码签名或公证；未签名的 macOS `.app` 可能需要在「隐私与安全性」中允许打开。
 
-旧的 Python 桌面客户端只作为 legacy 代码保留；新功能应加入此目录的 Tauri + Vue 3 客户端与共享 TypeScript IPC 协议。
+桌面端唯一实现是此目录的 Tauri + Vue 3 客户端；新功能应通过共享 TypeScript IPC 协议接入 daemon。

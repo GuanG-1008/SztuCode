@@ -21,4 +21,4 @@ npm run docs:protocol
 npm run docs:links
 ```
 
-只有修改 legacy Python 客户端、兼容 fixture 或专业 artifact 脚本时，才需要额外运行对应的 `uv`、Ruff、mypy 与 pytest 检查。
+专业 artifact Skill 若修改了 Python helper，应按对应 Skill 文档运行其自带检查；项目主链不需要 Python、uv、Ruff、mypy 或 pytest。

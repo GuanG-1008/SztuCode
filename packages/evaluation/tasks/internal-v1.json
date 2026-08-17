@@ -1,27 +1,19 @@
 {
   "schema_version": "1.0",
   "name": "internal-v1",
-  "description": "Ten deterministic coding tasks covering long context, cross-language contracts, security, and collaboration.",
+  "description": "Ten deterministic TypeScript coding tasks covering long context, contracts, security, and collaboration.",
   "tasks": [
     {
       "id": "internal.long-context.config-propagation",
       "source": "internal",
       "title": "Propagate the daemon port contract",
       "category": "long_context",
-      "prompt": "Change the default daemon port from 7000 to 7437 in both the runtime configuration and the operator settings document. Do not edit the verifier.",
-      "tags": ["python", "documentation", "cross-file"],
-      "workspace_files": {
-        "app/config.py": "DEFAULT_PORT = 7000\n",
-        "app/server.py": "from app.config import DEFAULT_PORT\n\ndef listen_address():\n    return f\"127.0.0.1:{DEFAULT_PORT}\"\n",
-        "docs/settings.txt": "daemon_port=7000\n",
-        "verify.py": "from app.config import DEFAULT_PORT\nfrom app.server import listen_address\nfrom pathlib import Path\nassert DEFAULT_PORT == 7437\nassert listen_address() == '127.0.0.1:7437'\nassert Path('docs/settings.txt').read_text().strip() == 'daemon_port=7437'\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["app/config.py", "docs/settings.txt"],
-      "reference_changes": [
-        {"path": "app/config.py", "content": "DEFAULT_PORT = 7437\n"},
-        {"path": "docs/settings.txt", "content": "daemon_port=7437\n"}
-      ]
+      "prompt": "Change the default daemon port from 7000 to 7438 in both the runtime configuration and the operator settings document. Do not edit the verifier.",
+      "tags": ["typescript", "documentation", "cross-file"],
+      "workspace_files": {"app/config.mjs": "export const DEFAULT_PORT = 7000;\n", "app/server.mjs": "import { DEFAULT_PORT } from './config.mjs';\nexport const listenAddress = () => `127.0.0.1:${DEFAULT_PORT}`;\n", "docs/settings.txt": "daemon_port=7000\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { readFile } from 'node:fs/promises';\nimport { DEFAULT_PORT } from './app/config.mjs';\nimport { listenAddress } from './app/server.mjs';\nassert.equal(DEFAULT_PORT, 7438);\nassert.equal(listenAddress(), '127.0.0.1:7438');\nassert.equal((await readFile('docs/settings.txt', 'utf8')).trim(), 'daemon_port=7438');\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["app/config.mjs", "docs/settings.txt"],
+      "reference_changes": [{"path": "app/config.mjs", "content": "export const DEFAULT_PORT = 7438;\n"}, {"path": "docs/settings.txt", "content": "daemon_port=7438\n"}]
     },
     {
       "id": "internal.long-context.error-contract",
@@ -29,160 +21,107 @@
       "title": "Synchronize error codes across modules",
       "category": "long_context",
       "prompt": "The daemon and client disagree on the workspace-not-found error code. Make both modules use -32004 while preserving every other error code.",
-      "tags": ["python", "contract", "cross-file"],
-      "workspace_files": {
-        "daemon/errors.py": "WORKSPACE_NOT_FOUND = -32040\nPERMISSION_DENIED = -32003\n",
-        "client/errors.py": "MESSAGES = {-32040: 'workspace missing', -32003: 'permission denied'}\n",
-        "verify.py": "from daemon.errors import PERMISSION_DENIED, WORKSPACE_NOT_FOUND\nfrom client.errors import MESSAGES\nassert WORKSPACE_NOT_FOUND == -32004\nassert PERMISSION_DENIED == -32003\nassert MESSAGES[-32004] == 'workspace missing'\nassert -32040 not in MESSAGES\nassert MESSAGES[-32003] == 'permission denied'\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["daemon/errors.py", "client/errors.py"],
-      "reference_changes": [
-        {"path": "daemon/errors.py", "content": "WORKSPACE_NOT_FOUND = -32004\nPERMISSION_DENIED = -32003\n"},
-        {"path": "client/errors.py", "content": "MESSAGES = {-32004: 'workspace missing', -32003: 'permission denied'}\n"}
-      ]
+      "tags": ["typescript", "contract", "cross-file"],
+      "workspace_files": {"daemon/errors.mjs": "export const WORKSPACE_NOT_FOUND = -32040;\nexport const PERMISSION_DENIED = -32003;\n", "client/errors.mjs": "export const MESSAGES = new Map([[-32040, 'workspace missing'], [-32003, 'permission denied']]);\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { PERMISSION_DENIED, WORKSPACE_NOT_FOUND } from './daemon/errors.mjs';\nimport { MESSAGES } from './client/errors.mjs';\nassert.equal(WORKSPACE_NOT_FOUND, -32004);\nassert.equal(PERMISSION_DENIED, -32003);\nassert.equal(MESSAGES.get(-32004), 'workspace missing');\nassert.equal(MESSAGES.has(-32040), false);\nassert.equal(MESSAGES.get(-32003), 'permission denied');\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["daemon/errors.mjs", "client/errors.mjs"],
+      "reference_changes": [{"path": "daemon/errors.mjs", "content": "export const WORKSPACE_NOT_FOUND = -32004;\nexport const PERMISSION_DENIED = -32003;\n"}, {"path": "client/errors.mjs", "content": "export const MESSAGES = new Map([[-32004, 'workspace missing'], [-32003, 'permission denied']]);\n"}]
     },
     {
-      "id": "internal.cross-language.protocol-version",
+      "id": "internal.contract.protocol-version",
       "source": "internal",
-      "title": "Update a Python, TypeScript, and JSON protocol version",
+      "title": "Update runtime, desktop, and JSON protocol versions",
       "category": "cross_language",
-      "prompt": "Upgrade the wire protocol version from 1 to 2 in the Python daemon, TypeScript desktop client, and JSON schema. Keep all three representations identical.",
-      "tags": ["python", "typescript", "json"],
-      "workspace_files": {
-        "backend/protocol.py": "PROTOCOL_VERSION = 1\n",
-        "desktop/protocol.ts": "export const PROTOCOL_VERSION = 1;\n",
-        "schema/protocol.json": "{\"version\": 1, \"transport\": \"ndjson\"}\n",
-        "verify.py": "import json\nimport re\nfrom backend.protocol import PROTOCOL_VERSION\nfrom pathlib import Path\nts = Path('desktop/protocol.ts').read_text()\nversion = int(re.search(r'PROTOCOL_VERSION = (\\d+)', ts).group(1))\nschema = json.loads(Path('schema/protocol.json').read_text())\nassert (PROTOCOL_VERSION, version, schema['version']) == (2, 2, 2)\nassert schema['transport'] == 'ndjson'\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["backend/protocol.py", "desktop/protocol.ts", "schema/protocol.json"],
-      "reference_changes": [
-        {"path": "backend/protocol.py", "content": "PROTOCOL_VERSION = 2\n"},
-        {"path": "desktop/protocol.ts", "content": "export const PROTOCOL_VERSION = 2;\n"},
-        {"path": "schema/protocol.json", "content": "{\"version\": 2, \"transport\": \"ndjson\"}\n"}
-      ]
+      "prompt": "Upgrade the wire protocol version from 1 to 2 in the TypeScript runtime, desktop client, and JSON schema. Keep all three representations identical.",
+      "tags": ["typescript", "json", "contract"],
+      "workspace_files": {"runtime/protocol.mjs": "export const PROTOCOL_VERSION = 1;\n", "desktop/protocol.mjs": "export const PROTOCOL_VERSION = 1;\n", "schema/protocol.json": "{\"version\": 1, \"transport\": \"ndjson\"}\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { readFile } from 'node:fs/promises';\nimport { PROTOCOL_VERSION as runtimeVersion } from './runtime/protocol.mjs';\nimport { PROTOCOL_VERSION as desktopVersion } from './desktop/protocol.mjs';\nconst schema = JSON.parse(await readFile('schema/protocol.json', 'utf8'));\nassert.deepEqual([runtimeVersion, desktopVersion, schema.version], [2, 2, 2]);\nassert.equal(schema.transport, 'ndjson');\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["runtime/protocol.mjs", "desktop/protocol.mjs", "schema/protocol.json"],
+      "reference_changes": [{"path": "runtime/protocol.mjs", "content": "export const PROTOCOL_VERSION = 2;\n"}, {"path": "desktop/protocol.mjs", "content": "export const PROTOCOL_VERSION = 2;\n"}, {"path": "schema/protocol.json", "content": "{\"version\": 2, \"transport\": \"ndjson\"}\n"}]
     },
     {
-      "id": "internal.cross-language.permission-modes",
+      "id": "internal.contract.permission-modes",
       "source": "internal",
-      "title": "Synchronize permission modes across Python and TypeScript",
+      "title": "Synchronize permission modes across packages",
       "category": "cross_language",
-      "prompt": "Add the auto permission mode to the Python and TypeScript mode lists without reordering the existing modes.",
-      "tags": ["python", "typescript", "permissions"],
-      "workspace_files": {
-        "backend/modes.py": "MODES = ['normal', 'plan', 'accept_edits']\n",
-        "desktop/modes.ts": "export const modes = ['normal', 'plan', 'accept_edits'] as const;\n",
-        "verify.py": "from backend.modes import MODES\nfrom pathlib import Path\nts = Path('desktop/modes.ts').read_text()\nassert MODES == ['normal', 'plan', 'accept_edits', 'auto']\nassert ts.count(\"'auto'\") == 1\nassert ts.index(\"'accept_edits'\") < ts.index(\"'auto'\")\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["backend/modes.py", "desktop/modes.ts"],
-      "reference_changes": [
-        {"path": "backend/modes.py", "content": "MODES = ['normal', 'plan', 'accept_edits', 'auto']\n"},
-        {"path": "desktop/modes.ts", "content": "export const modes = ['normal', 'plan', 'accept_edits', 'auto'] as const;\n"}
-      ]
+      "prompt": "Add the auto permission mode to the protocol and desktop mode lists without reordering the existing modes.",
+      "tags": ["typescript", "permissions", "contract"],
+      "workspace_files": {"protocol/modes.mjs": "export const modes = ['normal', 'plan', 'accept_edits'];\n", "desktop/modes.mjs": "export const modes = ['normal', 'plan', 'accept_edits'];\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { modes as protocolModes } from './protocol/modes.mjs';\nimport { modes as desktopModes } from './desktop/modes.mjs';\nconst expected = ['normal', 'plan', 'accept_edits', 'auto'];\nassert.deepEqual(protocolModes, expected);\nassert.deepEqual(desktopModes, expected);\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["protocol/modes.mjs", "desktop/modes.mjs"],
+      "reference_changes": [{"path": "protocol/modes.mjs", "content": "export const modes = ['normal', 'plan', 'accept_edits', 'auto'];\n"}, {"path": "desktop/modes.mjs", "content": "export const modes = ['normal', 'plan', 'accept_edits', 'auto'];\n"}]
     },
     {
       "id": "internal.security.path-traversal",
       "source": "internal",
       "title": "Reject workspace path traversal",
       "category": "security",
-      "prompt": "Harden resolve_workspace_path so relative paths remain inside the workspace and traversal or absolute paths raise ValueError.",
-      "tags": ["python", "path-safety"],
-      "workspace_files": {
-        "security/safe_path.py": "from pathlib import Path\n\ndef resolve_workspace_path(root: Path, requested: str) -> Path:\n    return root / requested\n",
-        "verify.py": "from pathlib import Path\nfrom tempfile import TemporaryDirectory\nfrom security.safe_path import resolve_workspace_path\nwith TemporaryDirectory() as raw:\n    root = Path(raw).resolve()\n    assert resolve_workspace_path(root, 'src/app.py') == root / 'src/app.py'\n    for unsafe in ('../secret.txt', '/tmp/secret.txt'):\n        try:\n            resolve_workspace_path(root, unsafe)\n        except ValueError:\n            pass\n        else:\n            raise AssertionError(unsafe)\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["security/safe_path.py"],
-      "reference_changes": [
-        {"path": "security/safe_path.py", "content": "from pathlib import Path\n\ndef resolve_workspace_path(root: Path, requested: str) -> Path:\n    candidate = (root / requested).resolve()\n    resolved_root = root.resolve()\n    if not candidate.is_relative_to(resolved_root):\n        raise ValueError('path escapes workspace')\n    return candidate\n"}
-      ]
+      "prompt": "Harden resolveWorkspacePath so relative paths remain inside the workspace and traversal or absolute paths throw an error.",
+      "tags": ["typescript", "path-safety"],
+      "workspace_files": {"security/safe-path.mjs": "import path from 'node:path';\nexport const resolveWorkspacePath = (root, requested) => path.join(root, requested);\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport os from 'node:os';\nimport path from 'node:path';\nimport { resolveWorkspacePath } from './security/safe-path.mjs';\nconst root = path.join(os.tmpdir(), 'workspace');\nassert.equal(resolveWorkspacePath(root, 'src/app.ts'), path.join(root, 'src/app.ts'));\nfor (const unsafe of ['../secret.txt', path.resolve(root, '..', 'secret.txt')]) assert.throws(() => resolveWorkspacePath(root, unsafe));\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["security/safe-path.mjs"],
+      "reference_changes": [{"path": "security/safe-path.mjs", "content": "import path from 'node:path';\nexport const resolveWorkspacePath = (root, requested) => {\n  if (path.isAbsolute(requested)) throw new Error('absolute paths are not allowed');\n  const resolvedRoot = path.resolve(root);\n  const candidate = path.resolve(resolvedRoot, requested);\n  const relative = path.relative(resolvedRoot, candidate);\n  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('path escapes workspace');\n  return candidate;\n};\n"}]
     },
     {
       "id": "internal.security.secret-redaction",
       "source": "internal",
       "title": "Redact API credentials from diagnostic text",
       "category": "security",
-      "prompt": "Implement redact_secrets so OpenAI-style sk tokens and api_key assignments are replaced with [REDACTED] without changing ordinary text.",
-      "tags": ["python", "secrets", "logging"],
-      "workspace_files": {
-        "security/redact.py": "def redact_secrets(text: str) -> str:\n    return text\n",
-        "verify.py": "from security.redact import redact_secrets\ntoken = 'sk-' + 'example_token_123456'\ntext = f'request {token} api_key=very-secret status=failed'\nredacted = redact_secrets(text)\nassert 'example_token_123456' not in redacted\nassert 'very-secret' not in redacted\nassert redacted.count('[REDACTED]') == 2\nassert redact_secrets('status=ok') == 'status=ok'\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["security/redact.py"],
-      "reference_changes": [
-        {"path": "security/redact.py", "content": "import re\n\ndef redact_secrets(text: str) -> str:\n    text = re.sub(r'sk-[A-Za-z0-9_-]{16,}', '[REDACTED]', text)\n    return re.sub(r'api_key=[^\\s]+', '[REDACTED]', text)\n"}
-      ]
+      "prompt": "Implement redactSecrets so OpenAI-style sk tokens and api_key assignments are replaced with [REDACTED] without changing ordinary text.",
+      "tags": ["typescript", "secrets", "logging"],
+      "workspace_files": {"security/redact.mjs": "export const redactSecrets = (text) => text;\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { redactSecrets } from './security/redact.mjs';\nconst token = 'sk-' + 'example_token_123456';\nconst redacted = redactSecrets(`request ${token} api_key=very-secret status=failed`);\nassert.equal(redacted.includes('example_token_123456'), false);\nassert.equal(redacted.includes('very-secret'), false);\nassert.equal((redacted.match(/\\[REDACTED\\]/g) ?? []).length, 2);\nassert.equal(redactSecrets('status=ok'), 'status=ok');\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["security/redact.mjs"],
+      "reference_changes": [{"path": "security/redact.mjs", "content": "export const redactSecrets = (text) => text.replace(/sk-[A-Za-z0-9_-]{16,}/g, '[REDACTED]').replace(/api_key=[^\\s]+/g, '[REDACTED]');\n"}]
     },
     {
       "id": "internal.collaboration.scope-audit",
       "source": "internal",
       "title": "Report changes outside an assigned scope",
       "category": "collaboration",
-      "prompt": "Implement unexpected_paths so a reviewer receives the sorted unique paths changed outside the assigned allowlist.",
-      "tags": ["python", "scope", "review"],
-      "workspace_files": {
-        "workflow/audit.py": "def unexpected_paths(changed: list[str], allowed: list[str]) -> list[str]:\n    return []\n",
-        "verify.py": "from workflow.audit import unexpected_paths\nassert unexpected_paths(['src/a.py', 'tests/t.py', 'src/a.py'], ['src/a.py']) == ['tests/t.py']\nassert unexpected_paths(['src/a.py'], ['src/a.py']) == []\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["workflow/audit.py"],
-      "reference_changes": [
-        {"path": "workflow/audit.py", "content": "def unexpected_paths(changed: list[str], allowed: list[str]) -> list[str]:\n    return sorted(set(changed) - set(allowed))\n"}
-      ]
+      "prompt": "Implement unexpectedPaths so a reviewer receives the sorted unique paths changed outside the assigned allowlist.",
+      "tags": ["typescript", "scope", "review"],
+      "workspace_files": {"workflow/audit.mjs": "export const unexpectedPaths = () => [];\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { unexpectedPaths } from './workflow/audit.mjs';\nassert.deepEqual(unexpectedPaths(['src/a.ts', 'tests/t.ts', 'src/a.ts'], ['src/a.ts']), ['tests/t.ts']);\nassert.deepEqual(unexpectedPaths(['src/a.ts'], ['src/a.ts']), []);\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["workflow/audit.mjs"],
+      "reference_changes": [{"path": "workflow/audit.mjs", "content": "export const unexpectedPaths = (changed, allowed) => [...new Set(changed)].filter((item) => !new Set(allowed).has(item)).sort();\n"}]
     },
     {
       "id": "internal.collaboration.handoff-order",
       "source": "internal",
       "title": "Respect dependencies when ordering handoffs",
       "category": "collaboration",
-      "prompt": "Fix handoff_order to return every task after its dependencies and raise ValueError for a cycle.",
-      "tags": ["python", "task-graph", "handoff"],
-      "workspace_files": {
-        "workflow/graph.py": "def handoff_order(tasks: dict[str, list[str]]) -> list[str]:\n    return sorted(tasks)\n",
-        "verify.py": "from workflow.graph import handoff_order\ntasks = {'review': ['test'], 'code': ['plan'], 'plan': [], 'test': ['code']}\nassert handoff_order(tasks) == ['plan', 'code', 'test', 'review']\ntry:\n    handoff_order({'a': ['b'], 'b': ['a']})\nexcept ValueError:\n    pass\nelse:\n    raise AssertionError('cycle not rejected')\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["workflow/graph.py"],
-      "reference_changes": [
-        {"path": "workflow/graph.py", "content": "def handoff_order(tasks: dict[str, list[str]]) -> list[str]:\n    pending = {name: set(deps) for name, deps in tasks.items()}\n    order: list[str] = []\n    while pending:\n        ready = sorted(name for name, deps in pending.items() if not deps)\n        if not ready:\n            raise ValueError('cyclic task graph')\n        for name in ready:\n            order.append(name)\n            pending.pop(name)\n        for deps in pending.values():\n            deps.difference_update(ready)\n    return order\n"}
-      ]
+      "prompt": "Fix handoffOrder to return every task after its dependencies and throw for a cycle.",
+      "tags": ["typescript", "task-graph", "handoff"],
+      "workspace_files": {"workflow/graph.mjs": "export const handoffOrder = (tasks) => Object.keys(tasks).sort();\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { handoffOrder } from './workflow/graph.mjs';\nconst tasks = { review: ['test'], code: ['plan'], plan: [], test: ['code'] };\nassert.deepEqual(handoffOrder(tasks), ['plan', 'code', 'test', 'review']);\nassert.throws(() => handoffOrder({ a: ['b'], b: ['a'] }));\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["workflow/graph.mjs"],
+      "reference_changes": [{"path": "workflow/graph.mjs", "content": "export const handoffOrder = (tasks) => {\n  const pending = new Map(Object.entries(tasks).map(([name, deps]) => [name, new Set(deps)]));\n  const order = [];\n  while (pending.size) {\n    const ready = [...pending].filter(([, deps]) => deps.size === 0).map(([name]) => name).sort();\n    if (!ready.length) throw new Error('cyclic task graph');\n    for (const name of ready) { order.push(name); pending.delete(name); }\n    for (const deps of pending.values()) for (const name of ready) deps.delete(name);\n  }\n  return order;\n};\n"}]
     },
     {
       "id": "internal.general.retry-budget",
       "source": "internal",
       "title": "Enforce an exact retry budget",
       "category": "general",
-      "prompt": "Fix can_retry so max_retries means the number of retries after the initial attempt; attempts are numbered from one.",
-      "tags": ["python", "budget", "boundary"],
-      "workspace_files": {
-        "runtime/retry.py": "def can_retry(attempt: int, max_retries: int) -> bool:\n    return attempt < max_retries\n",
-        "verify.py": "from runtime.retry import can_retry\nassert can_retry(1, 0) is False\nassert can_retry(1, 1) is True\nassert can_retry(2, 1) is False\nassert can_retry(2, 2) is True\nassert can_retry(3, 2) is False\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["runtime/retry.py"],
-      "reference_changes": [
-        {"path": "runtime/retry.py", "content": "def can_retry(attempt: int, max_retries: int) -> bool:\n    return attempt <= max_retries\n"}
-      ]
+      "prompt": "Fix canRetry so maxRetries means the number of retries after the initial attempt; attempts are numbered from one.",
+      "tags": ["typescript", "budget", "boundary"],
+      "workspace_files": {"runtime/retry.mjs": "export const canRetry = (attempt, maxRetries) => attempt < maxRetries;\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { canRetry } from './runtime/retry.mjs';\nassert.equal(canRetry(1, 0), false);\nassert.equal(canRetry(1, 1), true);\nassert.equal(canRetry(2, 1), false);\nassert.equal(canRetry(2, 2), true);\nassert.equal(canRetry(3, 2), false);\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["runtime/retry.mjs"],
+      "reference_changes": [{"path": "runtime/retry.mjs", "content": "export const canRetry = (attempt, maxRetries) => attempt <= maxRetries;\n"}]
     },
     {
       "id": "internal.general.failure-reason",
       "source": "internal",
       "title": "Preserve structured failure reasons",
       "category": "general",
-      "prompt": "Implement failure_reason so explicit reasons win, timeouts are classified as timeout, and all other failures use unknown without reporting a success as failed.",
-      "tags": ["python", "reporting", "failure"],
-      "workspace_files": {
-        "runtime/result.py": "def failure_reason(status: str, reason: str | None) -> str | None:\n    return reason\n",
-        "verify.py": "from runtime.result import failure_reason\nassert failure_reason('success', None) is None\nassert failure_reason('failed', 'permission_denied') == 'permission_denied'\nassert failure_reason('timed_out', None) == 'timeout'\nassert failure_reason('failed', None) == 'unknown'\n"
-      },
-      "validation": {"command": ["{python}", "verify.py"], "timeout_seconds": 10},
-      "expected_modified_files": ["runtime/result.py"],
-      "reference_changes": [
-        {"path": "runtime/result.py", "content": "def failure_reason(status: str, reason: str | None) -> str | None:\n    if status == 'success':\n        return None\n    if reason:\n        return reason\n    if status == 'timed_out':\n        return 'timeout'\n    return 'unknown'\n"}
-      ]
+      "prompt": "Implement failureReason so explicit reasons win, timeouts are classified as timeout, and all other failures use unknown without reporting a success as failed.",
+      "tags": ["typescript", "reporting", "failure"],
+      "workspace_files": {"runtime/result.mjs": "export const failureReason = (_status, reason) => reason;\n", "verify.mjs": "import assert from 'node:assert/strict';\nimport { failureReason } from './runtime/result.mjs';\nassert.equal(failureReason('success', undefined), undefined);\nassert.equal(failureReason('failed', 'permission_denied'), 'permission_denied');\nassert.equal(failureReason('timed_out', undefined), 'timeout');\nassert.equal(failureReason('failed', undefined), 'unknown');\n"},
+      "validation": {"command": ["node", "verify.mjs"], "timeout_seconds": 10},
+      "expected_modified_files": ["runtime/result.mjs"],
+      "reference_changes": [{"path": "runtime/result.mjs", "content": "export const failureReason = (status, reason) => {\n  if (status === 'success') return undefined;\n  if (reason) return reason;\n  return status === 'timed_out' ? 'timeout' : 'unknown';\n};\n"}]
     }
   ]
 }

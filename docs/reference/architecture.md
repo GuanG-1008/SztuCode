@@ -40,7 +40,7 @@ npm 发布入口会启动 TypeScript daemon，并让 Node CLI 创建绑定到目
 
 `desktop/` 使用 Tauri 2、Vue 3 和 TypeScript。Rust 层负责原生窗口、目录选择和受控 TCP 桥；前端负责工作区、会话、执行时间线、权限、文件预览和 Diff 审阅。
 
-legacy Python TUI 和 CLI 位于 `src/sztu_code`，只作为兼容代码保留，不属于默认产品链。
+仓库不再包含 Python daemon、CLI 或 TUI。仅部分 artifact Skill 按需调用 Python helper；这些脚本不定义产品协议或运行时行为。
 
 ## 请求与事件链路
 

@@ -18,7 +18,7 @@ npm run docs:protocol
 npm run docs:links
 ```
 
-如只修改 legacy Python 兼容代码或 artifact 工具，再补充对应的 `uv` / Ruff / mypy / pytest 检查。
+如只修改 Skill 的 Python artifact helper，再补充该 Skill 文档要求的专项检查。
 
 ## Risk
 

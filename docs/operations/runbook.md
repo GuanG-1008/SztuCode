@@ -115,7 +115,7 @@ Tauri 启动器会拉起 TypeScript daemon。手动调试时先在仓库根目�
 ## 恢复与升级
 
 - 升级前记录当前 commit，并备份 `.sztu` 用户数据。
-- 拉取代码后运行 `npm install && npm run build`。仅维护 legacy Python 或专业 artifact 脚本时再运行 `uv sync`。
+- 拉取代码后运行 `npm install && npm run build`。专业 artifact Skill 的 Python helper 按对应 Skill 文档准备，不影响 daemon 启动。
 - 配置解析失败时，不要直接删除配置；先复制备份并按错误字段修正。
 - 会话或工作区数据异常时，保留原始文件用于复现，不要在未备份时批量清理。
 - 仓库公共分支发生历史重写后，协作者应重新 fetch，并根据自己的未推送提交选择 rebase、cherry-pick 或重新克隆；不要盲目 hard reset 有本地工作的目录。

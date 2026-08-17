@@ -101,7 +101,7 @@ Eval Runner ───┘                                  │
 - Git；
 - Node.js 20+；
 - Anthropic 或 OpenAI-compatible API 凭据；
-- 可选：Rust 和 Tauri 平台依赖，用于桌面端开发；Python 3.12 + uv 仅用于 legacy 测试和专业 artifact 脚本。
+- 可选：Rust 和 Tauri 平台依赖，用于桌面端开发。专业 artifact Skill 可能按需调用 Python，但不属于项目运行时依赖。
 
 ### 安装
 
@@ -199,10 +199,9 @@ SztuCode/
 │  ├─ runtime-ts/    # daemon、Agent Loop、工具、权限与扩展系统
 │  ├─ cli/           # Node 命令行客户端
 │  └─ evaluation/    # TypeScript 评测 runner 与报告
-├─ src/sztu_code/    # legacy Python 实现及专业 artifact 脚本
 ├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
-├─ tests/            # 单元测试与集成测试
-├─ eval/             # 轨迹分析、报告和 SWE-bench 适配
+├─ scripts/          # TypeScript 工程与诊断脚本
+├─ tmp/               # 本地评测产物（不提交）
 ├─ scripts/          # 协议生成等工程脚本
 └─ docs/             # 使用、开发、架构、运维、评测和历史文档
 ```
@@ -222,7 +221,7 @@ npm run build --prefix desktop
 
 共享协议修改位于 `packages/protocol`。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
 
-离线运行 10 个内部 Coding Agent 基准并生成 JSON/Markdown 报告：
+离线运行 10 个内部 TypeScript Coding Agent 基准并生成 JSON/Markdown 报告：
 
 ```bash
 npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval

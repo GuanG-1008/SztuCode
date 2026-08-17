@@ -44,13 +44,13 @@ npm run eval -- list --manifest packages/evaluation/tasks/internal-v1.json
 用离线 reference runner 验证 10 个内部任务，每个重复三次：
 
 ```bash
-npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir eval/reports/internal-reference
+npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval/internal-reference
 ```
 
 输出目录包含：
 
 ```text
-eval/reports/internal-reference/
+tmp/eval/internal-reference/
 ├── report.json   # 完整运行记录、聚合指标和失败原因
 └── summary.md    # 面向人类的指标表和稳定性汇总
 ```
@@ -78,7 +78,7 @@ npm run eval -- run \
   --allow-auto-permissions \
   --repeat 3 \
   --timeout 600 \
-  --output-dir eval/reports/internal-agent
+  --output-dir tmp/eval/internal-agent
 ```
 
 缺少 `--allow-auto-permissions` 时命令会在连接 daemon 前拒绝执行。runner 会先保存 daemon 当前
@@ -94,8 +94,8 @@ command runner 直接执行解析后的 argv，不经过 Shell：
 npm run eval -- run \
   --suite internal \
   --runner command \
-  --command "python path/to/agent_adapter.py" \
-  --output-dir eval/reports/custom-agent
+  --command "node path/to/agent_adapter.mjs" \
+  --output-dir tmp/eval/custom-agent
 ```
 
 外部进程从环境变量取得契约：
@@ -141,23 +141,23 @@ command runner 是接入接口，不是操作系统沙箱；只应运行受信�
   "title": "Fix a boundary condition",
   "category": "general",
   "prompt": "Fix can_retry without editing the verifier.",
-  "tags": ["python"],
+  "tags": ["typescript"],
   "workspace_files": {
-    "retry.py": "def can_retry(attempt, limit): return attempt < limit\n",
-    "verify.py": "from retry import can_retry\nassert can_retry(1, 1)\n"
+    "retry.mjs": "export const canRetry = (attempt, limit) => attempt < limit;\n",
+    "verify.mjs": "import assert from 'node:assert/strict';\nimport { canRetry } from './retry.mjs';\nassert.equal(canRetry(1, 1), true);\n"
   },
   "validation": {
-    "command": ["{python}", "verify.py"],
+    "command": ["node", "verify.mjs"],
     "timeout_seconds": 10
   },
-  "expected_modified_files": ["retry.py"],
+  "expected_modified_files": ["retry.mjs"],
   "reference_changes": [
-    {"path": "retry.py", "content": "def can_retry(attempt, limit): return attempt <= limit\n"}
+    {"path": "retry.mjs", "content": "export const canRetry = (attempt, limit) => attempt <= limit;\n"}
   ]
 }
 ```
 
-`{python}` 会替换为当前平台的 Python 解释器，仅用于执行 Python fixture 的独立验证器；评测调度器本身仍由 TypeScript 运行。所有清单路径必须使用 `/`，绝对路径、`..` 和
+验证命令直接使用 Node 执行 TypeScript/JavaScript fixture；评测调度器和内部任务均由 TypeScript/Node 运行。所有清单路径必须使用 `/`，绝对路径、`..` 和
 Windows 反斜杠会在创建工作区前被拒绝。公开任务文件不会包含 `workspace_files` 或
 `reference_changes`，外部 Agent 无法通过 runner 契约读取参考答案。
 
@@ -196,7 +196,7 @@ npm run eval -- run \
   --permission-mode auto \
   --allow-auto-permissions \
   --max-tasks 3 \
-  --output-dir eval/reports/swebench-smoke
+  --output-dir tmp/eval/swebench-smoke
 ```
 
 这一步会克隆公开仓库并调用真实模型，必须显式执行。生成的运行记录仍是 `unscored`。随后导出
@@ -205,8 +205,8 @@ npm run eval -- run \
 ```bash
 npm run eval -- export-swebench \
   --suite swebench-lite \
-  --report eval/reports/swebench-smoke/report.json \
-  --output eval/reports/swebench-smoke/predictions.jsonl \
+  --report tmp/eval/swebench-smoke/report.json \
+  --output tmp/eval/swebench-smoke/predictions.jsonl \
   --model-name sztu-code
 ```
 
@@ -216,7 +216,7 @@ npm run eval -- export-swebench \
 python -m swebench.harness.run_evaluation \
   --dataset_name princeton-nlp/SWE-bench_Lite \
   --split test \
-  --predictions_path eval/reports/swebench-smoke/predictions.jsonl \
+  --predictions_path tmp/eval/swebench-smoke/predictions.jsonl \
   --instance_ids astropy__astropy-12907 astropy__astropy-14182 astropy__astropy-14365 \
   --max_workers 1 \
   --run_id sztucode-smoke
@@ -231,15 +231,13 @@ Markdown 模板可以独立于评测重新生成：
 
 ```bash
 npm run eval -- report \
-  --input eval/reports/internal-agent/report.json \
-  --output eval/reports/internal-agent/summary.md
+  --input tmp/eval/internal-agent/report.json \
+  --output tmp/eval/internal-agent/summary.md
 ```
 
 `report.json` 可能包含 patch 和有界 runner 输出。公开报告前仍应检查其中是否包含外部仓库内容、
 个人路径或敏感信息；评测工作区、缓存和大型 Docker 产物不得提交。
 
-## 旧入口
+## 运行时边界
 
-`python -m eval.swebench.adapter`、`python -m eval.trajectory.analyzer` 和
-`python -m eval.reports.generator` 暂时保留，便于读取历史实验。新评测和跨版本比较应使用
-`npm run eval` 的版本化 JSON 报告；旧脚本输出不具备相同的失败与稳定性语义。
+评测调度器、报告生成器和 SWE-bench patch 导出均由 `packages/evaluation` 的 TypeScript 实现负责。官方 SWE-bench Docker harness 仍按其上游要求使用 Python 命令，但这不属于 SztuCode 的运行时。

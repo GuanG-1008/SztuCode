@@ -20,7 +20,7 @@ Issue #18 的合并门禁使用 `eval/workflow/scenarios.json` 中五个固定�
 
 ## DeepSeek V4 Flash 补充评测
 
-2026-08-07 使用 DeepSeek 官方 API 的 [`deepseek-v4-flash`](https://api-docs.deepseek.com/quick_start/pricing/) 默认思考模式对同一批五个红灯任务做了在线复测，去敏结果保存在 [`eval/workflow/results/deepseek-v4-flash-2026-08-07.json`](../../eval/workflow/results/deepseek-v4-flash-2026-08-07.json)。单 Agent 和多 Agent 均为 5/5 测试通过；多 Agent 的五次 Reviewer 仲裁全部接受，16 份角色交接和 5 份仲裁进入 Trace。
+2026-08-07 使用 DeepSeek 官方 API 的 `deepseek-v4-flash` 默认思考模式对同一批五个红灯任务做了在线复测。该结果属于历史 runner 记录，原始评测产物不再随仓库发布。
 
 该次运行中，单 Agent 合计 65,050 tokens / 66.363 秒，多 Agent 合计 778,296 tokens / 596.455 秒，分别为 11.965 倍和 8.988 倍。结果说明结构化角色隔离提供了独立测试、审查和可追溯证据，但不是免费收益；调用方应根据任务风险选择是否启用。
 

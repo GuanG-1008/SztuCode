@@ -19,41 +19,15 @@ npx tsx --test packages/runtime-ts/tests/context-tools.test.ts
 
 新增测试应覆盖正常路径、输入边界和关键失败路径。涉及权限时至少覆盖允许和拒绝。
 
-## Legacy Python 测试
+## Runtime and CLI diagnostics
+
+运行时协议和权限链路可以通过 Node 客户端验证：
 
 ```bash
-uv run pytest tests/unit -v
-uv run pytest tests/integration -v
+npm run trace:permission
 ```
 
-集成 fixture 会选择随机本地端口、启动真实 daemon 子进程并等待 TCP 就绪；运行前不应已有依赖固定端口的测试 daemon。集成测试适合验证：
-
-- JSON-RPC 请求响应；
-- 会话创建、消息和事件流；
-- 权限审批闭环；
-- daemon 启停与断线行为；
-- 多模块协作产生的状态。
-
-带 `integration` marker 的用例可能调用真实模型 API，需要对应凭据。提交 PR 时应在验证说明中区分本地 daemon 集成测试和真实 Provider 测试。
-
-Python 测试只覆盖 legacy 客户端和专业脚本，不替代 TypeScript 主链验证。
-
-## 全量 Python 测试
-
-```bash
-uv run pytest tests/ -v
-```
-
-跨模块契约、共享基础设施或发布前变更应运行全量测试。
-
-## Legacy Python 静态检查
-
-```bash
-uv run ruff check src tests scripts
-uv run mypy src
-```
-
-Ruff 检查代码规范和导入；mypy 使用 strict 模式检查 `src/`。不要用全局 ignore 绕过单个真实类型问题。
+该命令连接本地 daemon，订阅事件，自动批准一次权限请求，并在 `run.finished` 后输出事件计数。专业 artifact Skill 的 Python helper 只按其自身文档单独验证，不属于项目测试门禁。
 
 ## 协议一致性
 
@@ -69,7 +43,7 @@ npm run typecheck
 npm run docs:links
 ```
 
-该命令检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效。移动或重命名文档后应运行，规则见[文档规范](documentation.md)。旧 Python 链接检查器仅作为 legacy 兼容实现保留，不属于现行文档门禁。
+该命令检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效。移动或重命名文档后应运行，规则见[文档规范](documentation.md)。
 
 ## 桌面端
 

@@ -32,7 +32,7 @@ SztuCode 的目标是构建一个本地优先、可审计、可扩展的 AI Codi
 - [ ] 贡献指南、行为准则、安全政策、CODEOWNERS 和 Issue/PR 模板齐全；
 - [ ] 架构决策记录机制可用，关键新决策开始留档；
 - [ ] `good first issue` 与 `help wanted` 任务具有明确边界和验收标准；
-- [ ] Python 检查、测试和协议文档校验具有可重复命令；
+- [x] TypeScript 检查、测试和协议文档校验具有可重复命令；
 - [ ] 桌面端构建和验证步骤有明确文档；
 - [ ] 基础测试不要求贡献者提供真实模型凭据；
 - [ ] 仓库明确学生社区属性，不冒用学校或学院官方身份。
@@ -47,7 +47,7 @@ SztuCode 的目标是构建一个本地优先、可审计、可扩展的 AI Codi
 - 工作区打开、任务执行、文件修改、测试、Diff 审阅和会话恢复主流程；
 - Shell 命令结构化分析与权限策略强化；
 - 核心协议、权限、会话和变更管理的回归测试；
-- TypeScript daemon、Node CLI 和 Tauri 桌面端的开发检查进入稳定流程；Python 仅保留 legacy 与 artifact 脚本维护。
+- TypeScript daemon、Node CLI、评测 runner 和 Tauri 桌面端的开发检查进入稳定流程；Python 仅作为隔离 artifact helper 的外部工具。
 - 错误状态、取消、断连和恢复行为可观察且不会误报成功。
 
 候选 Issues：[#8](https://github.com/rojim666/SztuCode/issues/8)、[#17](https://github.com/rojim666/SztuCode/issues/17)。

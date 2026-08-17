@@ -22,7 +22,7 @@
 
 - Git；
 - Node.js 20+；
-- 可选：Rust stable 和系统依赖，用于桌面端开发；Python 3.12 + uv 用于 legacy Python 与专业脚本。
+- 可选：Rust stable 和系统依赖，用于桌面端开发。部分 artifact Skill 会按需调用 Python helper，但不属于项目主链依赖。
 
 克隆并安装主运行时依赖：
 
@@ -38,15 +38,6 @@ npm install
 npm run typecheck
 npm test
 npm run build
-```
-
-维护 legacy Python 时另外运行：
-
-```bash
-uv sync
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest tests/ -v
 ```
 
 如果修改了协议，必须从 `packages/protocol/src` 更新共享类型并核验所有消费者：
@@ -67,7 +58,7 @@ cd src-tauri
 cargo check
 ```
 
-视觉测试可能需要本机安装 Playwright 浏览器。仅修改 Python 代码时不要求安装完整桌面端工具链。
+视觉测试可能需要本机安装 Playwright 浏览器。
 
 ## 选择和认领任务
 
@@ -112,7 +103,7 @@ git switch -c feat/12-lsp-tool
 ## 编码和测试要求
 
 - 遵循现有模块边界和代码风格，不为单一用例引入不必要抽象。
-- Python 代码通过 Ruff 和严格 Mypy 检查。
+- TypeScript 代码必须通过严格类型检查和对应测试。
 - 新增或修改行为必须配套测试；修复缺陷时优先先补复现用例。
 - 测试范围与风险匹配：协议、权限、会话和 Agent Loop 变更需要相应集成验证。
 - 新工具必须声明输入模型、权限级别、失败语义和测试。
@@ -120,7 +111,7 @@ git switch -c feat/12-lsp-tool
 - 用户可见的桌面端改动应验证构建，并在 PR 中提供截图或录屏。
 - 注释只解释不明显的约束和决策，不重复代码本身。
 
-仓库中 Python 函数与测试注释的现有约定以 [AGENT.md](../AGENT.md) 为准。若约定与自动格式化或代码检查冲突，请在 PR 中指出，而不是绕过检查。
+仓库级编码约定以 [AGENT.md](../AGENT.md) 为准。
 
 ## 提交信息
 
