@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ContentBlock } from "./context.js";
@@ -56,5 +56,31 @@ export class SessionStore {
   }
   async attachRun(id: string, runId: string): Promise<void> { const session = await this.get(id); if (!session.run_ids.includes(runId)) session.run_ids.push(runId); session.updated_at = new Date().toISOString(); await this.save(session); }
   async recordRunStats(id: string, runId: string, stats: RunStats): Promise<void> { const session = await this.get(id); session.run_stats ??= {}; session.run_stats[runId] = stats; session.updated_at = new Date().toISOString(); await this.save(session); }
+  async readNotes(id: string): Promise<string> {
+    let raw = ""; try { raw = await readFile(path.join(this.root, id, "notes.md"), "utf8"); } catch { return ""; }
+    if (!raw.includes("---")) return raw.trim();
+    const active: string[] = [];
+    for (const match of raw.trim().matchAll(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*?)(?=\r?\n\r?\n---\r?\n|$)/gm)) {
+      if (!/^status:\s*active\s*$/m.test(match[1]!)) continue;
+      const runId = match[1]!.match(/^run_id:\s*(\S+)/m)?.[1];
+      active.push(`## Note${runId ? ` (${runId})` : ""}\n${match[2]!.trim()}`);
+    }
+    return active.join("\n\n");
+  }
+  async appendNote(id: string, content: string, runId: string, supersedes = ""): Promise<string> {
+    const noteId = `note-${randomUUID().replace(/-/g, "").slice(0, 12)}`; const directory = path.join(this.root, id); await mkdir(directory, { recursive: true });
+    const block = `---\nid: ${noteId}\nstatus: active\nsupersedes: ${supersedes}\nsuperseded_by: \nts: ${new Date().toISOString()}\nrun_id: ${runId}\n---\n${content.trim()}\n\n`;
+    await writeFile(path.join(directory, "notes.md"), block, { encoding: "utf8", flag: "a" }); return noteId;
+  }
+  async updateNote(id: string, noteId: string, content: string, runId: string): Promise<string | null> {
+    const file = path.join(this.root, id, "notes.md"); let raw = ""; try { raw = await readFile(file, "utf8"); } catch { return null; }
+    const marker = `id: ${noteId}\nstatus: active`; if (!raw.includes(marker)) return null;
+    const nextId = `note-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const archived = raw.replace(marker, `id: ${noteId}\nstatus: archived`).replace(`id: ${noteId}\nstatus: archived\nsupersedes:`, `id: ${noteId}\nstatus: archived\nsupersedes:`).replace(new RegExp(`(id: ${escapeRegex(noteId)}[\\s\\S]*?superseded_by:)\\s*`), `$1 ${nextId}`);
+    const block = `---\nid: ${nextId}\nstatus: active\nsupersedes: ${noteId}\nsuperseded_by: \nts: ${new Date().toISOString()}\nrun_id: ${runId}\n---\n${content.trim()}\n\n`; const temporary = `${file}.${Date.now()}.tmp`;
+    await writeFile(temporary, `${archived.trimEnd()}\n\n${block}`, "utf8"); await rename(temporary, file); return nextId;
+  }
   private async save(session: Session): Promise<void> { const dir = path.join(this.root, session.id); await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, "meta.json"), `${JSON.stringify({ ...session, run_stats: session.run_stats ?? {} }, null, 2)}\n`, "utf8"); }
 }
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

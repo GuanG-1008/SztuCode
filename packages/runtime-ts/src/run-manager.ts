@@ -12,6 +12,8 @@ import { QuestionManager } from "./questions.js";
 import { WorkspaceChangeTracker } from "./changes.js";
 import type { Tool } from "./tools.js";
 import { buildSystemPrompt } from "./prompt-loader.js";
+import { createMemoryTools, loadMemoryCatalog } from "./memory.js";
+import type { SessionStore } from "./session-store.js";
 
 type RunState = { runId: string; goal: string; status: "running" | "completed" | "cancelled"; startedAt: number; steps: number; controller: AbortController; usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }; steering: ChatMessage[] };
 
@@ -19,7 +21,7 @@ export class RunManager {
   private readonly runs = new Map<string, RunState>();
   private readonly sessionRuns = new Map<string, string>();
   readonly permissions: PermissionManager;
-  constructor(private readonly events: EventBus, private readonly provider: ModelProvider, workspaceRoot = process.cwd(), private readonly questions?: QuestionManager, private readonly extraTools: () => Tool[] = () => [], private readonly contextConfig: () => Promise<{ contextWindow: number; maxOutputTokens: number; streaming?: boolean }> = async () => ({ contextWindow: 128_000, maxOutputTokens: 8_192 })) {
+  constructor(private readonly events: EventBus, private readonly provider: ModelProvider, workspaceRoot = process.cwd(), private readonly questions?: QuestionManager, private readonly extraTools: () => Tool[] = () => [], private readonly contextConfig: () => Promise<{ contextWindow: number; maxOutputTokens: number; streaming?: boolean }> = async () => ({ contextWindow: 128_000, maxOutputTokens: 8_192 }), private readonly sessions?: SessionStore) {
     this.permissions = new PermissionManager(events);
   }
 
@@ -67,11 +69,11 @@ export class RunManager {
     let result: { text: string; steps: number; messages: ChatMessage[]; usage: RunState["usage"] };
     const tracker = workspaceRoot ? new WorkspaceChangeTracker(workspaceRoot, run.runId) : null;
     try {
-      const tools = createWorkspaceTools([...createPlanTools(this.events, run.runId, sessionId), ...this.extraTools()]); if (tracker) await tracker.capture();
+      const root = workspaceRoot ?? process.cwd(); const memory = await loadMemoryCatalog(root, this.sessions, sessionId);
+      const tools = createWorkspaceTools([...createPlanTools(this.events, run.runId, sessionId), ...createMemoryTools(memory, this.sessions, sessionId, run.runId), ...this.extraTools()]); if (tracker) await tracker.capture();
       if (sessionId && this.questions) registerQuestionTool(tools, (questions) => this.questions!.ask(sessionId, run.runId, questions as never));
       const config = await this.contextConfig();
-      const root = workspaceRoot ?? process.cwd();
-      const prompt = await buildSystemPrompt(root, "coder");
+      const prompt = [await buildSystemPrompt(root, "coder"), memory.prompt(), sessionId ? "Use note_save for durable facts and note_update when a saved fact changes." : ""].filter(Boolean).join("\n\n");
       const initialHistory = [{ role: "system" as const, content: prompt }, ...history];
       const loop = new AgentLoop(this.provider, tools, { workspace: new Workspace(root) }, this.events, this.permissions, { ...config, sessionId });
       result = await loop.run(run.runId, run.goal, 20, initialHistory, run.controller.signal, () => run.steering.splice(0, run.steering.length));

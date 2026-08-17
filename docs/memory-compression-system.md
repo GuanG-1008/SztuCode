@@ -1,10 +1,12 @@
 # SztuCode 记忆与压缩系统
 
-> Legacy Python 设计参考：本文中的 `CompactionConfig`、Python 路径和环境变量描述不定义当前 TypeScript runtime。当前压缩实现位于 `packages/runtime-ts/src/context.ts`，配置以 [配置参考](getting-started/configuration.md) 为准。
+> 当前记忆实现位于 `packages/runtime-ts/src/memory.ts`、`packages/runtime-ts/src/session-store.ts` 和
+> `packages/runtime-ts/src/run-manager.ts`，压缩实现位于 `packages/runtime-ts/src/context.ts`。本文第三层中
+> 出现的 Python 类名、旧分支和旧环境变量仅作为历史设计记录，不定义当前 runtime。
 
 ## 概述
 
-SztuCode 的记忆压缩体系采用**三层防御结构**，从持久化记忆到上下文窗口治理逐层递进。当前分支 `szzk_compression` 聚焦于第三层（上下文压缩）的完善。
+SztuCode 的 TypeScript runtime 使用三层结构：全局/项目静态记忆、会话版本化笔记和上下文压缩。
 
 ---
 
@@ -15,16 +17,16 @@ SztuCode 的记忆压缩体系采用**三层防御结构**，从持久化记忆�
 │                      记忆与压缩三层架构                            │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  第一层：静态上下文记忆 (memory/loader.py)                         │
+│  第一层：静态上下文记忆 (memory.ts)                                │
 │    ~/.sztu/context.md  ──→  Global Context                      │
 │    .sztu/context.md    ──→  Project Context                     │
 │                                                                 │
 │  第二层：会话笔记 (note_save 工具)                                │
 │    note_save("事实")   ──→  notes.md  ──→  Session Notes        │
 │                                                                 │
-│  第三层：上下文压缩 (compact/)                                    │
-│    ├── 3a. 工具结果截断 (budget.py)    ← 内存层，每步调用前        │
-│    └── 3b. 语义压缩   (compactor.py)  ← LLM 驱动，阈值触发        │
+│  第三层：上下文压缩 (context.ts)                                  │
+│    ├── 3a. 工具结果有界化              ← 每步调用前               │
+│    └── 3b. 语义压缩                    ← LLM 驱动                  │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -42,31 +44,14 @@ SztuCode 的记忆压缩体系采用**三层防御结构**，从持久化记忆�
 
 ### 加载流程
 
-```python
-# runner.py:178-179
-global_ctx = load_context_file(Path("~/.sztu/context.md").expanduser())
-project_ctx = load_context_file((workspace_root or Path.cwd()) / ".sztu/context.md")
-```
-
-加载后传入 `ExecutionContext`，在每次 LLM 调用时拼入 system prompt：
-
-```python
-# context.py:36-48
-def system_prompt(self, base: str) -> str:
-    parts = [base]
-    if self.global_context.strip():
-        parts.append("## Global Context\n" + self.global_context.strip())
-    if self.project_context.strip():
-        parts.append("## Project Context\n" + self.project_context.strip())
-    if self.session_notes.strip():
-        parts.append("## Session Notes\n" + self.session_notes.strip())
-    return "".join(parts)
-```
+`RunManager` 在每次 run 开始前调用 `loadMemoryCatalog()`，同时读取全局、项目和当前 session 的
+活跃笔记，形成该 run 的不可变快照。短文全文进入 system prompt；超过 2,000 字符的文档只注入
+标题目录，并注册只读 `memory_read` 工具按查询或 offset 分页读取，每次最多 4,000 字符。
 
 ### 特点
 
 - **文件级持久化**：内容跨 session 保持
-- **静态注入**：不参与压缩，始终在 system prompt 中
+- **渐进式注入**：短文内联，长文只披露索引
 - **手动维护**：由用户编辑，非 agent 自动管理
 
 ---
@@ -75,15 +60,8 @@ def system_prompt(self, base: str) -> str:
 
 ### 核心工具：`note_save`
 
-Agent 在运行中可通过 `note_save` 工具主动记录重要事实：
-
-```python
-# tools/builtin/note_save.py
-class NoteSaveTool(BaseTool):
-    name = "note_save"
-    description = "Save a concise fact or decision to this session's notes."
-    required_permission = ToolPermission.WORKSPACE_WRITE
-```
+Agent 在 session run 中可通过 `note_save` 记录重要事实，并用 `note_update` 替代已经过时的事实。
+两者都是 `workspace_write` 权限工具；`note_save` 返回稳定的 `note-...` ID，供后续更新引用。
 
 ### 数据流
 
@@ -91,16 +69,16 @@ class NoteSaveTool(BaseTool):
 Agent 调用 note_save("某关键发现")
   │
   ▼
-SessionStore.append_note()
+SessionStore.appendNote()
   │  写入 notes.md:
   │  ## Note (2026-08-04T..., run-xxx)
   │  某关键发现
   │
   ▼
 下一次 run 启动:
-  │  SessionStore.read_notes() → 读回全部 notes
-  │  注入 system prompt "Session Notes" 段
-  │  附提示: "Remember important durable facts by calling note_save."
+  │  SessionStore.readNotes() → 只读回 status: active 的版本
+  │  注入 system prompt "Session memory" 段
+  │  长笔记通过 memory_read 按需披露
 ```
 
 ### Session 目录结构
@@ -111,12 +89,8 @@ SessionStore.append_note()
     ├── meta.json              # 会话元数据
     ├── thread.jsonl           # 完整对话消息 (NDJSON)
     ├── notes.md               # agent 记录的持久笔记
-    ├── summary_<ts>_<uuid>.md # 压缩摘要存档
-    ├── thread_<ts>_<uuid>.jsonl.bak  # 压缩前备份
     └── runs/
-        └── <run-id>/
-            ├── events.jsonl   # 事件流
-            └── .tasks/        # 任务状态
+        └── <run-id>.jsonl      # 该 run 的事件流
 ```
 
 ---

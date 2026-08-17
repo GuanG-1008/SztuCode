@@ -15,6 +15,9 @@ import { WorkflowOrchestrator } from "../src/workflow.js";
 import type { HandoffArtifact, WorkflowTask } from "@sztucode/protocol";
 import { normalizeWorkflowPath, workflowPathIsAllowed } from "../src/workflow-scope.js";
 import { AgentLoop } from "../src/agent-loop.js";
+import { createMemoryTools, MemoryCatalog } from "../src/memory.js";
+import { SessionStore } from "../src/session-store.js";
+import { RunManager } from "../src/run-manager.js";
 
 const task = (id: string, dependencies: string[] = []) => ({ id, title: id, description: id, owner: "coder" as const, dependencies, completion_criteria: ["done"], allowed_paths: ["src"], depth: 0, token_budget: 0, time_budget_s: 0, max_retries: null });
 const artifact = (workflowTask: WorkflowTask, status: HandoffArtifact["status"] = "succeeded", tokens = 0): HandoffArtifact => ({ workflow_id: "w", task_id: workflowTask.id, role: workflowTask.owner, status, summary: status === "succeeded" ? "done" : "failed", changed_paths: [], scope_escalations: [], commands: [], output: "", conclusion: status, diff_summary: "", test_summary: "", security_summary: "", review_decision: null, tokens, elapsed_s: 0, attempt: 0, child_run_id: "" });
@@ -86,6 +89,49 @@ test("agent loop injects a traceable intervention after repeated permission deni
     assert.equal(result.text, "changed approach");
     assert.match(seenMessages[3] ?? "", /repeatedly rejected/);
     assert.ok(trace.includes("denial.intervention"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("memory catalog progressively discloses long context and returns bounded excerpts", () => {
+  const catalog = new MemoryCatalog([{ name: "project", source: ".sztu/context.md", content: "# Build\nsecret build details\n## Tests\nuse npm test" }], 10);
+  assert.equal(catalog.requiresReader(), true);
+  assert.match(catalog.prompt(), /Build/);
+  assert.doesNotMatch(catalog.prompt(), /secret build details/);
+  assert.match(catalog.read("project", "npm", 0, 80), /npm test/);
+  assert.ok(catalog.read("project", "", 0, 10).length < 100);
+});
+
+test("session notes preserve only active versions and memory tools expose the chain", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-session-memory-"));
+  try {
+    const sessions = new SessionStore(root); const session = await sessions.create();
+    const catalog = new MemoryCatalog([]); const tools = createMemoryTools(catalog, sessions, session.id, "run-1");
+    const saved = await tools.find((tool) => tool.name === "note_save")!.invoke({ content: "Use SQLite" }, { workspace: new Workspace(root) });
+    const oldId = saved.output.match(/note-[a-f0-9]+/)?.[0]; assert.ok(oldId);
+    const updated = await tools.find((tool) => tool.name === "note_update")!.invoke({ note_id: oldId, content: "Use PostgreSQL" }, { workspace: new Workspace(root) });
+    assert.equal(updated.ok, true);
+    const notes = await sessions.readNotes(session.id);
+    assert.doesNotMatch(notes, /Use SQLite/);
+    assert.match(notes, /Use PostgreSQL/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("run manager exposes note tools and injects saved session memory on the next run", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-run-memory-"));
+  try {
+    const sessions = new SessionStore(path.join(root, "sessions")); const session = await sessions.create(); const events = new EventBus(path.join(root, "events.jsonl"));
+    const prompts: string[] = []; let calls = 0;
+    const provider: ModelProvider = { complete: async (messages, tools) => {
+      prompts.push(messages.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n")); calls += 1;
+      if (calls === 1) { assert.ok(tools.get("note_save")); assert.ok(tools.get("note_update")); return { text: "", tool_calls: [{ id: "remember", name: "note_save", input: { content: "Use PostgreSQL" } }], stop_reason: "tool_use" }; }
+      return { text: "done", tool_calls: [], stop_reason: "end_turn" };
+    } };
+    const manager = new RunManager(events, provider, root, undefined, () => [], async () => ({ contextWindow: 16_000, maxOutputTokens: 1_000 }), sessions);
+    manager.permissions.setMode("accept_edits");
+    const waitFor = async (runId: string) => { const deadline = Date.now() + 5_000; while (manager.get(runId).status === "running" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5)); assert.notEqual(manager.get(runId).status, "running"); };
+    const first = manager.start("remember database", [], undefined, root, session.id); await waitFor(first);
+    const second = manager.start("what database", [], undefined, root, session.id); await waitFor(second);
+    assert.match(prompts.at(-1) ?? "", /Use PostgreSQL/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

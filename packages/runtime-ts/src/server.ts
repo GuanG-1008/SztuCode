@@ -64,7 +64,7 @@ export class RuntimeServer {
 
   constructor(private readonly host = "127.0.0.1", private readonly port = 7438, provider?: ModelProvider) {
     this.provider = provider ?? new ConfigurableProvider(this.settings);
-    this.runs = new RunManager(this.events, this.provider, process.cwd(), this.questions, () => this.mcp.listTools(), async () => { const settings = await this.settings.get(); return { contextWindow: settings.context_window, maxOutputTokens: settings.max_output_tokens, streaming: true }; });
+    this.runs = new RunManager(this.events, this.provider, process.cwd(), this.questions, () => this.mcp.listTools(), async () => { const settings = await this.settings.get(); return { contextWindow: settings.context_window, maxOutputTokens: settings.max_output_tokens, streaming: true }; }, this.sessions);
     this.server = net.createServer((socket) => this.handleClient(socket));
     this.events.subscribe((event) => { this.broadcast({ kind: "event", event }); void this.persistRunEvent(event); });
   }
