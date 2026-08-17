@@ -22,13 +22,13 @@ export class SubagentManager {
     const runId = randomUUID(); const ts = new Date().toISOString();
     this.events.publish({ type: "subagent.started", run_id: runId, parent_run_id: parentRunId, description: `${role}: ${goal.slice(0, 200)}`, ts });
     const profile = await loadAgentProfile(this.workspaceRoot, roleNames[role]);
-    const basePrompt = await buildSystemPrompt(this.workspaceRoot, role);
     const rolePrompt = profile.systemPrompt || `Act as the ${role} role for this task.`;
     const tools = createWorkspaceTools(createPlanTools(this.events, runId));
     if (profile.allowedTools?.length) tools.restrictTo(profile.allowedTools);
     if (options.allowedPaths) tools.restrictTo(workflowCoderTools);
     const basePermissions = profile.permissionMode ? this.permissions.scoped(profile.permissionMode) : this.permissions;
     const permissions = options.allowedPaths ? scopedWorkflowPermissions(basePermissions, options.allowedPaths) : basePermissions;
+    const basePrompt = await buildSystemPrompt(this.workspaceRoot, role, { permissionMode: profile.permissionMode ?? this.permissions.getMode(), toolNames: tools.list().map((tool) => tool.name), taskText: goal });
     const context = { workspace: new Workspace(this.workspaceRoot), signal: options.signal, onFileChanged: (relativePath: string) => { const normalized = normalizeWorkflowPath(relativePath); options.changedPaths?.add(normalized); if (options.allowedPaths && !workflowPathIsAllowed(normalized, options.allowedPaths)) options.scopeEscalations?.add(normalized); } };
     const loop = new AgentLoop(this.provider, tools, context, this.events, permissions);
     try { const result = await loop.run(runId, goal, profile.maxSteps || 20, [{ role: "system", content: `${basePrompt}\n\n# Role instructions\n${rolePrompt}` }, ...history], options.signal); this.events.publish({ type: "subagent.finished", run_id: runId, parent_run_id: parentRunId, status: "success", ts: new Date().toISOString() }); return { runId, text: result.text, tokens: result.usage.input_tokens + result.usage.output_tokens }; }

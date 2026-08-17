@@ -67,6 +67,8 @@ Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-
 
 多 Agent workflow 使用与普通 Agent 相同的 `run.cancel` 和 `run.get` 控制面。取消信号会传播到所有正在执行的子任务，并将尚未调度的任务标记为 `cancelled`；daemon 关闭时也会取消活动 workflow。
 
+Prompt Harness 从 `prompts/content/*/index.json` 加载原子提示，并按实际注册工具、权限模式、记忆能力与任务风险动态组合。标记为 `reference-only` 的提示不会进入模型上下文，避免向 Agent 声明运行时并不存在的 IDE、Hook 或沙箱能力。
+
 ### 工具
 
 内置工具通过 Tool Registry 注册。工具参数在调用边界校验，运行时根据工具类型和具体输入计算权限：

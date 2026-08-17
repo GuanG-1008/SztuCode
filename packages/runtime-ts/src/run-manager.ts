@@ -73,7 +73,7 @@ export class RunManager {
       const tools = createWorkspaceTools([...createPlanTools(this.events, run.runId, sessionId), ...createMemoryTools(memory, this.sessions, sessionId, run.runId), ...this.extraTools()]); if (tracker) await tracker.capture();
       if (sessionId && this.questions) registerQuestionTool(tools, (questions) => this.questions!.ask(sessionId, run.runId, questions as never));
       const config = await this.contextConfig();
-      const prompt = [await buildSystemPrompt(root, "coder"), memory.prompt(), sessionId ? "Use note_save for durable facts and note_update when a saved fact changes." : ""].filter(Boolean).join("\n\n");
+      const prompt = [await buildSystemPrompt(root, "coder", { permissionMode: this.permissions.getMode(), memoryEnabled: Boolean(sessionId) || memory.requiresReader(), toolNames: tools.list().map((tool) => tool.name), taskText: run.goal }), memory.prompt()].filter(Boolean).join("\n\n");
       const initialHistory = [{ role: "system" as const, content: prompt }, ...history];
       const loop = new AgentLoop(this.provider, tools, { workspace: new Workspace(root) }, this.events, this.permissions, { ...config, sessionId });
       result = await loop.run(run.runId, run.goal, 20, initialHistory, run.controller.signal, () => run.steering.splice(0, run.steering.length));

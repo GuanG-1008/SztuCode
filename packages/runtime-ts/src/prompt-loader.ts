@@ -4,6 +4,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PermissionMode } from "@sztucode/protocol";
+import { composeRuntimePrompt, type PromptRuntimeContext } from "./prompt-harness.js";
 
 const execFileAsync = promisify(execFile);
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -56,7 +57,7 @@ async function projectInstructions(root: string): Promise<string> {
   return parts.join("\n\n").slice(0, 12_000);
 }
 
-export async function buildSystemPrompt(workspaceRoot: string, role = "coder"): Promise<string> {
+export async function buildSystemPrompt(workspaceRoot: string, role = "coder", runtime: PromptRuntimeContext = {}): Promise<string> {
   const sections = [
     ...(await markdownGroup("main")),
     await firstPrompt("safety-prompts", "malicious-code-protection"),
@@ -72,7 +73,7 @@ export async function buildSystemPrompt(workspaceRoot: string, role = "coder"): 
   if (instructions) sections.push(`# Project instructions\n${instructions}`);
   const git = await gitSnapshot(workspaceRoot);
   if (git) sections.push(`# Git status snapshot\n${git}`);
-  return sections.join("\n\n");
+  return composeRuntimePrompt(sections.join("\n\n"), runtime);
 }
 
 function parseTomlProfile(text: string, name: string): AgentProfile {
