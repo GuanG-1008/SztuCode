@@ -50,6 +50,19 @@ test("workflow scope upgrades only out-of-scope file writes", async () => {
   assert.deepEqual(observed, [{ toolName: "write_file", permission: "workspace_write" }, { toolName: "edit_file", permission: "danger_full_access" }]);
 });
 
+test("agent loop applies dynamic bash permission before approval", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-bash-permission-"));
+  try {
+    const observed: string[] = []; let calls = 0;
+    const provider: ModelProvider = { complete: async () => { calls += 1; if (calls === 1) return { text: "", tool_calls: [{ id: "safe", name: "bash", input: { command: "git status --short" } }], stop_reason: "tool_use" }; if (calls === 2) return { text: "", tool_calls: [{ id: "unsafe", name: "bash", input: { command: "git clean -fd" } }], stop_reason: "tool_use" }; return { text: "done", tool_calls: [], stop_reason: "end_turn" }; } };
+    const tools = createWorkspaceTools(); const bash = tools.get("bash")!;
+    bash.invoke = async () => ({ ok: true, output: "ok" });
+    const loop = new AgentLoop(provider, tools, { workspace: new Workspace(root) }, new EventBus(path.join(root, "events.jsonl")), { check: async (_runId, _callId, _toolName, _params, permission) => { observed.push(permission); return true; } });
+    assert.equal((await loop.run("bash-permission", "inspect", 4)).text, "done");
+    assert.deepEqual(observed, ["workspace_write", "danger_full_access"]);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); }
+});
+
 test("permission always decisions persist while full-access calls still require approval", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sztu-permission-policy-"));
   try {

@@ -5,11 +5,12 @@ import type { ToolPermission } from "./tools-types.js";
 import type { Workspace } from "./workspace.js";
 import type { EventBus } from "./event-bus.js";
 import { TaskManager, type TaskStatus } from "./task-manager.js";
+import { classifyBashPermission } from "./bash-permission.js";
 
 export type { ToolPermission } from "./tools-types.js";
 export type ToolResult = { ok: boolean; output: string; error?: string; errorType?: "runtime_error" | "rate_limited" | "timeout" | "schema_error" | "permission_denied" };
 export type ToolContext = { workspace: Workspace; signal?: AbortSignal; onFileChanged?: (relativePath: string) => void };
-export interface Tool { readonly name: string; readonly aliases?: readonly string[]; readonly description: string; readonly permission: ToolPermission; readonly schema: Record<string, unknown>; invoke(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult>; }
+export interface Tool { readonly name: string; readonly aliases?: readonly string[]; readonly description: string; readonly permission: ToolPermission; readonly schema: Record<string, unknown>; classifyPermission?(params: Record<string, unknown>): ToolPermission; invoke(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult>; }
 
 const ok = (output: string): ToolResult => ({ ok: true, output });
 const fail = (error: string, errorType: ToolResult["errorType"] = "runtime_error"): ToolResult => ({ ok: false, output: "", error, errorType });
@@ -87,7 +88,7 @@ export function createWorkspaceTools(extraTools: Tool[] = []): ToolRegistry {
     const file = str(params, "path"); const oldString = str(params, "old_string"); const newString = str(params, "new_string"); if (!file || oldString === null || newString === null) return fail("path, old_string and new_string are required", "schema_error"); if (oldString === newString) return fail("old_string and new_string are identical", "schema_error");
     try { const target = context.workspace.resolve(file); const original = await readFile(target, "utf8"); const count = original.split(oldString).length - 1; if (!count) return fail(`old_string not found in ${file}`); if (count > 1 && params.replace_all !== true) return fail(`old_string appears ${count} times in ${file}`, "schema_error"); const updated = params.replace_all === true ? original.split(oldString).join(newString) : original.replace(oldString, newString); await writeFile(target, updated, "utf8"); context.onFileChanged?.(path.relative(context.workspace.root, target).split(path.sep).join("/")); return ok(`replaced ${params.replace_all === true ? count : 1} occurrence(s) in ${file}`); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
   }});
-  registry.register({ name: "bash", description: "Execute a non-interactive shell command", permission: "danger_full_access", schema: { type: "object", properties: { command: { type: "string", minLength: 1 }, timeout: { type: "integer", minimum: 1, maximum: 120 } }, required: ["command"] }, async invoke(params, context) {
+  registry.register({ name: "bash", description: "Execute a non-interactive shell command", permission: "danger_full_access", classifyPermission: classifyBashPermission, schema: { type: "object", properties: { command: { type: "string", minLength: 1 }, timeout: { type: "integer", minimum: 1, maximum: 120 } }, required: ["command"] }, async invoke(params, context) {
     const command = str(params, "command"); if (!command) return fail("command is required", "schema_error"); if (/(^|[;&|])\s*(npm|pnpm|yarn|pip|uv)\s+(install|add|update)\b/i.test(command)) return fail("Installing or updating dependencies is blocked");
     return new Promise((resolve) => {
       if (context.signal?.aborted) { resolve(fail("Run cancelled")); return; }

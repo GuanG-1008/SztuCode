@@ -97,7 +97,8 @@ export class AgentLoop {
           messages.push({ role: "tool", tool_call_id: call.id, content: validation.error });
           continue;
         }
-        const allowed = await this.permissions.check(runId, call.id, toolName, call.input, tool.permission, signal);
+        const permission = tool.classifyPermission?.(call.input) ?? tool.permission;
+        const allowed = await this.permissions.check(runId, call.id, toolName, call.input, permission, signal);
         if (!allowed) {
           denials.recordDenial(toolName);
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: "permission_denied", error_message: "Permission denied or approval timed out", elapsed_ms: 0, ts: now() });
