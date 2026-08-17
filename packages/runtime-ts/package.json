@@ -9,7 +9,8 @@
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@sztucode/protocol": "file:../protocol"
+    "@sztucode/protocol": "file:../protocol",
+    "js-tiktoken": "^1.0.21"
   },
   "devDependencies": {
     "@types/node": "^22.10.2"

@@ -194,12 +194,12 @@ export class RuntimeServer {
         if (!params.session_id || !params.content?.trim()) throw new Error("session_id and content are required");
         if (params.client_message_id) { const existing = this.clientMessageRuns.get(`${params.session_id}:${params.client_message_id}`); if (existing) return ok(request.id, { run_id: existing, session_id: params.session_id }); }
         if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy");
+        const modelHistory = await this.sessions.modelHistory(params.session_id);
         const content = params.images?.length ? [{ type: "text", text: params.content }, ...params.images.map((image) => ({ type: "image", source: { media_type: image.media_type, data: image.data } }))] : params.content;
         await this.sessions.appendMessage(params.session_id, { role: "user", content });
         this.events.publish({ type: "session.message_received", session_id: params.session_id, content: params.content, ts: new Date().toISOString() });
         await this.sessions.setStatus(params.session_id, "active");
-        const persistedHistory = await this.sessions.history(params.session_id);
-        const history = persistedHistory.slice(0, -1).map((message) => ({ role: message.role, content: message.content } as import("./agent-loop.js").ChatMessage));
+        const history = modelHistory.map((message) => ({ ...message } as import("./agent-loop.js").ChatMessage));
         const session = await this.sessions.get(params.session_id);
         const workspaceRoot = session.workspace_id ? (await this.workspaces.get(session.workspace_id)).path : undefined;
         let goal = params.content;
@@ -329,13 +329,15 @@ export class RuntimeServer {
       case "session.delete": { const params = request.params as { session_id: string }; if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy"); await this.sessions.delete(params.session_id); return ok(request.id, { session_id: params.session_id, deleted: true }); }
       case "session.compact": {
         const params = request.params as { session_id: string; focus?: string };
-        const settings = await this.settings.get(); const history = await this.sessions.history(params.session_id); const context = new ContextManager(history.map((message) => ({ role: message.role, content: message.content })), { maxTokens: settings.context_window, reservedOutputTokens: settings.max_output_tokens, maxToolResultChars: 8_000 });
+        const settings = await this.settings.get(); const history = await this.sessions.modelHistory(params.session_id); const context = new ContextManager(history, { maxTokens: settings.context_window, reservedOutputTokens: settings.max_output_tokens, maxToolResultChars: 8_000 });
         this.events.publish({ type: "context.compacting", session_id: params.session_id, run_id: "", ts: new Date().toISOString() });
         const before = context.tokenEstimate(); const result = await context.compactWithProvider(this.provider, params.focus ?? "", 8); const after = context.tokenEstimate();
         if (result.removedMessages > 0) {
           const compactedAt = new Date().toISOString();
           const persisted = context.messages.filter((message): message is typeof message & { role: "user" | "assistant" } => message.role === "user" || message.role === "assistant").map((message) => ({ role: message.role, content: message.content, ts: compactedAt }));
           await this.sessions.replaceHistory(params.session_id, persisted);
+          await this.sessions.replaceModelHistory(params.session_id, context.messages);
+          if (result.summaryText) await this.sessions.writeSummary(params.session_id, result.summaryText);
         }
         this.events.publish({ type: "context.compacted", session_id: params.session_id, run_id: "", original_tokens: before, summary_tokens: after, ts: new Date().toISOString() });
         return ok(request.id, { summary_tokens: after, saved_tokens: Math.max(0, before - after), removed_messages: result.removedMessages, used_model: result.usedModel });
@@ -360,7 +362,7 @@ export class RuntimeServer {
     const sessionId = this.runSessions.get(event.run_id); if (!sessionId) return;
     await this.sessions.appendRunEvent(sessionId, event as unknown as import("./session-store.js").SessionRunEvent);
     if (event.type !== "run.finished") return;
-    await this.sessions.recordRunStats(sessionId, event.run_id, { input_tokens: event.total_input_tokens, output_tokens: event.total_output_tokens, cache_read_input_tokens: event.cache_read_input_tokens, elapsed_s: event.elapsed_s, context_pct: event.context_pct });
+    await this.sessions.recordRunStats(sessionId, event.run_id, { input_tokens: event.total_input_tokens, output_tokens: event.total_output_tokens, cache_read_input_tokens: event.cache_read_input_tokens, cache_creation_input_tokens: event.cache_creation_input_tokens, elapsed_s: event.elapsed_s, context_pct: event.context_pct });
     const session = await this.sessions.get(sessionId);
     const nextStatus = session.mode === "one_shot" ? "closed" : "waiting_for_input";
     await this.sessions.setStatus(sessionId, nextStatus);

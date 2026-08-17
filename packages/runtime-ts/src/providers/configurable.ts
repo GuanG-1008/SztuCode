@@ -16,7 +16,7 @@ export class ConfigurableProvider implements ModelProvider {
       }
       const apiKey = config.keyless ? undefined : config.api_key ?? process.env.OPENAI_API_KEY ?? process.env.DEEPSEEK_API_KEY;
       if (!config.keyless && !apiKey) throw new Error("OpenAI-compatible API key is not configured");
-      return new OpenAiCompatibleProvider({ apiKey, baseUrl: config.base_url || (process.env.OPENAI_BASE_URL ?? process.env.DEEPSEEK_BASE_URL), model: config.model, apiFormat: config.api_format, maxOutputTokens: config.max_output_tokens, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, timeoutMs: config.timeout_s * 1000, stream: true }).complete(messages, tools, signal, onToken, invocation, onThinking);
+      return new OpenAiCompatibleProvider({ apiKey, baseUrl: config.base_url || (process.env.OPENAI_BASE_URL ?? process.env.DEEPSEEK_BASE_URL), model: config.model, apiFormat: config.api_format, maxOutputTokens: config.max_output_tokens, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, timeoutMs: config.timeout_s * 1000, stream: true, cacheControl: config.cache_control }).complete(messages, tools, signal, onToken, invocation, onThinking);
     };
     let lastError: unknown;
     for (let attempt = 0; attempt <= Math.max(0, Math.min(10, config.max_retries)); attempt += 1) {

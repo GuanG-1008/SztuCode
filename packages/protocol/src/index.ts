@@ -76,7 +76,7 @@ export interface WorkflowResult { workflow_id: string; status: WorkflowStatus; r
 
 export interface CoreStartedEvent { type: "core.started"; listen_addr: string; version: string }
 export interface RunStartedEvent { type: "run.started"; run_id: string; goal: string; ts: string }
-export interface RunFinishedEvent { type: "run.finished"; run_id: string; status: "success" | "failed" | "cancelled"; reason?: string; steps: number; total_input_tokens: number; total_output_tokens: number; cache_read_input_tokens: number; elapsed_s: number; context_pct: number; ts: string }
+export interface RunFinishedEvent { type: "run.finished"; run_id: string; status: "success" | "failed" | "cancelled"; reason?: string; steps: number; total_input_tokens: number; total_output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number; elapsed_s: number; context_pct: number; ts: string }
 export interface StepStartedEvent { type: "step.started"; run_id: string; step: number; ts: string }
 export interface StepFinishedEvent { type: "step.finished"; run_id: string; step: number; ts: string }
 export interface LlmTokenEvent { type: "llm.token"; run_id: string; token: string; ts: string }

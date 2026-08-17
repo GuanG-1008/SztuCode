@@ -1,13 +1,13 @@
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ContentBlock } from "./context.js";
+import type { ContentBlock, ContextMessage } from "./context.js";
 
 export type SessionStatus = "active" | "waiting_for_input" | "closed";
 export type SessionMode = "one_shot" | "chat";
 export type SessionMessage = { role: "user" | "assistant"; content: string | ContentBlock[]; ts: string; run_id?: string };
 export type SessionRunEvent = { type: string; run_id?: string; [key: string]: unknown };
-export type RunStats = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; elapsed_s: number; context_pct: number };
+export type RunStats = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number; elapsed_s: number; context_pct: number };
 export type Session = { id: string; mode: SessionMode; status: SessionStatus; title: string; created_at: string; updated_at: string; run_ids: string[]; run_stats: Record<string, RunStats>; archived: boolean; pinned: boolean; workspace_id: string | null };
 
 export class SessionStore {
@@ -41,6 +41,8 @@ export class SessionStore {
   async history(id: string): Promise<SessionMessage[]> {
     try { return (await readFile(path.join(this.root, id, "thread.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as SessionMessage); } catch { return []; }
   }
+  async modelHistory(id: string): Promise<ContextMessage[]> { try { const value = JSON.parse(await readFile(path.join(this.root, id, "context.json"), "utf8")); if (Array.isArray(value)) return value as ContextMessage[]; } catch { /* use visible history until a model context exists */ } return (await this.history(id)).map((message) => ({ role: message.role, content: message.content })); }
+  async replaceModelHistory(id: string, messages: ContextMessage[]): Promise<void> { const directory = path.join(this.root, id); await mkdir(directory, { recursive: true }); const file = path.join(directory, "context.json"); try { const { copyFile } = await import("node:fs/promises"); await copyFile(file, `${file}.${Date.now()}.bak`); } catch { /* no existing model context */ } await writeFile(file, `${JSON.stringify(messages)}\n`, "utf8"); }
   async appendRunEvent(id: string, event: SessionRunEvent): Promise<void> { await mkdir(path.join(this.root, id, "runs"), { recursive: true }); await writeFile(path.join(this.root, id, "runs", `${event.run_id ?? "unknown"}.jsonl`), `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: "a" }); }
   async contextInjections(id: string): Promise<Array<{ run_id: string; source: string; label: string; chars: number; preview: string; text: string; ts: string }>> {
     const output: Array<{ run_id: string; source: string; label: string; chars: number; preview: string; text: string; ts: string }> = [];
@@ -54,6 +56,7 @@ export class SessionStore {
     await writeFile(file, rows.length ? `${rows.map((row) => JSON.stringify(row)).join("\n")}\n` : "", "utf8");
     session.updated_at = updatedAt; await this.save(session);
   }
+  async writeSummary(id: string, text: string): Promise<string> { const directory = path.join(this.root, id); await mkdir(directory, { recursive: true }); const file = path.join(directory, `summary_${compactTimestamp()}_${randomUUID().replace(/-/g, "").slice(0, 8)}.md`); await writeFile(file, text, "utf8"); return file; }
   async attachRun(id: string, runId: string): Promise<void> { const session = await this.get(id); if (!session.run_ids.includes(runId)) session.run_ids.push(runId); session.updated_at = new Date().toISOString(); await this.save(session); }
   async recordRunStats(id: string, runId: string, stats: RunStats): Promise<void> { const session = await this.get(id); session.run_stats ??= {}; session.run_stats[runId] = stats; session.updated_at = new Date().toISOString(); await this.save(session); }
   async readNotes(id: string): Promise<string> {
@@ -84,3 +87,4 @@ export class SessionStore {
 }
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const compactTimestamp = () => new Date().toISOString().replace(/[-:]/g, "").replace("T", "_").slice(0, 15);

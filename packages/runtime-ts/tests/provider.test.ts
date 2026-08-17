@@ -66,6 +66,18 @@ test("OpenAI-compatible provider supports keyless endpoints without an authoriza
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("OpenAI-compatible provider marks stable system and tool prefixes for caching", async () => {
+  const originalFetch = globalThis.fetch; let requestBody: Record<string, any> = {};
+  globalThis.fetch = (async (_input, init) => { requestBody = JSON.parse(String(init?.body)); return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 6 } } }), { status: 200, headers: { "content-type": "application/json" } }); }) as typeof fetch;
+  try {
+    const tools = new ToolRegistry(); tools.register({ name: "read_file", description: "read", permission: "read_only", schema: { type: "object" }, invoke: async () => ({ ok: true, output: "" }) });
+    const result = await new OpenAiCompatibleProvider({ baseUrl: "http://mock/v1", model: "cached-model", cacheControl: true }).complete([{ role: "system", content: "stable" }, { role: "user", content: "hi" }], tools);
+    assert.deepEqual(requestBody.messages[0].cache_control, { type: "ephemeral" });
+    assert.deepEqual(requestBody.tools[0].cache_control, { type: "ephemeral" });
+    assert.equal(result.usage?.cache_read_input_tokens, 6);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Anthropic messages provider parses streaming text, tool JSON, and usage", async () => {
   const originalFetch = globalThis.fetch;
   const tokens: string[] = [];

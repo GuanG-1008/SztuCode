@@ -57,6 +57,12 @@ SZTU_LLM_KEYLESS=true
 | `SZTU_LLM_PROVIDER` | `openai` | `openai` 或 `anthropic` |
 | `SZTU_LLM_DEFAULT_MODEL` / `SZTU_MODEL` | `gpt-4o-mini` | Provider 模型 ID |
 | `SZTU_LLM_CONTEXT_WINDOW` | `128000` | 上下文窗口估算值 |
+| `SZTU_MAX_STEPS` | `100` | TypeScript 主 Agent 步数上限；`0` 表示不限步数 |
+| `SZTU_COMPACT_THRESHOLD` | `0.70` | 自动上下文压缩阈值；`0` 表示禁用 |
+| `SZTU_SLIDING_WINDOW_SIZE` | `5` | 压缩后完整保留的最近 turn 数 |
+| `SZTU_COMPACT_COOLDOWN` | `3` | 两次自动压缩尝试的最小步数间隔 |
+| `SZTU_COMPACT_CIRCUIT_BREAKER` | `3` | 连续压缩失败达到该次数后，本次 run 停止自动压缩 |
+| `SZTU_COMPACT_MIN_OLD_TOKENS` | `2000` | 旧 turn 达到该 token 数后才生成摘要 |
 | `SZTU_LLM_KEYLESS` | `false` | 允许 OpenAI-compatible 请求不发送 Authorization |
 | `SZTU_PERMISSION_MODE` | `normal` | `normal`、`plan`、`accept_edits`、`auto` |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 未设置 | OpenAI-compatible 凭据 |

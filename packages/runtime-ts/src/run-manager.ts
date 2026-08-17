@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { RunGetResult, RuntimeEvent } from "@sztucode/protocol";
 import { EventBus } from "./event-bus.js";
-import { AgentLoop } from "./agent-loop.js";
+import { AgentLoop, type AgentRunResult } from "./agent-loop.js";
 import { createPlanTools, createWorkspaceTools, registerQuestionTool } from "./tools.js";
 import { Workspace } from "./workspace.js";
 import { PermissionManager } from "./permissions.js";
@@ -15,7 +15,7 @@ import { buildSystemPrompt } from "./prompt-loader.js";
 import { createMemoryTools, loadMemoryCatalog } from "./memory.js";
 import type { SessionStore } from "./session-store.js";
 
-type RunState = { runId: string; goal: string; status: "running" | "completed" | "cancelled"; startedAt: number; steps: number; controller: AbortController; usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }; steering: ChatMessage[] };
+type RunState = { runId: string; goal: string; status: "running" | "completed" | "cancelled"; startedAt: number; steps: number; controller: AbortController; usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }; contextPct: number; steering: ChatMessage[] };
 
 export class RunManager {
   private readonly runs = new Map<string, RunState>();
@@ -27,7 +27,7 @@ export class RunManager {
 
   start(goal: string, history: ChatMessage[] = [], onComplete?: (messages: ChatMessage[], usage: RunState["usage"]) => Promise<void>, workspaceRoot?: string, sessionId?: string, onRunCreated?: (runId: string) => void): string {
     const runId = randomUUID();
-    const run: RunState = { runId, goal, status: "running", startedAt: Date.now(), steps: 0, controller: new AbortController(), usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, steering: [] };
+    const run: RunState = { runId, goal, status: "running", startedAt: Date.now(), steps: 0, controller: new AbortController(), usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, contextPct: 0, steering: [] };
     this.runs.set(runId, run);
     if (sessionId) this.sessionRuns.set(sessionId, runId);
     onRunCreated?.(runId);
@@ -60,7 +60,7 @@ export class RunManager {
     run.controller.abort(new Error("Run cancelled"));
     this.permissions.cancelRun(runId);
     this.questions?.cancelRun(runId);
-    this.emit({ type: "run.finished", run_id: runId, status: "cancelled", reason: "cancelled", steps: run.steps, total_input_tokens: run.usage.input_tokens, total_output_tokens: run.usage.output_tokens, cache_read_input_tokens: run.usage.cache_read_input_tokens, elapsed_s: elapsed(run.startedAt), context_pct: 0, ts: now() });
+    this.emit({ type: "run.finished", run_id: runId, status: "cancelled", reason: "cancelled", steps: run.steps, total_input_tokens: run.usage.input_tokens, total_output_tokens: run.usage.output_tokens, cache_read_input_tokens: run.usage.cache_read_input_tokens, cache_creation_input_tokens: run.usage.cache_creation_input_tokens, elapsed_s: elapsed(run.startedAt), context_pct: run.contextPct, ts: now() });
     this.sessionRuns.forEach((active, sessionId) => { if (active === runId) this.sessionRuns.delete(sessionId); });
     return "cancelling";
   }
@@ -72,7 +72,7 @@ export class RunManager {
   }
 
   private async execute(run: RunState, history: ChatMessage[], onComplete?: (messages: ChatMessage[], usage: RunState["usage"]) => Promise<void>, workspaceRoot?: string, sessionId?: string): Promise<void> {
-    let result: { text: string; steps: number; messages: ChatMessage[]; usage: RunState["usage"] };
+    let result: AgentRunResult;
     const tracker = workspaceRoot ? new WorkspaceChangeTracker(workspaceRoot, run.runId) : null;
     try {
       const root = workspaceRoot ?? process.cwd(); const memory = await loadMemoryCatalog(root, this.sessions, sessionId);
@@ -81,27 +81,31 @@ export class RunManager {
       const config = await this.contextConfig();
       const prompt = [await buildSystemPrompt(root, "coder", { permissionMode: this.permissions.getMode(), memoryEnabled: Boolean(sessionId) || memory.requiresReader(), toolNames: tools.list().map((tool) => tool.name), taskText: run.goal }), memory.prompt()].filter(Boolean).join("\n\n");
       const initialHistory = [{ role: "system" as const, content: prompt }, ...history];
-      const loop = new AgentLoop(this.provider, tools, { workspace: new Workspace(root) }, this.events, this.permissions, { ...config, sessionId });
-      result = await loop.run(run.runId, run.goal, 20, initialHistory, run.controller.signal, () => run.steering.splice(0, run.steering.length));
+      const loop = new AgentLoop(this.provider, tools, { workspace: new Workspace(root) }, this.events, this.permissions, { ...config, sessionId, onProgress: (progress) => { run.steps = progress.steps; run.usage = { ...progress.usage }; run.contextPct = progress.contextPct; }, onCompacted: sessionId && this.sessions ? async (messages, summary) => { await this.sessions!.replaceModelHistory(sessionId, messages.filter((message) => message.role !== "system")); if (summary) await this.sessions!.writeSummary(sessionId, summary); } : undefined });
+      result = await loop.run(run.runId, run.goal, maxSteps(), initialHistory, run.controller.signal, () => run.steering.splice(0, run.steering.length));
     } catch (error) {
       if (tracker) await tracker.finalize();
       if (run.status !== "running") return;
       run.status = "completed";
       this.sessionRuns.forEach((active, sessionId) => { if (active === run.runId) this.sessionRuns.delete(sessionId); });
-      this.emit({ type: "run.finished", run_id: run.runId, status: "failed", reason: error instanceof Error ? error.message : String(error), steps: run.steps, total_input_tokens: run.usage.input_tokens, total_output_tokens: run.usage.output_tokens, cache_read_input_tokens: run.usage.cache_read_input_tokens, elapsed_s: elapsed(run.startedAt), context_pct: 0, ts: now() });
+      this.emit({ type: "run.finished", run_id: run.runId, status: "failed", reason: error instanceof Error ? error.message : String(error), steps: run.steps, total_input_tokens: run.usage.input_tokens, total_output_tokens: run.usage.output_tokens, cache_read_input_tokens: run.usage.cache_read_input_tokens, cache_creation_input_tokens: run.usage.cache_creation_input_tokens, elapsed_s: elapsed(run.startedAt), context_pct: run.contextPct, ts: now() });
       return;
     }
     run.steps = result.steps;
     run.usage = result.usage;
+    run.contextPct = result.contextPct;
     const changes = tracker ? await tracker.finalize() : [];
     if (changes.length) this.emit({ type: "change.applied", run_id: run.runId, workspace_path: path.resolve(workspaceRoot!), paths: changes.map((item) => item.path), ts: now() });
     if (run.status !== "running") return;
     if (onComplete) await onComplete(result.messages, run.usage);
+    if (sessionId && this.sessions) {
+      await this.sessions.replaceModelHistory(sessionId, result.messages.filter((message) => message.role !== "system"));
+    }
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (run.status !== "running") return;
     run.status = "completed";
     if (sessionId && this.sessionRuns.get(sessionId) === run.runId) this.sessionRuns.delete(sessionId);
-    this.emit({ type: "run.finished", run_id: run.runId, status: "success", steps: run.steps, total_input_tokens: run.usage.input_tokens, total_output_tokens: run.usage.output_tokens, cache_read_input_tokens: run.usage.cache_read_input_tokens, elapsed_s: elapsed(run.startedAt), context_pct: 0, ts: now() });
+    this.emit({ type: "run.finished", run_id: run.runId, status: "success", steps: run.steps, total_input_tokens: run.usage.input_tokens, total_output_tokens: run.usage.output_tokens, cache_read_input_tokens: run.usage.cache_read_input_tokens, cache_creation_input_tokens: run.usage.cache_creation_input_tokens, elapsed_s: elapsed(run.startedAt), context_pct: run.contextPct, ts: now() });
   }
 
   private emit(event: RuntimeEvent): void { this.events.publish(event); }
@@ -109,3 +113,4 @@ export class RunManager {
 
 const now = () => new Date().toISOString();
 const elapsed = (startedAt: number) => (Date.now() - startedAt) / 1000;
+const maxSteps = (): number => { const value = Number(process.env.SZTU_MAX_STEPS); return Number.isInteger(value) && value >= 0 ? value : 100; };

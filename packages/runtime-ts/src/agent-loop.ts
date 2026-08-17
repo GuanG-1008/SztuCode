@@ -15,7 +15,9 @@ export type ModelUsage = { input_tokens: number; output_tokens: number; cache_re
 export type ModelResponse = { text: string; tool_calls: ModelToolCall[]; stop_reason: "end_turn" | "tool_use"; thinking_blocks?: ContentBlock[]; usage?: Partial<ModelUsage>; model?: string; streamed?: boolean };
 export type ModelInvocation = { runId: string; step: number; purpose?: "agent" | "compaction" };
 export interface ModelProvider { complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void, invocation?: ModelInvocation, onThinking?: (thinking: string) => void): Promise<ModelResponse> }
-export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number; offloadEnabled?: boolean; offloadMinChars?: number; offloadMinLines?: number; offloadRoot?: string; toolMaxRetries?: number; toolRetryBaseMs?: number };
+export type AgentProgress = { steps: number; usage: ModelUsage; contextPct: number };
+export type AgentRunResult = { text: string; steps: number; messages: ChatMessage[]; usage: ModelUsage; contextPct: number; compacted: boolean; summaries: string[] };
+export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number; offloadEnabled?: boolean; offloadMinChars?: number; offloadMinLines?: number; offloadRoot?: string; toolMaxRetries?: number; toolRetryBaseMs?: number; compactThreshold?: number; slidingWindowSize?: number; compactCooldownSteps?: number; compactCircuitBreaker?: number; compactMinimumOldTokens?: number; onProgress?: (progress: AgentProgress) => void; onCompacted?: (messages: ChatMessage[], summary: string) => Promise<void> };
 
 export class EchoProvider implements ModelProvider {
   async complete(messages: ChatMessage[]): Promise<ModelResponse> {
@@ -27,7 +29,7 @@ export class EchoProvider implements ModelProvider {
 export class AgentLoop {
   constructor(private readonly provider: ModelProvider, private readonly tools: ToolRegistry, private readonly context: ToolContext, private readonly events: EventBus, private readonly permissions: PermissionGate, private readonly options: AgentLoopOptions = {}) {}
 
-  async run(runId: string, goal: string, maxSteps = 20, history: ChatMessage[] = [], signal?: AbortSignal, takeSteering?: () => ChatMessage[]): Promise<{ text: string; steps: number; messages: ChatMessage[]; usage: ModelUsage }> {
+  async run(runId: string, goal: string, maxSteps = 100, history: ChatMessage[] = [], signal?: AbortSignal, takeSteering?: () => ChatMessage[]): Promise<AgentRunResult> {
     const offload = new OffloadManager(this.options.offloadRoot ?? path.join(dataRoot(), "runs", safeRunId(runId)), { enabled: this.options.offloadEnabled ?? booleanEnv("SZTU_OFFLOAD_ENABLED", true), minChars: this.options.offloadMinChars ?? nonNegativeEnv("SZTU_OFFLOAD_MIN_CHARS", 2_000), minLines: this.options.offloadMinLines ?? nonNegativeEnv("SZTU_OFFLOAD_MIN_LINES", 50) });
     this.tools.replace(createReadRefTool(offload));
     const context = new ContextManager([...history, { role: "user", content: goal }], { maxTokens: this.options.contextWindow ?? 128_000, reservedOutputTokens: this.options.maxOutputTokens ?? 8_192, maxToolResultChars: 8_000 });
@@ -35,16 +37,41 @@ export class AgentLoop {
     const initialSystem = messages.find((message) => message.role === "system");
     if (initialSystem) { const text = typeof initialSystem.content === "string" ? initialSystem.content : JSON.stringify(initialSystem.content); this.publish({ type: "context.injected", run_id: runId, source: "system", label: "上下文注入", chars: text.length, preview: text.slice(0, 160), text, ts: now() }); }
     const usage: ModelUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const compactThreshold = this.options.compactThreshold ?? numberEnv("SZTU_COMPACT_THRESHOLD", 0.70, 0, 1);
+    const slidingWindowSize = this.options.slidingWindowSize ?? nonNegativeEnv("SZTU_SLIDING_WINDOW_SIZE", 5);
+    const compactCooldownSteps = this.options.compactCooldownSteps ?? nonNegativeEnv("SZTU_COMPACT_COOLDOWN", 3);
+    const compactCircuitBreaker = this.options.compactCircuitBreaker ?? nonNegativeEnv("SZTU_COMPACT_CIRCUIT_BREAKER", 3);
+    const compactMinimumOldTokens = this.options.compactMinimumOldTokens ?? nonNegativeEnv("SZTU_COMPACT_MIN_OLD_TOKENS", 2_000);
+    let pendingCompaction: Promise<import("./context.js").ContextCompactionResult> | null = null;
+    let lastCompactStep = -compactCooldownSteps;
+    let compactionFailures = 0;
+    let compactionCount = 0;
+    let compacted = false;
+    let lastContextPct = context.contextPct();
+    const summaries: string[] = [];
+    const startCompaction = (step: number): boolean => {
+      if (pendingCompaction || compactThreshold <= 0 || compactCircuitBreaker > 0 && compactionFailures >= compactCircuitBreaker || step - lastCompactStep < compactCooldownSteps) return false;
+      if (this.options.sessionId) this.publish({ type: "context.compacting", session_id: this.options.sessionId, run_id: runId, ts: now() });
+      pendingCompaction = context.compactWithProvider(this.provider, "", { slidingWindow: slidingWindowSize, minimumOldTokens: compactMinimumOldTokens, compactionCount }, signal, { runId, step, purpose: "compaction" });
+      lastCompactStep = step;
+      return true;
+    };
+    const applyPendingCompaction = async () => {
+      if (!pendingCompaction) return;
+      const result = await pendingCompaction; pendingCompaction = null;
+      if (result.failed) { compactionFailures += 1; this.publish({ type: "log.line", run_id: runId, level: "WARN", source: "context", message: `Compaction failed (${compactionFailures}/${compactCircuitBreaker || "unlimited"})`, ts: now() }); return; }
+      if (result.deferred) return;
+      compactionFailures = 0; compactionCount += 1; compacted = true;
+      if (result.summaryText) summaries.push(result.summaryText);
+      await this.options.onCompacted?.(messages, result.summaryText);
+      this.publish({ type: "log.line", run_id: runId, level: "INFO", source: "context", message: `Summarized ${result.removedMessages} messages using a ${slidingWindowSize}-turn window`, ts: now() });
+      if (this.options.sessionId) this.publish({ type: "context.compacted", session_id: this.options.sessionId, run_id: runId, original_tokens: result.originalTokens, summary_tokens: result.summaryTokens, ts: now() });
+    };
     const denials = new DenialTracker();
     const stuck = new StuckLoopTracker(this.options.stuckMaxFailures ?? nonNegativeEnv("SZTU_STUCK_MAX_FAILURES", 2), this.options.stuckMaxTotal ?? nonNegativeEnv("SZTU_STUCK_MAX_TOTAL", 0));
-    for (let step = 1; step <= maxSteps; step += 1) {
+    for (let step = 1; maxSteps === 0 || step <= maxSteps; step += 1) {
       signal?.throwIfAborted();
-      if (context.needsCompaction()) {
-        if (this.options.sessionId) this.publish({ type: "context.compacting", session_id: this.options.sessionId, run_id: runId, ts: now() });
-        const result = await context.compactWithProvider(this.provider, "", 8, signal, { runId, step, purpose: "compaction" });
-        this.publish({ type: "log.line", run_id: runId, level: "INFO", source: "context", message: `${result.usedModel ? "Summarized" : "Compacted"} ${result.removedMessages} messages`, ts: now() });
-        if (this.options.sessionId) this.publish({ type: "context.compacted", session_id: this.options.sessionId, run_id: runId, original_tokens: result.originalTokens, summary_tokens: result.summaryTokens, ts: now() });
-      }
+      await applyPendingCompaction();
       this.publish({ type: "step.started", run_id: runId, step, ts: now() });
       const intervention = denials.intervention();
       if (intervention) {
@@ -64,6 +91,7 @@ export class AgentLoop {
       }
       const sanitized = sanitizeContextMessages(messages, context.budgetMaxToolResultChars());
       if (sanitized.length !== messages.length || sanitized.some((message, index) => message !== messages[index])) { messages.splice(0, messages.length, ...sanitized); }
+      const requestTokens = context.tokenEstimate();
       const response = await this.provider.complete(messages, this.tools, signal, (token) => this.publish({ type: "llm.token", run_id: runId, token, ts: now() }), { runId, step, purpose: "agent" }, (thinking) => this.publish({ type: "llm.thinking", run_id: runId, step, thinking, ts: now() }));
       usage.input_tokens += Number(response.usage?.input_tokens ?? 0);
       usage.output_tokens += Number(response.usage?.output_tokens ?? 0);
@@ -71,12 +99,15 @@ export class AgentLoop {
       usage.cache_creation_input_tokens += Number(response.usage?.cache_creation_input_tokens ?? 0);
       const contextWindow = this.options.contextWindow ?? 128_000;
       const reservedOutputTokens = this.options.maxOutputTokens ?? 8_192;
-      this.publish({ type: "llm.usage", run_id: runId, input_tokens: Number(response.usage?.input_tokens ?? 0), output_tokens: Number(response.usage?.output_tokens ?? 0), cache_read_input_tokens: Number(response.usage?.cache_read_input_tokens ?? 0), cache_creation_input_tokens: Number(response.usage?.cache_creation_input_tokens ?? 0), context_pct: Math.min(1, context.tokenEstimate() / Math.max(1, contextWindow)), model: response.model ?? "", context_window: contextWindow, available_tokens: context.availableTokens(), reserved_output_tokens: reservedOutputTokens, system_tokens: messages.filter((message) => message.role === "system").reduce((sum, message) => sum + context.counter.countJson(message.content), 0), summary_tokens: 0, conversation_tokens: context.counter.countMessages(messages), tool_tokens: messages.filter((message) => message.role === "tool").reduce((sum, message) => sum + context.counter.countJson(message.content), 0), ts: now() });
+      const responseInputTokens = Number(response.usage?.input_tokens ?? 0);
+      lastContextPct = context.contextPct(responseInputTokens > 0 ? responseInputTokens : requestTokens);
+      this.options.onProgress?.({ steps: step, usage: { ...usage }, contextPct: lastContextPct });
+      this.publish({ type: "llm.usage", run_id: runId, input_tokens: responseInputTokens, output_tokens: Number(response.usage?.output_tokens ?? 0), cache_read_input_tokens: Number(response.usage?.cache_read_input_tokens ?? 0), cache_creation_input_tokens: Number(response.usage?.cache_creation_input_tokens ?? 0), context_pct: lastContextPct, model: response.model ?? "", context_window: contextWindow, available_tokens: Math.max(0, contextWindow - reservedOutputTokens - (responseInputTokens || requestTokens)), reserved_output_tokens: reservedOutputTokens, system_tokens: messages.filter((message) => message.role === "system").reduce((sum, message) => sum + context.counter.countJson(message.content), 0), summary_tokens: summaries.reduce((sum, summary) => sum + context.counter.count(summary), 0), conversation_tokens: context.counter.countMessages(messages), tool_tokens: messages.filter((message) => message.role === "tool").reduce((sum, message) => sum + context.counter.countJson(message.content), 0), ts: now() });
       if (response.text && (!this.options.streaming || !response.streamed)) this.publish({ type: "llm.token", run_id: runId, token: response.text, ts: now() });
       if (response.stop_reason === "end_turn" || response.tool_calls.length === 0) {
         this.publish({ type: "step.finished", run_id: runId, step, ts: now() });
         messages.push({ role: "assistant", content: responseContent(response) });
-        return { text: response.text, steps: step, messages, usage };
+        return { text: response.text, steps: step, messages, usage, contextPct: lastContextPct, compacted, summaries };
       }
       messages.push({ role: "assistant", content: responseContent(response), tool_calls: response.tool_calls });
       for (const call of response.tool_calls) {
@@ -126,8 +157,31 @@ export class AgentLoop {
         messages.push({ role: "tool", tool_call_id: call.id, content: contextOutput, is_error: !result.ok });
       }
       this.publish({ type: "step.finished", run_id: runId, step, ts: now() });
+      if (maxSteps > 0 && step >= maxSteps) {
+        const conclusion = await this.conclude(runId, step, messages, usage, lastContextPct, signal);
+        if (conclusion.complete) return { text: conclusion.text, steps: step, messages, usage, contextPct: conclusion.contextPct, compacted, summaries };
+        throw new Error(`Agent exceeded max steps (${maxSteps})${conclusion.text ? `: ${conclusion.text}` : ""}`);
+      }
+      const addedTokens = Math.max(0, context.tokenEstimate() - requestTokens);
+      if (context.needsCompaction(compactThreshold, responseInputTokens || requestTokens, addedTokens)) startCompaction(step);
     }
-    throw new Error(`Agent exceeded max steps (${maxSteps})`);
+    throw new Error("Agent stopped unexpectedly");
+  }
+
+  private async conclude(runId: string, step: number, messages: ChatMessage[], usage: ModelUsage, previousContextPct: number, signal?: AbortSignal): Promise<{ complete: boolean; text: string; contextPct: number }> {
+    messages.push({ role: "user", content: "The agent run has reached its step limit and must stop now. Give your final answer. If the goal is fully achieved, start with [COMPLETE]. If work remains, start with [INCOMPLETE] and list it. Do not call tools." });
+    const response = await this.provider.complete(messages, new ToolRegistry(), signal, (token) => this.publish({ type: "llm.token", run_id: runId, token, ts: now() }), { runId, step, purpose: "agent" }, (thinking) => this.publish({ type: "llm.thinking", run_id: runId, step, thinking, ts: now() }));
+    usage.input_tokens += Number(response.usage?.input_tokens ?? 0);
+    usage.output_tokens += Number(response.usage?.output_tokens ?? 0);
+    usage.cache_read_input_tokens += Number(response.usage?.cache_read_input_tokens ?? 0);
+    usage.cache_creation_input_tokens += Number(response.usage?.cache_creation_input_tokens ?? 0);
+    const inputTokens = Number(response.usage?.input_tokens ?? 0); const contextPct = inputTokens > 0 ? inputTokens / Math.max(1, this.options.contextWindow ?? 128_000) : previousContextPct;
+    this.options.onProgress?.({ steps: step, usage: { ...usage }, contextPct });
+    if (response.text && (!this.options.streaming || !response.streamed)) this.publish({ type: "llm.token", run_id: runId, token: response.text, ts: now() });
+    messages.push({ role: "assistant", content: responseContent(response) });
+    const text = response.text.trim();
+    if (response.stop_reason !== "end_turn" || response.tool_calls.length > 0 || /^\[INCOMPLETE\]/i.test(text)) return { complete: false, text, contextPct };
+    return { complete: true, text: text.replace(/^\[COMPLETE\]\s*/i, "") || text, contextPct };
   }
 
   private publish(event: RuntimeEvent): void { this.events.publish(event); }
@@ -135,6 +189,7 @@ export class AgentLoop {
 
 const now = () => new Date().toISOString();
 const nonNegativeEnv = (name: string, fallback: number): number => { const value = Number(process.env[name]); return Number.isInteger(value) && value >= 0 ? value : fallback; };
+const numberEnv = (name: string, fallback: number, minimum: number, maximum: number): number => { const value = Number(process.env[name]); return Number.isFinite(value) && value >= minimum && value <= maximum ? value : fallback; };
 const booleanEnv = (name: string, fallback: boolean): boolean => process.env[name] === undefined ? fallback : !/^(0|false|no)$/i.test(process.env[name] ?? "");
 const dataRoot = () => process.env.SZTU_DATA_DIR ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? process.cwd(), ".sztu");
 const safeRunId = (runId: string) => runId.replace(/[^A-Za-z0-9_.-]/g, "_") || "run";

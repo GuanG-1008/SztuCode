@@ -65,6 +65,64 @@ test("agent loop publishes thinking deltas and preserves signed blocks in histor
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("agent loop auto-compacts at the configured threshold and preserves the initial goal", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-auto-compact-"));
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl")); const compacted: any[] = []; const purposes: string[] = [];
+    events.subscribe((event) => { if (event.type === "context.compacted") compacted.push(event); });
+    let agentCalls = 0; const provider: ModelProvider = { complete: async (_messages, _tools, _signal, _onToken, invocation) => {
+      purposes.push(invocation?.purpose ?? "agent");
+      if (invocation?.purpose === "compaction") return { text: "Goal\nKeep the original task.\nProgress\nOld turns are summarized.\nDecisions\nPreserve recent turns.\nOpen Issues\nNone.\nNext Steps\nFinish.", tool_calls: [], stop_reason: "end_turn", usage: { output_tokens: 24 } };
+      agentCalls += 1; return agentCalls === 1 ? { text: "", tool_calls: [{ id: "read", name: "read_file", input: { path: "package.json" } }], stop_reason: "tool_use", usage: { input_tokens: 80, output_tokens: 2 } } : { text: "done", tool_calls: [], stop_reason: "end_turn", usage: { input_tokens: 80, output_tokens: 2 } };
+    } };
+    await writeFile(path.join(root, "package.json"), "{}", "utf8");
+    const history = [{ role: "user" as const, content: "original goal" }, ...Array.from({ length: 8 }, (_, index) => ({ role: index % 2 ? "user" as const : "assistant" as const, content: `turn-${index} ${"detail ".repeat(20)}` }))];
+    const result = await new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async () => true }, { sessionId: "session-1", contextWindow: 100, compactThreshold: 0.70, slidingWindowSize: 2, compactMinimumOldTokens: 0 }).run("compact-run", "continue", 2, history);
+    assert.deepEqual(purposes, ["agent", "compaction", "agent"]); assert.equal(result.compacted, true); assert.equal(result.contextPct, 0.8); assert.equal(result.messages.some((message) => message.content === "original goal"), true); assert.equal(compacted.length, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("agent loop stops automatic compaction after consecutive summary failures", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-compact-breaker-"));
+  try {
+    let compactions = 0; let agents = 0;
+    const provider: ModelProvider = { complete: async (_messages, _tools, _signal, _onToken, invocation) => {
+      if (invocation?.purpose === "compaction") { compactions += 1; return { text: "invalid", tool_calls: [], stop_reason: "end_turn" }; }
+      agents += 1; return agents < 3 ? { text: "", tool_calls: [{ id: `read-${agents}`, name: "read_file", input: { path: "package.json" } }], stop_reason: "tool_use", usage: { input_tokens: 90, output_tokens: 1 } } : { text: "done", tool_calls: [], stop_reason: "end_turn", usage: { input_tokens: 90, output_tokens: 1 } };
+    } };
+    await writeFile(path.join(root, "package.json"), "{}", "utf8");
+    const history = [{ role: "user" as const, content: "goal" }, ...Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? "user" as const : "assistant" as const, content: `old-${index} ${"detail ".repeat(20)}` }))];
+    const result = await new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, new EventBus(path.join(root, "events.jsonl")), { check: async () => true }, { contextWindow: 100, compactThreshold: 0.70, compactCooldownSteps: 0, compactCircuitBreaker: 2, compactMinimumOldTokens: 0 }).run("breaker", "continue", 4, history);
+    assert.equal(result.text, "done"); assert.equal(result.compacted, false); assert.equal(compactions, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("agent loop uses a tool-free conclusion when the final allowed step calls tools", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-max-step-conclusion-"));
+  try {
+    const toolCounts: number[] = []; const progress: Array<{ steps: number; output: number }> = []; let calls = 0;
+    const provider: ModelProvider = { complete: async (_messages, tools) => {
+      calls += 1; toolCounts.push(tools.list().length);
+      if (calls === 1) return { text: "", tool_calls: [{ id: "read", name: "read_file", input: { path: "package.json" } }], stop_reason: "tool_use", usage: { input_tokens: 10, output_tokens: 2 } };
+      return { text: "[COMPLETE] finished at the boundary", tool_calls: [], stop_reason: "end_turn", usage: { input_tokens: 12, output_tokens: 4 } };
+    } };
+    await writeFile(path.join(root, "package.json"), "{}", "utf8");
+    const result = await new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, new EventBus(path.join(root, "events.jsonl")), { check: async () => true }, { onProgress: ({ steps, usage }) => progress.push({ steps, output: usage.output_tokens }) }).run("max-step", "inspect", 1);
+    assert.equal(result.text, "finished at the boundary"); assert.equal(result.steps, 1); assert.equal(result.usage.output_tokens, 6);
+    assert.ok(toolCounts[0]! > 0); assert.equal(toolCounts[1], 0); assert.deepEqual(progress, [{ steps: 1, output: 2 }, { steps: 1, output: 6 }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("run manager reports real progress when a step-limited run remains incomplete", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-max-step-progress-")); const previous = process.env.SZTU_MAX_STEPS; process.env.SZTU_MAX_STEPS = "1";
+  try {
+    let calls = 0; const events = new EventBus(path.join(root, "events.jsonl")); const finished = new Promise<any>((resolve) => events.subscribe((event) => { if (event.type === "run.finished") resolve(event); }));
+    const provider: ModelProvider = { complete: async () => { calls += 1; return calls === 1 ? { text: "", tool_calls: [{ id: "read", name: "read_file", input: { path: "package.json" } }], stop_reason: "tool_use", usage: { input_tokens: 7, output_tokens: 2 } } : { text: "[INCOMPLETE] more work remains", tool_calls: [], stop_reason: "end_turn", usage: { input_tokens: 9, output_tokens: 3 } }; } };
+    await writeFile(path.join(root, "package.json"), "{}", "utf8"); new RunManager(events, provider, root).start("inspect", [], undefined, root);
+    const event = await finished; assert.equal(event.status, "failed"); assert.equal(event.steps, 1); assert.equal(event.total_input_tokens, 16); assert.equal(event.total_output_tokens, 5); assert.match(event.reason, /more work remains/);
+  } finally { if (previous === undefined) delete process.env.SZTU_MAX_STEPS; else process.env.SZTU_MAX_STEPS = previous; await rm(root, { recursive: true, force: true }); }
+});
+
 test("agent loop applies dynamic bash permission before approval", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sztu-bash-permission-"));
   try {
@@ -242,6 +300,21 @@ test("run manager exposes note tools and injects saved session memory on the nex
     const first = manager.start("remember database", [], undefined, root, session.id); await waitFor(first);
     const second = manager.start("what database", [], undefined, root, session.id); await waitFor(second);
     assert.match(prompts.at(-1) ?? "", /Use PostgreSQL/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("run manager persists full model context separately from visible session history", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-model-context-")); const sessions = new SessionStore(path.join(root, "sessions")); const session = await sessions.create("chat");
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl")); let calls = 0;
+    const provider: ModelProvider = { complete: async () => { calls += 1; return calls === 1 ? { text: "", tool_calls: [{ id: "read", name: "read_file", input: { path: "package.json" } }], stop_reason: "tool_use", usage: { input_tokens: 10, output_tokens: 1 } } : { text: "done", tool_calls: [], stop_reason: "end_turn", usage: { input_tokens: 12, output_tokens: 2 } }; } };
+    await writeFile(path.join(root, "package.json"), "{}", "utf8"); await sessions.appendMessage(session.id, { role: "user", content: "inspect" });
+    const finished = new Promise<void>((resolve) => events.subscribe((event) => { if (event.type === "run.finished") resolve(); }));
+    new RunManager(events, provider, root, undefined, () => [], async () => ({ contextWindow: 1_000, maxOutputTokens: 100 }), sessions).start("inspect", [], async (messages) => { const assistant = messages.at(-1); if (assistant?.role === "assistant") await sessions.appendMessage(session.id, { role: "assistant", content: assistant.content }); }, root, session.id);
+    await finished;
+    const modelHistory = await sessions.modelHistory(session.id); const visible = await sessions.history(session.id);
+    assert.equal(modelHistory.some((message) => message.role === "tool" && message.tool_call_id === "read"), true);
+    assert.deepEqual(visible.map((message) => message.role), ["user", "assistant"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

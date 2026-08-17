@@ -115,7 +115,11 @@ test("manual session.compact uses provider summary and persists continuation mes
     assert.ok(result.removed_messages > 0);
     assert.match(compactionPrompt, /preserve the API contract/);
     const history = await rpc(socket, "session.history", { session_id: created.session_id });
-    assert.match(history.messages[0].content, /This session continues from an earlier context/);
+    assert.match(history.messages[0].content, /This session is being continued from a previous conversation/);
+    const modelHistory = JSON.parse(await readFile(path.join(root, "sessions", created.session_id, "context.json"), "utf8"));
+    assert.ok(modelHistory.some((message: any) => typeof message.content === "string" && message.content.includes("This session is being continued")));
+    const summaryFiles = (await import("node:fs/promises")).readdir(path.join(root, "sessions", created.session_id));
+    assert.ok((await summaryFiles).some((name) => name.startsWith("summary_") && name.endsWith(".md")));
   } finally { socket.destroy(); await server.close(); restoreEnv("SZTU_DATA_DIR", previous); await rm(root, { recursive: true, force: true }); }
 });
 
