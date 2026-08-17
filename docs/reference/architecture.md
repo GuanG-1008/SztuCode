@@ -4,12 +4,12 @@
 
 ## 系统边界
 
-SztuCode 是本地优先的双进程 Agent 系统：常驻 Python daemon 管理会话和运行，TUI、桌面端与 CLI 通过 TCP 上的 NDJSON/JSON-RPC 2.0 连接。客户端负责交互和展示，Agent 执行状态以 daemon 为准。
+SztuCode 是本地优先的双进程 Agent 系统：常驻 TypeScript daemon 管理会话和运行，桌面端、Node CLI 与评测工具通过 TCP 上的 NDJSON/JSON-RPC 2.0 连接。客户端负责交互和展示，Agent 执行状态以 daemon 为准。
 
 ```text
 Tauri Desktop ─┐
-Textual TUI ───┼─ TCP / NDJSON / JSON-RPC 2.0 ─ sztu-code daemon
-CLI ───────────┘                                  │
+Node CLI ──────┼─ TCP / NDJSON / JSON-RPC 2.0 ─ TypeScript daemon
+Eval Runner ───┘                                  │
                                                   ├─ Session / Workspace
                                                   ├─ Agent Runner / Loop
                                                   ├─ LLM Provider
@@ -21,9 +21,9 @@ CLI ───────────┘                                  │
 
 ## 进程与客户端
 
-### `sztu-code`
+### TypeScript daemon
 
-daemon 入口位于 `src/sztu_code/core/app.py`，负责：
+daemon 入口位于 `packages/runtime-ts/src/main.ts`，负责：
 
 - 加载配置和日志；
 - 初始化 Provider、Session Store、Workspace Manager 和 Permission Manager；
@@ -32,24 +32,22 @@ daemon 入口位于 `src/sztu_code/core/app.py`，负责：
 - 执行 Agent run 并广播事件；
 - 在退出时取消并等待后台任务。
 
-### `sztucode` / `sztu-tui`
+### `sztucode` / Node CLI
 
-Textual TUI 是终端产品入口。`sztucode` 接受项目目录、处理信任并在需要时自动启动 daemon；`sztu-tui` 直接连接已配置的 daemon。
+npm 发布入口会启动 TypeScript daemon，并让 Node CLI 创建绑定到目标项目的会话。仓库内可使用 `npm run cli -- chat`。
 
 ### Tauri Desktop
 
 `desktop/` 使用 Tauri 2、Vue 3 和 TypeScript。Rust 层负责原生窗口、目录选择和受控 TCP 桥；前端负责工作区、会话、执行时间线、权限、文件预览和 Diff 审阅。
 
-### `sztu`
-
-CLI 用于连通性检查、脚本调用和调试，不承载完整交互体验。
+legacy Python TUI 和 CLI 位于 `src/sztu_code`，只作为兼容代码保留，不属于默认产品链。
 
 ## 请求与事件链路
 
 1. 客户端发送 JSON-RPC 命令，例如 `session.send_message`。
-2. Socket Server 解析 envelope，并用 Pydantic 校验参数。
-3. `CoreApp` handler 操作会话或启动后台 run。
-4. `AgentRunner` 构建上下文、工具、权限和 Provider。
+2. Socket Server 解析 envelope，并按共享 TypeScript 协议校验关键参数。
+3. `RuntimeServer` handler 操作会话或启动后台 run。
+4. `RunManager` 构建上下文、工具、权限和 Provider。
 5. `AgentLoop` 迭代模型响应与工具结果。
 6. EventBus 发布 run、step、tool、permission、LLM 和 change 事件。
 7. IPC Broadcaster 将订阅事件推送到客户端。
@@ -61,11 +59,11 @@ CLI 用于连通性检查、脚本调用和调试，不承载完整交互体验�
 
 ### 上下文
 
-Runner 组合系统提示词、全局与项目 context、会话消息、notes 和当前目标。上下文预算由 `core/compact/` 计算；达到阈值时可截断工具结果并执行压缩。
+Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-ts/src/context.ts` 计算；达到阈值时截断工具结果并执行压缩。
 
 ### 工具
 
-内置工具通过 Tool Registry 注册。工具参数使用 Pydantic 校验，运行时根据工具类型和具体输入计算权限：
+内置工具通过 Tool Registry 注册。工具参数在调用边界校验，运行时根据工具类型和具体输入计算权限：
 
 - `read_only`：读取、列表和搜索；
 - `workspace_write`：受工作区约束的写入和编辑；
@@ -124,12 +122,12 @@ Permission Manager 结合当前模式、持久化策略、工具权限和用户�
 
 | 目标 | 主要位置 |
 | --- | --- |
-| 新命令/事件 | `core/bus/`、`core/app.py`、客户端 SDK |
-| 新工具 | `core/tools/` |
-| 新 Provider | `core/llm/` |
-| 新权限规则 | `core/permissions/` |
+| 新命令/事件 | `packages/protocol/`、`packages/runtime-ts/src/server.ts`、客户端 SDK |
+| 新工具 | `packages/runtime-ts/src/tools.ts` |
+| 新 Provider | `packages/runtime-ts/src/providers/` |
+| 新权限规则 | `packages/runtime-ts/src/permissions.ts` |
 | 新 Skill | `.sztu/skills/`、`~/.sztu/skills/` 或内置 Skills |
-| 新 Agent 角色 | `core/agents/` |
-| 新 MCP 接入 | `core/mcp/` 与配置文件 |
+| 新 Agent 角色 | `packages/runtime-ts/src/subagent.ts` |
+| 新 MCP 接入 | `packages/runtime-ts/src/mcp.ts` 与 JSON 配置 |
 
 实现细节和提交标准见 [开发环境](../development/development.md) 与 [贡献指南](../CONTRIBUTING.md)。

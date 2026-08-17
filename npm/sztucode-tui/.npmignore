@@ -1,2 +1,4 @@
 .venv/
 *.tgz
+__pycache__/
+*.pyc

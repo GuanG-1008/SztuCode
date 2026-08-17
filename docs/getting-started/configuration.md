@@ -56,7 +56,7 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 | --- | --- | --- |
 | `SZTU_CONFIG` | 未设置 | 显式 TOML 路径 |
 | `SZTU_HOST` | `127.0.0.1` | daemon 监听地址 |
-| `SZTU_PORT` | `7437` | daemon 监听端口 |
+| `SZTU_PORT` | `7438` | TypeScript daemon 监听端口 |
 | `SZTU_LOG_LEVEL` | `INFO` | 日志级别 |
 | `SZTU_LOG_FILE` | `~/.sztu/logs/core.log` | daemon 日志路径；空字符串表示不写文件 |
 | `SZTU_LOG_FORMAT` | `text` | `text` 或 `json` |
@@ -87,7 +87,7 @@ SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必�
 ```toml
 [core]
 host = "127.0.0.1"
-port = 7437
+port = 7438
 
 [logging]
 level = "INFO"
@@ -135,27 +135,30 @@ tool_result_keep = 4000
 
 ## MCP Server
 
+TypeScript runtime 通过 `SZTU_MCP_CONFIG` 指向一个 JSON 文件：
+
 stdio 示例：
 
-```toml
-[[mcp.servers]]
-name = "example"
-transport = "stdio"
-command = "example-mcp-server"
-args = ["--stdio"]
-
-[mcp.servers.env]
-EXAMPLE_MODE = "local"
+```json
+{
+  "mcpServers": {
+    "example": {
+      "command": "example-mcp-server",
+      "args": ["--stdio"],
+      "env": { "EXAMPLE_MODE": "local" }
+    }
+  }
+}
 ```
 
 TCP 示例：
 
-```toml
-[[mcp.servers]]
-name = "example-tcp"
-transport = "tcp"
-host = "127.0.0.1"
-port = 3000
+```json
+{
+  "mcpServers": {
+    "example-tcp": { "host": "127.0.0.1", "port": 3000 }
+  }
+}
 ```
 
 不要运行来源不明的 MCP Server。stdio 服务继承 daemon 启动环境中显式传入的配置，并可能获得本机访问能力。

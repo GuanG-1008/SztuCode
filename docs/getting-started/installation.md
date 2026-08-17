@@ -4,26 +4,24 @@
 
 ## 环境要求
 
-- Python `3.12.x`
-- [uv](https://docs.astral.sh/uv/)
+- Node.js 20+
 - Git
 - Anthropic 或 OpenAI-compatible API 凭据
-- 可选：Node.js 20+、Rust 与平台对应的 Tauri 构建依赖
+- 可选：Rust 与平台对应的 Tauri 构建依赖
 
-## 安装 Python 运行时
+## 安装 TypeScript 运行时
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
 cd SztuCode
-uv sync
+npm install
+npm run build
 ```
 
 确认命令可用：
 
 ```bash
-uv run sztu --version
-uv run sztu --help
-uv run sztucode --help
+npm run cli -- ping
 ```
 
 ## 配置模型
@@ -34,41 +32,43 @@ cp .env.example .env
 
 在 `.env` 中配置 Provider、模型 ID 和凭据。不要提交 `.env`。完整字段见 [配置参考](configuration.md)。
 
-## 启动 TUI
+## 启动 CLI
 
 推荐入口：
 
 ```bash
-uv run sztucode /path/to/project
+npm run daemon
 ```
 
-该命令会检查 daemon，并在未运行时自动启动。首次打开目录时，TUI 会要求选择是否信任工作区。
+另一个终端使用 Node CLI：
 
 常用选项：
 
 ```bash
-uv run sztucode . --trust
-uv run sztucode . --read-only
-uv run sztucode . --replay RUN_ID
+npm run cli -- ping
+npm run cli -- run --goal "inspect the repository"
+npm run cli -- chat
 ```
 
 也可以手动分开运行 daemon 和客户端：
 
 ```bash
 # 终端 1
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
-uv run sztu-tui
+npm run cli -- chat
 ```
 
 ## 启动桌面端
 
-桌面工作台目前不会自动启动 Python daemon：
+桌面工作台会启动 TypeScript daemon；也可手动分开调试：
 
 ```bash
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -88,11 +88,10 @@ Tauri 在不同操作系统上的系统依赖不同，请按 [Tauri prerequisite
 ## 验证连通性
 
 ```bash
-uv run sztu ping
-uv run sztu core status
+npm run cli -- ping
 ```
 
-默认服务地址为 `127.0.0.1:7437`。若端口冲突，可在 `.env` 或环境变量中修改 `SZTU_PORT`，daemon 与客户端必须使用相同配置。
+默认服务地址为 `127.0.0.1:7438`。若端口冲突，可通过环境变量修改 `SZTU_TS_PORT`，daemon 与客户端必须使用相同配置。
 
 ## 下一步
 

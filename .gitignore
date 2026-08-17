@@ -12,6 +12,14 @@ build/
 .pytest_cache/
 .pytest-temp/
 .pytest-run-*/
+packages/**/node_modules/
+packages/**/dist/
+npm/sztucode-tui/cli/
+npm/sztucode-tui/runtime/
+npm/sztucode-tui/skills/
+npm/sztucode-tui/prompts/
+npm/sztucode-tui/agents/
+node_modules/
 .vscode/
 .codegraph/
 .idea/

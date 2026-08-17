@@ -471,32 +471,30 @@ fn daemon_candidates() -> Vec<(PathBuf, Vec<String>, Option<PathBuf>)> {
     if let Ok(executable) = std::env::var("SZTU_DAEMON_EXECUTABLE") {
         candidates.push((PathBuf::from(executable), Vec::new(), None));
     }
-    if let Ok(current) = std::env::current_exe() {
-        if let Some(parent) = current.parent() {
-            candidates.push((parent.join("sztu-code.exe"), Vec::new(), None));
-        }
-    }
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|desktop| desktop.parent())
         .map(PathBuf::from);
     if let Some(root) = repository {
-        let python = root.join(".venv").join("Scripts").join("python.exe");
-        if python.exists() {
+        let runtime = root
+            .join("packages")
+            .join("runtime-ts")
+            .join("dist")
+            .join("main.js");
+        if runtime.exists() {
             candidates.push((
-                python,
-                vec!["-m".into(), "sztu_code.core".into()],
-                Some(root),
+                PathBuf::from("node"),
+                vec![runtime.to_string_lossy().into_owned()],
+                Some(root.clone()),
             ));
         }
     }
-    candidates.push((PathBuf::from("sztu-code"), Vec::new(), None));
     candidates
 }
 
 #[tauri::command]
 async fn daemon_start(state: State<'_, DaemonProcess>) -> Result<DaemonStartResult, String> {
-    if TcpStream::connect(("127.0.0.1", 7437)).await.is_ok() {
+    if TcpStream::connect(("127.0.0.1", 7438)).await.is_ok() {
         return Ok(DaemonStartResult {
             status: "already_running".into(),
             detail: "本地服务已在运行".into(),
@@ -527,6 +525,7 @@ async fn daemon_start(state: State<'_, DaemonProcess>) -> Result<DaemonStartResu
         let mut command = Command::new(&executable);
         command
             .args(args)
+            .env("SZTU_TS_PORT", "7438")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -539,7 +538,7 @@ async fn daemon_start(state: State<'_, DaemonProcess>) -> Result<DaemonStartResu
             Ok(child) => {
                 *state.child.lock().await = Some(child);
                 for _ in 0..40 {
-                    if TcpStream::connect(("127.0.0.1", 7437)).await.is_ok() {
+                    if TcpStream::connect(("127.0.0.1", 7438)).await.is_ok() {
                         return Ok(DaemonStartResult {
                             status: "started".into(),
                             detail: "本地服务已启动".into(),
@@ -702,7 +701,7 @@ fn read_attachment(paths: Vec<String>) -> Result<Vec<AttachmentData>, String> {
     Ok(paths.iter().map(|path| read_one_attachment(path)).collect())
 }
 
-// 连接 Python daemon，并将 NDJSON 消息广播给 React 客户端 SDK。
+// Connect to the TypeScript daemon and relay NDJSON messages to the frontend SDK.
 #[tauri::command]
 async fn ipc_connect(
     host: String,

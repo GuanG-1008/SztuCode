@@ -23,12 +23,12 @@ AI Coding Agent 的一次任务可能持续数分钟，期间会产生模型流�
 
 SztuCode 采用持久 daemon 与多个客户端分离的架构：
 
-- `sztu-code` daemon 拥有 Agent Loop、LLM Provider、Tool Registry、Permission Manager、Session Store、Memory、Subagents、MCP 和 Trace；
+- TypeScript daemon 拥有 Agent Loop、LLM Provider、Tool Registry、Permission Manager、Session Store、Subagents、MCP 和 Trace；
 - TUI、Tauri 桌面端和 CLI 作为客户端，不复制核心任务状态；
 - 客户端与 daemon 通过 TCP 上的 NDJSON 传输 JSON-RPC 2.0 消息；
-- 命令、结果和事件使用 Pydantic 模型定义，协议文档由模型生成；
+- 命令、结果和事件使用 `packages/protocol` 的 TypeScript 类型定义；
 - 长时间 handler 独立运行，读循环仍能处理审批、订阅、查询和取消；
-- 默认监听 `127.0.0.1:7437`，不以远程多用户服务为当前目标。
+- 默认监听 `127.0.0.1:7438`，不以远程多用户服务为当前目标。
 
 客户端可以提供不同交互体验，但不得绕过 daemon 的权限、工作区和会话边界。新增用户可见能力如需改变 IPC，必须先更新类型化协议，再更新各客户端。
 
@@ -65,7 +65,7 @@ SztuCode 采用持久 daemon 与多个客户端分离的架构：
 ### 风险与缓解
 
 - 默认只监听 loopback 地址，避免直接暴露到局域网或公网；
-- 所有协议输入通过 Pydantic 验证，未知或非法请求返回明确错误；
+- 协议边界验证 envelope 和关键参数，未知或非法请求返回明确错误；
 - 工作区、权限和工具约束只在 daemon 中作最终判定；
 - 通过集成测试覆盖真实 daemon 启动、IPC 往返、审批和会话流程；
 - 协议模型变更后生成并检查参考文档，减少客户端契约漂移。

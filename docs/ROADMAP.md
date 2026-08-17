@@ -47,7 +47,7 @@ SztuCode 的目标是构建一个本地优先、可审计、可扩展的 AI Codi
 - 工作区打开、任务执行、文件修改、测试、Diff 审阅和会话恢复主流程；
 - Shell 命令结构化分析与权限策略强化；
 - 核心协议、权限、会话和变更管理的回归测试；
-- Python daemon、TUI 和桌面端的开发检查进入稳定流程；
+- TypeScript daemon、Node CLI 和 Tauri 桌面端的开发检查进入稳定流程；Python 仅保留 legacy 与 artifact 脚本维护。
 - 错误状态、取消、断连和恢复行为可观察且不会误报成功。
 
 候选 Issues：[#8](https://github.com/rojim666/SztuCode/issues/8)、[#17](https://github.com/rojim666/SztuCode/issues/17)。

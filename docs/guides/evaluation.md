@@ -15,18 +15,19 @@ runner、执行独立验证，并同时生成机器可读 JSON 与人类可读 M
 
 ## 环境准备
 
-内部基准只需要项目标准 Python 环境，不调用真实模型 API，也不需要 Docker：
+TypeScript 评测主链不需要 Python 环境，不调用真实模型 API，也不需要 Docker：
 
 ```bash
-uv sync --frozen
-uv run sztu-eval validate --suite internal
+npm install
+npm run eval -- validate --manifest packages/evaluation/tasks/internal-v1.json
 ```
 
 使用 `sztucode-rpc` runner 时，需要先按[配置参考](../getting-started/configuration.md)配置模型并启动
 daemon：
 
 ```bash
-uv run sztu-code
+npm run build
+npm run daemon
 ```
 
 SWE-bench 的最终评分必须使用官方 Docker harness。官方文档建议准备 x86_64 环境、Docker、至少
@@ -37,18 +38,13 @@ SWE-bench 的最终评分必须使用官方 Docker harness。官方文档建议�
 列出任务：
 
 ```bash
-uv run sztu-eval list --suite internal
-uv run sztu-eval list --suite swebench-lite --json
+npm run eval -- list --manifest packages/evaluation/tasks/internal-v1.json
 ```
 
 用离线 reference runner 验证 10 个内部任务，每个重复三次：
 
 ```bash
-uv run sztu-eval run \
-  --suite internal \
-  --runner reference \
-  --repeat 3 \
-  --output-dir eval/reports/internal-reference
+npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir eval/reports/internal-reference
 ```
 
 输出目录包含：
@@ -167,8 +163,8 @@ Windows 反斜杠会在创建工作区前被拒绝。公开任务文件不会包
 
 随包提供的清单位于：
 
-- `src/sztu_code/evaluation/tasks/internal-v1.json`：10 个离线任务；
-- `src/sztu_code/evaluation/tasks/swebench-lite-smoke.json`：3 个固定 SWE-bench Lite 实例。
+- `packages/evaluation/tasks/internal-v1.json`：10 个离线任务；
+- `packages/evaluation/tasks/swebench-lite-smoke.json`：3 个固定 SWE-bench Lite 实例。
 
 可用 `--manifest path/to/tasks.json` 加载自定义清单，并用 `--task-id` 或 `--max-tasks` 筛选。
 内部任务的验证命令会被直接执行，因此自定义清单也必须来自可信来源。

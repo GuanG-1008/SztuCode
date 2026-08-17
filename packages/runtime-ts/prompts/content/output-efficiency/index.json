@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "output-efficiency",
+      "file": "system-prompt-output-efficiency.md",
+      "source": "docs/Prompt.md#4"
+    }
+  ]
+}

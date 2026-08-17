@@ -1,0 +1,17 @@
+{
+  "name": "@sztucode/runtime-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "npm run build --prefix ../protocol && tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@sztucode/protocol": "file:../protocol"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2"
+  }
+}

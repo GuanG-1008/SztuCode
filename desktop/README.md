@@ -6,7 +6,7 @@
 
 - Node.js 20+
 - Rust stable（`rustup`）
-- 正在运行的 Python daemon（仓库根目录 `uv run sztu-code`）
+- 正在运行的 TypeScript daemon（仓库根目录 `npm run daemon`）
 - 按 [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) 安装平台依赖：
   - **macOS**：Xcode Command Line Tools（`xcode-select --install`）
   - **Windows**：WebView2、Visual Studio C++ 构建工具
@@ -14,13 +14,14 @@
 
 ## 开发
 
-先在另一个终端启动 Python daemon，再启动桌面端。
+先构建并启动 TypeScript daemon，再启动桌面端。
 
 macOS / Linux：
 
 ```bash
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -32,7 +33,8 @@ Windows PowerShell：
 
 ```powershell
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run build
+npm run daemon
 
 # 终端 2
 cd desktop

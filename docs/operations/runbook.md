@@ -7,22 +7,21 @@
 前台启动 daemon：
 
 ```bash
-uv run sztu-code
+npm run build
+npm run daemon
 ```
 
-默认监听 `127.0.0.1:7437`。验证连通性：
+默认监听 `127.0.0.1:7438`。验证连通性：
 
 ```bash
-uv run sztu ping
-uv run sztu core status
+npm run cli -- ping
 ```
 
 由 CLI 管理后台进程：
 
 ```bash
-uv run sztu core start
-uv run sztu core status
-uv run sztu core stop
+npm run cli -- core start
+npm run cli -- ping
 ```
 
 前台进程使用 `Ctrl+C` 优雅退出。开发时优先使用项目提供的 `core stop`，不要依赖只适用于某个操作系统的进程查找命令。
@@ -41,11 +40,11 @@ uv run sztu core stop
 
 ```powershell
 $env:SZTU_PORT = "8000"
-uv run sztu-code
+npm run daemon
 ```
 
 ```bash
-SZTU_PORT=8000 uv run sztu-code
+SZTU_PORT=8000 npm run daemon
 ```
 
 ## 日志与 Trace
@@ -61,9 +60,7 @@ SZTU_PORT=8000 uv run sztu-code
 实时查看系统 Trace：
 
 ```bash
-uv run sztu trace --follow
-uv run sztu trace RUN_ID --layer llm
-uv run sztu trace RUN_ID --raw
+Get-Content ~/.sztu/traces/runtime-ts-events.jsonl -Wait
 ```
 
 Trace 可能包含提示词、模型响应和工具参数。共享前按 [安全政策](../SECURITY.md) 脱敏。
@@ -89,7 +86,7 @@ Trace 可能包含提示词、模型响应和工具参数。共享前按 [安全
 指定地址已有服务。先执行：
 
 ```bash
-uv run sztu core status
+npm run cli -- ping
 ```
 
 如果是 SztuCode daemon，复用或停止它；如果是其他程序，修改 `SZTU_PORT`。
@@ -97,7 +94,7 @@ uv run sztu core status
 ### `core not running` 或客户端持续重连
 
 ```bash
-uv run sztu-code
+npm run daemon
 ```
 
 检查 daemon 终端输出和 `~/.sztu/logs/core.log`。确认防火墙没有阻止 loopback TCP，并核对客户端端口。
@@ -112,21 +109,16 @@ uv run sztu-code
 
 ### 桌面端无法连接
 
-桌面端目前不会自动拉起 Python daemon。先在仓库根目录运行 `uv run sztu-code`，再启动 `npm run tauri dev`。同时确认 `desktop/src-tauri/tauri.conf.json` 的开发服务器配置正常。
+Tauri 启动器会拉起 TypeScript daemon。手动调试时先在仓库根目录运行 `npm run build && npm run daemon`，再启动 `npm run tauri dev`。
 
-### 协议文档校验失败
+### 协议类型校验失败
 
-```bash
-uv run python scripts/gen_protocol_doc.py
-uv run python scripts/gen_protocol_doc.py --check
-```
-
-不要直接编辑生成文件；需要改变内容时修改 Pydantic 模型或生成器。
+运行 `npm run typecheck`，并从 `packages/protocol/src` 修复共享契约及其客户端消费者。
 
 ## 恢复与升级
 
 - 升级前记录当前 commit，并备份 `.sztu` 用户数据。
-- 拉取代码后运行 `uv sync`，桌面端依赖变化时运行 `npm install`。
+- 拉取代码后运行 `npm install && npm run build`。仅维护 legacy Python 或专业 artifact 脚本时再运行 `uv sync`。
 - 配置解析失败时，不要直接删除配置；先复制备份并按错误字段修正。
 - 会话或工作区数据异常时，保留原始文件用于复现，不要在未备份时批量清理。
 - 仓库公共分支发生历史重写后，协作者应重新 fetch，并根据自己的未推送提交选择 rebase、cherry-pick 或重新克隆；不要盲目 hard reset 有本地工作的目录。

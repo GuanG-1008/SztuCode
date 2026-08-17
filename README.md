@@ -2,7 +2,7 @@
 
 > 一个本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
 
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-2F855A)](LICENSE)
@@ -81,8 +81,8 @@ SztuCode 使用 daemon 与客户端分离的架构。长任务不依赖某个界
 
 ```text
 Tauri Desktop ─┐
-Textual TUI ───┼─ TCP / NDJSON / JSON-RPC 2.0 ─ sztu-code daemon
-CLI ───────────┘                                  │
+Node CLI ──────┼─ TCP / NDJSON / JSON-RPC 2.0 ─ TypeScript daemon
+Eval Runner ───┘                                  │
                                                   ├─ Workspace / Session
                                                   ├─ Agent Runner / Loop
                                                   ├─ LLM Provider
@@ -92,24 +92,24 @@ CLI ───────────┘                                  │
                                                   └─ EventBus / Trace
 ```
 
-默认监听 `127.0.0.1:7437`。IPC 命令和事件使用 Pydantic v2 模型定义，详情见 [架构说明](docs/reference/architecture.md)和自动生成的 [Wire Protocol](docs/reference/wire-protocol.md)。架构取舍记录在 [ADR](docs/adr/README.md) 中。
+默认监听 `127.0.0.1:7438`。IPC 命令和事件由 `packages/protocol` 的 TypeScript 类型定义，详情见[架构说明](docs/reference/architecture.md)。
 
 ## 快速开始
 
 ### 环境要求
 
 - Git；
-- Python `3.12.x`；
-- [uv](https://docs.astral.sh/uv/)；
+- Node.js 20+；
 - Anthropic 或 OpenAI-compatible API 凭据；
-- 可选：Node.js 20+、Rust 和 Tauri 平台依赖，用于桌面端开发。
+- 可选：Rust 和 Tauri 平台依赖，用于桌面端开发；Python 3.12 + uv 仅用于 legacy 测试和专业 artifact 脚本。
 
 ### 安装
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
 cd SztuCode
-uv sync
+npm install
+npm run build
 ```
 
 复制配置模板：
@@ -141,40 +141,23 @@ ANTHROPIC_API_KEY=<your-api-key>
 
 不要提交 `.env`。完整字段和优先级见[配置参考](docs/getting-started/configuration.md)。
 
-### 启动 TUI
+### 启动 CLI
 
 推荐直接在目标项目目录启动：
 
 ```bash
-uv run sztucode /path/to/your/project
+npm run daemon
 ```
 
-首次打开目录时需要确认信任。常用选项：
+另一个终端中：
 
 ```bash
-uv run sztucode . --trust
-uv run sztucode . --read-only
-uv run sztucode . --replay RUN_ID
+npm run cli -- ping
+npm run cli -- run --goal "分析当前项目并修复测试失败"
+npm run cli -- chat
 ```
 
-也可以分别启动 daemon 和 TUI：
-
-```bash
-# 终端 1
-uv run sztu-code
-
-# 终端 2
-uv run sztu-tui
-```
-
-CLI 主要用于连通性检查和调试：
-
-```bash
-uv run sztu ping
-uv run sztu run --goal "分析当前项目并修复测试失败"
-uv run sztu chat
-uv run sztu trace --follow
-```
+发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztucode`。该入口包含 TypeScript daemon 和 CLI，不创建 Python 虚拟环境。
 
 更完整的安装说明见[安装与启动](docs/getting-started/installation.md)。
 
@@ -184,7 +167,7 @@ uv run sztu trace --follow
 
 ```bash
 # 终端 1：仓库根目录
-uv run sztu-code
+npm run daemon
 
 # 终端 2
 cd desktop
@@ -209,11 +192,12 @@ cargo check
 
 ```text
 SztuCode/
-├─ src/sztu_code/
-│  ├─ core/          # daemon、Agent Loop、协议、工具、权限与扩展系统
-│  ├─ evaluation/    # 统一评测协议、runner、任务集与报告
-│  ├─ tui/           # Textual 终端界面
-│  └─ cli/           # 命令行客户端
+├─ packages/
+│  ├─ protocol/      # TypeScript JSON-RPC、事件和工作流契约
+│  ├─ runtime-ts/    # daemon、Agent Loop、工具、权限与扩展系统
+│  ├─ cli/           # Node 命令行客户端
+│  └─ evaluation/    # TypeScript 评测 runner 与报告
+├─ src/sztu_code/    # legacy Python 实现及专业 artifact 脚本
 ├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
 ├─ tests/            # 单元测试与集成测试
 ├─ eval/             # 轨迹分析、报告和 SWE-bench 适配
@@ -225,22 +209,21 @@ SztuCode/
 
 ## 开发与验证
 
-Python 基础检查：
+TypeScript 主链检查：
 
 ```bash
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest tests/unit -v
-uv run pytest tests/integration -v
-uv run python scripts/gen_protocol_doc.py --check
+npm run typecheck
+npm test
+npm run build
+npm run build --prefix desktop
 ```
 
-修改协议模型时，先运行 `uv run python scripts/gen_protocol_doc.py` 更新生成文档。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
+共享协议修改位于 `packages/protocol`。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
 
 离线运行 10 个内部 Coding Agent 基准并生成 JSON/Markdown 报告：
 
 ```bash
-uv run sztu-eval run --suite internal --runner reference --repeat 3
+npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval
 ```
 
 任务格式、真实 daemon runner、指标定义和 SWE-bench Lite 小样本流程见

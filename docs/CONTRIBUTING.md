@@ -21,37 +21,38 @@
 基础开发需要：
 
 - Git；
-- Python `3.12.x`；
-- [uv](https://docs.astral.sh/uv/)；
-- 可选：Node.js 20+、Rust stable 和系统依赖，用于桌面端开发。
+- Node.js 20+；
+- 可选：Rust stable 和系统依赖，用于桌面端开发；Python 3.12 + uv 用于 legacy Python 与专业脚本。
 
-克隆并安装 Python 依赖：
+克隆并安装主运行时依赖：
 
 ```bash
 git clone https://github.com/rojim666/SztuCode.git
 cd SztuCode
-uv sync
+npm install
 ```
 
 运行基础检查：
 
 ```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+维护 legacy Python 时另外运行：
+
+```bash
+uv sync
 uv run ruff check src tests scripts
 uv run mypy src
-uv run pytest tests/unit -v
+uv run pytest tests/ -v
 ```
 
-运行集成测试：
+如果修改了协议，必须从 `packages/protocol/src` 更新共享类型并核验所有消费者：
 
 ```bash
-uv run pytest tests/integration -v
-```
-
-如果修改了 `src/sztu_code/core/bus/` 下的协议模型，还必须更新并核验协议文档：
-
-```bash
-uv run python scripts/gen_protocol_doc.py
-uv run python scripts/gen_protocol_doc.py --check
+npm run typecheck
 ```
 
 桌面端开发：

@@ -38,7 +38,7 @@
 调整文档位置或链接后，运行本地链接检查：
 
 ```bash
-uv run python scripts/check_markdown_links.py
+npm run docs:links
 ```
 
 该脚本检查根目录 Markdown 与 `docs/**/*.md` 中的相对链接是否指向存在的路径，发现坏链时按
@@ -47,11 +47,10 @@ uv run python scripts/check_markdown_links.py
 
 ## 自动生成文档
 
-`docs/reference/wire-protocol.md` 由 `scripts/gen_protocol_doc.py` 生成，不手工编辑：
+`docs/reference/wire-protocol.md` 由 `scripts/gen_protocol_doc.ts` 生成，不手工编辑：
 
 ```bash
-uv run python scripts/gen_protocol_doc.py
-uv run python scripts/gen_protocol_doc.py --check
+npm run docs:protocol
 ```
 
 若生成内容需要改进，应修改模型或生成器，再重新生成。

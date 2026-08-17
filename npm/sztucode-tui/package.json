@@ -1,7 +1,7 @@
 {
   "name": "sztucode-tui",
   "version": "0.0.1",
-  "description": "One-command installer and launcher for the SztuCode terminal UI",
+  "description": "TypeScript terminal client for the SztuCode agent runtime",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -10,15 +10,19 @@
   },
   "files": [
     "bin",
-    "scripts",
-    "vendor",
+    "runtime",
+    "cli",
+    "prompts",
+    "agents",
+    "skills",
     "README.md"
   ],
   "scripts": {
-    "postinstall": "node scripts/install.js"
+    "build": "npm run build --prefix ../..",
+    "prepack": "npm run build && node scripts/install.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "os": [
     "darwin",

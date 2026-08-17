@@ -1,0 +1,91 @@
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import type { ToolPermission } from "./tools-types.js";
+import type { Workspace } from "./workspace.js";
+import type { EventBus } from "./event-bus.js";
+
+export type { ToolPermission } from "./tools-types.js";
+export type ToolResult = { ok: boolean; output: string; error?: string; errorType?: "runtime_error" | "timeout" | "schema_error" | "permission_denied" };
+export type ToolContext = { workspace: Workspace; signal?: AbortSignal };
+export interface Tool { readonly name: string; readonly description: string; readonly permission: ToolPermission; readonly schema: Record<string, unknown>; invoke(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult>; }
+
+const ok = (output: string): ToolResult => ({ ok: true, output });
+const fail = (error: string, errorType: ToolResult["errorType"] = "runtime_error"): ToolResult => ({ ok: false, output: "", error, errorType });
+const str = (params: Record<string, unknown>, key: string): string | null => typeof params[key] === "string" ? params[key] as string : null;
+const ignored = new Set([".git", "node_modules", "__pycache__", ".venv", ".codegraph", "dist", "build"]);
+const escapeRegex = (value: string) => value.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+const globMatch = (value: string, pattern: string): boolean => new RegExp(`^${pattern.split("**").map((part) => part.split("*").map(escapeRegex).join("[^/]*")).join(".*")}$`).test(value);
+
+export class ToolRegistry {
+  private readonly tools = new Map<string, Tool>();
+  register(tool: Tool): void { if (this.tools.has(tool.name)) throw new Error(`Tool already registered: ${tool.name}`); this.tools.set(tool.name, tool); }
+  get(name: string): Tool | undefined { return this.tools.get(name); }
+  list(): Tool[] { return [...this.tools.values()]; }
+  restrictTo(names: string[]): this { if (!names.length) return this; const allowed = new Set(names); for (const name of this.tools.keys()) if (!allowed.has(name)) this.tools.delete(name); return this; }
+}
+
+export function registerQuestionTool(registry: ToolRegistry, ask: (questions: Array<Record<string, unknown>>) => Promise<unknown[]>): void {
+  registry.register({ name: "ask_user_question", description: "Ask the user one to three structured questions and wait for an answer", permission: "read_only", schema: { type: "object", properties: { questions: { type: "array", minItems: 1, maxItems: 3 } }, required: ["questions"] }, async invoke(params) { try { return ok(JSON.stringify({ answers: await ask(Array.isArray(params.questions) ? params.questions as Array<Record<string, unknown>> : []) })); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); } } });
+}
+
+type PlanItemState = { id: number; subject: string; status: "pending" | "in_progress" | "completed"; blocked_by: number[]; description: string };
+export function createPlanTools(events: EventBus, runId: string, sessionId = ""): Tool[] {
+  const items: PlanItemState[] = []; let nextId = 1;
+  const publish = () => events.publish({ type: "plan.updated", run_id: runId, session_id: sessionId, items: items.map(({ id, subject, status, blocked_by }) => ({ id, subject, status, blocked_by })), ts: new Date().toISOString() });
+  return [
+    { name: "task_create", description: "Create a trackable task for complex work", permission: "read_only", schema: { type: "object", properties: { subject: { type: "string" }, description: { type: "string" }, blocked_by: { type: "array", items: { type: "integer" } } }, required: ["subject"] }, async invoke(params) { const subject = typeof params.subject === "string" ? params.subject.trim() : ""; if (!subject) return { ok: false, output: "", error: "subject is required", errorType: "schema_error" }; const task = { id: nextId++, subject, description: String(params.description ?? ""), status: "pending" as const, blocked_by: Array.isArray(params.blocked_by) ? params.blocked_by.map(Number).filter(Number.isInteger) : [] }; items.push(task); publish(); return { ok: true, output: JSON.stringify(task) }; } },
+    { name: "task_update", description: "Update a task status or dependencies", permission: "read_only", schema: { type: "object", properties: { task_id: { type: "integer" }, status: { type: "string", enum: ["pending", "in_progress", "completed"] }, add_blocked_by: { type: "array", items: { type: "integer" } }, remove_blocked_by: { type: "array", items: { type: "integer" } } }, required: ["task_id"] }, async invoke(params) { const task = items.find((item) => item.id === Number(params.task_id)); if (!task) return { ok: false, output: "", error: `task not found: ${params.task_id}`, errorType: "schema_error" }; if (["pending", "in_progress", "completed"].includes(String(params.status))) task.status = String(params.status) as PlanItemState["status"]; const add = Array.isArray(params.add_blocked_by) ? (params.add_blocked_by as unknown[]).map(Number) : []; const remove = Array.isArray(params.remove_blocked_by) ? (params.remove_blocked_by as unknown[]).map(Number) : []; task.blocked_by = [...new Set([...task.blocked_by, ...add])].filter((id) => !remove.includes(id)); if (task.status === "completed") for (const other of items) other.blocked_by = other.blocked_by.filter((id) => id !== task.id); publish(); return { ok: true, output: JSON.stringify(task) }; } },
+    { name: "task_list", description: "List current plan tasks", permission: "read_only", schema: { type: "object", properties: {} }, async invoke() { return { ok: true, output: JSON.stringify(items) }; } },
+  ];
+}
+
+async function collectFiles(root: string, current: string, output: string[]): Promise<void> {
+  for (const entry of await readdir(current, { withFileTypes: true })) {
+    if (entry.isDirectory() && !ignored.has(entry.name)) await collectFiles(root, path.join(current, entry.name), output);
+    else if (entry.isFile()) output.push(path.relative(root, path.join(current, entry.name)).split(path.sep).join("/"));
+  }
+}
+
+export function createWorkspaceTools(extraTools: Tool[] = []): ToolRegistry {
+  const registry = new ToolRegistry();
+  registry.register({ name: "read_file", description: "Read a UTF-8 file inside the workspace", permission: "read_only", schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, async invoke(params, context) {
+    const file = str(params, "path"); if (!file) return fail("path is required", "schema_error");
+    try { const bytes = await readFile(context.workspace.resolve(file)); const truncated = bytes.length > 512 * 1024; return ok(bytes.subarray(0, 512 * 1024).toString("utf8") + (truncated ? "\n[truncated]" : "")); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  }});
+  registry.register({ name: "write_file", description: "Write a UTF-8 file inside the workspace", permission: "workspace_write", schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] }, async invoke(params, context) {
+    const file = str(params, "path"); const content = str(params, "content"); if (!file || content === null) return fail("path and content are required", "schema_error");
+    try { const target = context.workspace.resolve(file); await import("node:fs/promises").then(({ mkdir }) => mkdir(path.dirname(target), { recursive: true })); await writeFile(target, content, "utf8"); return ok(`wrote ${file}`); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  }});
+  registry.register({ name: "list_dir", description: "List a workspace directory as a tree", permission: "read_only", schema: { type: "object", properties: { path: { type: "string" }, max_depth: { type: "integer" } } }, async invoke(params, context) {
+    try { return ok((await context.workspace.list(str(params, "path") ?? ".", typeof params.max_depth === "number" ? Math.min(4, Math.max(1, params.max_depth)) : 2)).join("\n")); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  }});
+  registry.register({ name: "glob_search", description: "Find files matching a glob pattern", permission: "read_only", schema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" } }, required: ["pattern"] }, async invoke(params, context) {
+    const pattern = str(params, "pattern"); if (!pattern) return fail("pattern is required", "schema_error");
+    try { const root = context.workspace.resolve(str(params, "path") ?? "."); const files: string[] = []; const workspaceRoot = context.workspace.root; if ((await stat(root)).isFile()) files.push(path.relative(workspaceRoot, root).split(path.sep).join("/")); else await collectFiles(workspaceRoot, root, files); const matches = files.filter((file) => globMatch(file, pattern)).sort().slice(0, 200); return ok(matches.length ? matches.join("\n") : "No files found."); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  }});
+  registry.register({ name: "grep_search", description: "Search workspace files with a regular expression", permission: "read_only", schema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, glob: { type: "string" } }, required: ["pattern"] }, async invoke(params, context) {
+    const pattern = str(params, "pattern"); if (!pattern) return fail("pattern is required", "schema_error"); let matcher: RegExp; try { matcher = new RegExp(pattern, params.case_sensitive === true ? "" : "i"); } catch (error) { return fail(error instanceof Error ? error.message : String(error), "schema_error"); }
+    try { const root = context.workspace.root; const target = context.workspace.resolve(str(params, "path") ?? "."); const files: string[] = []; if ((await stat(target)).isFile()) files.push(path.relative(root, target).split(path.sep).join("/")); else await collectFiles(root, target, files); const result: string[] = []; for (const file of files) { if (params.glob && !globMatch(file, String(params.glob))) continue; const text = (await readFile(path.join(root, file))).subarray(0, 512 * 1024).toString("utf8"); if (text.includes("\u0000")) continue; text.split(/\r?\n/).forEach((line, index) => { if (matcher.test(line) && result.length < 200) result.push(`${file}:${index + 1}: ${line}`); }); } return ok(result.length ? result.join("\n") : "No matches found."); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  }});
+  registry.register({ name: "edit_file", description: "Replace an exact string in a workspace file", permission: "workspace_write", schema: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" }, replace_all: { type: "boolean" } }, required: ["path", "old_string", "new_string"] }, async invoke(params, context) {
+    const file = str(params, "path"); const oldString = str(params, "old_string"); const newString = str(params, "new_string"); if (!file || oldString === null || newString === null) return fail("path, old_string and new_string are required", "schema_error"); if (oldString === newString) return fail("old_string and new_string are identical", "schema_error");
+    try { const target = context.workspace.resolve(file); const original = await readFile(target, "utf8"); const count = original.split(oldString).length - 1; if (!count) return fail(`old_string not found in ${file}`); if (count > 1 && params.replace_all !== true) return fail(`old_string appears ${count} times in ${file}`, "schema_error"); await writeFile(target, params.replace_all === true ? original.split(oldString).join(newString) : original.replace(oldString, newString), "utf8"); return ok(`replaced ${params.replace_all === true ? count : 1} occurrence(s) in ${file}`); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  }});
+  registry.register({ name: "bash", description: "Execute a non-interactive shell command", permission: "danger_full_access", schema: { type: "object", properties: { command: { type: "string" }, timeout: { type: "integer" } }, required: ["command"] }, async invoke(params, context) {
+    const command = str(params, "command"); if (!command) return fail("command is required", "schema_error"); if (/(^|[;&|])\s*(npm|pnpm|yarn|pip|uv)\s+(install|add|update)\b/i.test(command)) return fail("Installing or updating dependencies is blocked");
+    return new Promise((resolve) => {
+      if (context.signal?.aborted) { resolve(fail("Run cancelled")); return; }
+      const child = spawn(command, { cwd: context.workspace.root, shell: true, windowsHide: true }); let output = ""; let settled = false;
+      const finish = (result: ToolResult) => { if (settled) return; settled = true; clearTimeout(timeout); context.signal?.removeEventListener("abort", abort); resolve(result); };
+      const abort = () => { child.kill(); finish(fail("Run cancelled")); };
+      const timeout = setTimeout(() => { child.kill(); finish(fail(`[timeout after ${params.timeout ?? 30}s]`, "timeout")); }, Math.min(120, Math.max(1, Number(params.timeout ?? 30))) * 1000);
+      context.signal?.addEventListener("abort", abort, { once: true });
+      child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); }); child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+      child.on("error", (error) => finish(fail(error.message)));
+      child.on("close", (code) => { const text = output.slice(0, 64 * 1024) + (output.length > 64 * 1024 ? "\n[truncated]" : ""); finish(code === 0 ? ok(text) : { ok: false, output: text, error: `command exited with code ${code}`, errorType: "runtime_error" }); });
+    });
+  }});
+  for (const tool of extraTools) registry.register(tool);
+  return registry;
+}
