@@ -53,6 +53,19 @@ test("OpenAI chat provider parses SSE deltas and emits incremental text", async 
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("OpenAI-compatible provider supports keyless endpoints without an authorization header", async () => {
+  const originalFetch = globalThis.fetch;
+  let authorization: string | null = "not-called";
+  globalThis.fetch = (async (_input, init) => {
+    authorization = new Headers(init?.headers).get("authorization");
+    return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const result = await new OpenAiCompatibleProvider({ baseUrl: "http://mock/v1", model: "free-model" }).complete([{ role: "user", content: "hi" }], new ToolRegistry());
+    assert.equal(authorization, null); assert.equal(result.text, "ok");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Anthropic messages provider parses streaming text, tool JSON, and usage", async () => {
   const originalFetch = globalThis.fetch;
   const tokens: string[] = [];

@@ -22,7 +22,7 @@ export class WorkspaceManager {
     } catch { /* first run */ }
   }
   private async persist(): Promise<void> { await mkdir(path.dirname(this.filePath), { recursive: true }); await writeFile(this.filePath, `${JSON.stringify([...this.records.values()], null, 2)}\n`, "utf8"); }
-  async list(): Promise<WorkspaceRecord[]> { await this.ensureLoaded(); return [...this.records.values()].filter((item) => !item.archived); }
+  async list(): Promise<WorkspaceRecord[]> { await this.ensureLoaded(); return [...this.records.values()]; }
   async open(rawPath: string): Promise<WorkspaceRecord> {
     await this.ensureLoaded(); const resolved = path.resolve(rawPath); const existing = [...this.records.values()].find((item) => path.resolve(item.path) === resolved);
     if (existing) { existing.archived = false; await this.persist(); return existing; }

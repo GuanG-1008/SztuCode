@@ -14,8 +14,8 @@ export class ConfigurableProvider implements ModelProvider {
         if (!apiKey) throw new Error("Anthropic API key is not configured");
         return new AnthropicMessagesProvider({ apiKey, baseUrl: config.base_url || process.env.ANTHROPIC_BASE_URL, model: config.model, maxTokens: config.max_output_tokens, timeoutMs: config.timeout_s * 1000, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, cacheControl: config.cache_control }).complete(messages, tools, signal, onToken);
       }
-      const apiKey = config.api_key ?? process.env.OPENAI_API_KEY ?? process.env.DEEPSEEK_API_KEY;
-      if (!apiKey) throw new Error("OpenAI-compatible API key is not configured");
+      const apiKey = config.keyless ? undefined : config.api_key ?? process.env.OPENAI_API_KEY ?? process.env.DEEPSEEK_API_KEY;
+      if (!config.keyless && !apiKey) throw new Error("OpenAI-compatible API key is not configured");
       return new OpenAiCompatibleProvider({ apiKey, baseUrl: config.base_url || (process.env.OPENAI_BASE_URL ?? process.env.DEEPSEEK_BASE_URL), model: config.model, apiFormat: config.api_format, maxOutputTokens: config.max_output_tokens, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, timeoutMs: config.timeout_s * 1000, stream: true }).complete(messages, tools, signal, onToken);
     };
     let lastError: unknown;

@@ -29,6 +29,18 @@ const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 const SESSION_BUSY = -32012;
+const TEXT_READ_LIMIT = 1_000_000;
+const IMAGE_READ_LIMIT = 5_000_000;
+
+const MIME_TYPES: Record<string, string> = {
+  ".avif": "image/avif", ".bmp": "image/bmp", ".gif": "image/gif", ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg", ".jpg": "image/jpeg", ".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp",
+};
+
+function mimeType(filePath: string): string | null { return MIME_TYPES[path.extname(filePath).toLowerCase()] ?? null; }
+function publicSkill(skill: Awaited<ReturnType<SkillLoader["list"]>>[number]): Omit<typeof skill, "system_prompt_template" | "allowed_tools"> {
+  const { system_prompt_template: _body, allowed_tools: _tools, ...summary } = skill; return summary;
+}
 
 class RpcDispatchError extends Error { constructor(readonly code: number, message: string, readonly data?: unknown) { super(message); } }
 
@@ -197,7 +209,9 @@ export class RuntimeServer {
       case "workspace.tree": { const params = request.params as { workspace_id: string; path?: string; max_depth?: number; max_entries?: number }; return ok(request.id, { nodes: await this.workspaces.tree(params.workspace_id, params.path, params.max_depth, params.max_entries) }); }
       case "file.search": { const params = request.params as { workspace_id: string; query: string; max_results?: number }; return ok(request.id, { matches: await this.workspaces.search(params.workspace_id, params.query, params.max_results) }); }
       case "file.read": {
-        const params = request.params as { workspace_id: string; path: string }; const workspace = await this.workspaces.get(params.workspace_id); const target = path.resolve(workspace.path, params.path); const relative = path.relative(workspace.path, target); if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("path escapes workspace"); const bytes = await readFile(target); const binary = bytes.subarray(0, 8192).includes(0); const truncated = bytes.length > 1024 * 1024; return ok(request.id, { content: binary ? "" : bytes.subarray(0, 1024 * 1024).toString("utf8"), encoding: "UTF-8", binary, truncated, media_base64: binary ? bytes.toString("base64") : null, mime_type: null });
+        const params = request.params as { workspace_id: string; path: string }; const workspace = await this.workspaces.get(params.workspace_id); const target = path.resolve(workspace.path, params.path); const relative = path.relative(workspace.path, target); if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("path escapes workspace");
+        const fileMimeType = mimeType(target); const image = fileMimeType?.startsWith("image/") ?? false; const readLimit = image ? IMAGE_READ_LIMIT : TEXT_READ_LIMIT; const file = await readFile(target); const bytes = file.subarray(0, readLimit); const binary = bytes.subarray(0, 8192).includes(0); const previewableImage = binary && image && file.length <= IMAGE_READ_LIMIT;
+        return ok(request.id, { content: binary ? "" : bytes.toString("utf8"), encoding: "UTF-8", binary, truncated: file.length > readLimit, media_base64: previewableImage ? bytes.toString("base64") : null, mime_type: previewableImage ? fileMimeType : null });
       }
       case "change.list": { const params = request.params as { workspace_id: string; run_id?: string | null }; const workspace = await this.workspaces.get(params.workspace_id); return ok(request.id, { changes: params.run_id ? await activeRunChanges(params.run_id, workspace.path) : await this.git.list(params.workspace_id) }); }
       case "change.diff": { const params = request.params as { workspace_id: string; path?: string | null; run_id?: string | null }; if (params.run_id && params.path) { const workspace = await this.workspaces.get(params.workspace_id); const snapshotDiff = await runChangeDiff(params.run_id, workspace.path, params.path); if (snapshotDiff !== null) return ok(request.id, { diff: snapshotDiff }); } return ok(request.id, { diff: await this.git.diff(params.workspace_id, params.path) }); }
@@ -209,8 +223,8 @@ export class RuntimeServer {
       case "settings.get": return ok(request.id, { settings: await this.settings.get() });
       case "settings.update": { const update = request.params as Record<string, unknown>; const settings = await this.settings.update(update as Partial<import("./settings.js").RuntimeSettings>); this.runs.permissions.setMode(settings.permission_mode); return ok(request.id, { settings }); }
       case "permission.set_mode": { const params = request.params as { mode: import("@sztucode/protocol").PermissionMode }; this.runs.permissions.setMode(params.mode); const settings = await this.settings.update({ permission_mode: params.mode }); return ok(request.id, { ok: true, mode: settings.permission_mode }); }
-      case "provider.status": { const settings = await this.settings.get(); const config = await this.settings.getProviderConfig(); const keyConfigured = Boolean(config.api_key || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY || process.env.ANTHROPIC_API_KEY); return ok(request.id, { provider: settings.provider, api_format: settings.api_format, model: settings.model, api_key_configured: keyConfigured, ready_for_next_run: keyConfigured && Boolean(settings.model), mcp_servers: this.mcp.statuses() }); }
-      case "skill.list": { const params = request.params as { workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); const skills = await new SkillLoader(root).list(); return ok(request.id, { skills: skills.map(({ system_prompt_template: _body, allowed_tools: _tools, ...skill }) => skill) }); }
+      case "provider.status": { const settings = await this.settings.get(); const config = await this.settings.getProviderConfig(); const keyConfigured = Boolean(config.keyless || config.api_key || (settings.provider === "openai" ? process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY : process.env.ANTHROPIC_API_KEY)); const skills = (await new SkillLoader(process.cwd()).list()).map(publicSkill); return ok(request.id, { provider: settings.provider, api_format: settings.api_format, model: settings.model, api_key_configured: keyConfigured, ready_for_next_run: keyConfigured && Boolean(settings.model), skills, mcp_servers: this.mcp.statuses() }); }
+      case "skill.list": { const params = request.params as { workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); const skills = await new SkillLoader(root).list(); return ok(request.id, { skills: skills.map(publicSkill) }); }
       case "skill.set_enabled": { const params = request.params as { skill_id: string; enabled: boolean; workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); const { system_prompt_template: _body, allowed_tools: _tools, ...skill } = await new SkillLoader(root).setEnabled(params.skill_id, params.enabled); return ok(request.id, { skill }); }
       case "skill.install": { const params = request.params as { source_path: string; scope: "personal" | "workspace"; workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); const { system_prompt_template: _body, allowed_tools: _tools, ...skill } = await new SkillLoader(root).install(params.source_path, params.scope); return ok(request.id, { skill }); }
       case "plugin.list": { const params = request.params as { workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); return ok(request.id, { plugins: await new PluginManager(root).list() }); }
@@ -269,11 +283,11 @@ export class RuntimeServer {
         return ok(request.id, { accepted, ok: accepted });
       }
       case "session.rename": { const params = request.params as { session_id: string; title: string }; return ok(request.id, { session: toSessionSummary(await this.sessions.rename(params.session_id, params.title)) }); }
-      case "session.archive": { const params = request.params as { session_id: string }; return ok(request.id, { session: toSessionSummary(await this.sessions.setArchived(params.session_id, true)) }); }
-      case "session.resume": { const params = request.params as { session_id: string }; return ok(request.id, { session: toSessionSummary(await this.sessions.setArchived(params.session_id, false)) }); }
-      case "session.pin": { const params = request.params as { session_id: string; pinned: boolean }; return ok(request.id, { session: toSessionSummary(await this.sessions.setPinned(params.session_id, params.pinned)) }); }
-      case "session.close": { const params = request.params as { session_id: string }; return ok(request.id, { status: (await this.sessions.close(params.session_id)).status }); }
-      case "session.delete": { const params = request.params as { session_id: string }; await this.sessions.delete(params.session_id); return ok(request.id, { session_id: params.session_id, deleted: true }); }
+      case "session.archive": { const params = request.params as { session_id: string }; if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy"); return ok(request.id, { session: toSessionSummary(await this.sessions.setArchived(params.session_id, true)) }); }
+      case "session.resume": { const params = request.params as { session_id: string }; if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy"); return ok(request.id, { session: toSessionSummary(await this.sessions.setArchived(params.session_id, false)) }); }
+      case "session.pin": { const params = request.params as { session_id: string; pinned: boolean }; if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy"); return ok(request.id, { session: toSessionSummary(await this.sessions.setPinned(params.session_id, params.pinned)) }); }
+      case "session.close": { const params = request.params as { session_id: string }; if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy"); return ok(request.id, { status: (await this.sessions.close(params.session_id)).status }); }
+      case "session.delete": { const params = request.params as { session_id: string }; if (this.runs.hasActiveSession(params.session_id)) throw new RpcDispatchError(SESSION_BUSY, "session busy"); await this.sessions.delete(params.session_id); return ok(request.id, { session_id: params.session_id, deleted: true }); }
       case "session.compact": {
         const params = request.params as { session_id: string; focus?: string };
         const settings = await this.settings.get(); const history = await this.sessions.history(params.session_id); const context = new ContextManager(history.map((message) => ({ role: message.role, content: message.content })), { maxTokens: settings.context_window, reservedOutputTokens: settings.max_output_tokens, maxToolResultChars: 8_000 });
@@ -320,7 +334,7 @@ const classifyError = (cause: unknown): { code: number; message: string; data?: 
   const message = cause instanceof Error ? cause.message : String(cause);
   if (/session busy|steer unavailable/i.test(message)) return { code: SESSION_BUSY, message };
   if (/not found|unknown (session|workspace|plugin|skill|model)/i.test(message) || (cause as NodeJS.ErrnoException | null)?.code === "ENOENT") return { code: -32004, message };
-  if (/required|invalid|escapes|must be|confirm=/i.test(message)) return { code: INVALID_PARAMS, message };
+  if (/required|invalid|escapes|must be|confirm=|cannot be|cannot delete|unknown model profile|archived session/i.test(message)) return { code: INVALID_PARAMS, message };
   return { code: INTERNAL_ERROR, message };
 };
 const toSessionSummary = (session: import("./session-store.js").Session) => { const stats = Object.values(session.run_stats ?? {}); return { session_id: session.id, title: session.title, mode: session.mode, status: session.status, updated_at: session.updated_at, run_count: session.run_ids.length, archived: session.archived, pinned: session.pinned, workspace_id: session.workspace_id, latest_run_id: session.run_ids.at(-1) ?? null, total_input_tokens: stats.reduce((sum, item) => sum + item.input_tokens, 0), total_output_tokens: stats.reduce((sum, item) => sum + item.output_tokens, 0), total_elapsed_s: stats.reduce((sum, item) => sum + item.elapsed_s, 0) }; };

@@ -19,8 +19,8 @@ export class SessionStore {
   }
   async get(id: string): Promise<Session> { return JSON.parse(await readFile(path.join(this.root, id, "meta.json"), "utf8")) as Session; }
   async rename(id: string, title: string): Promise<Session> { const session = await this.get(id); session.title = title.trim().slice(0, 200); session.updated_at = new Date().toISOString(); await this.save(session); return session; }
-  async setArchived(id: string, archived: boolean): Promise<Session> { const session = await this.get(id); session.archived = archived; session.updated_at = new Date().toISOString(); await this.save(session); return session; }
-  async setPinned(id: string, pinned: boolean): Promise<Session> { const session = await this.get(id); session.pinned = pinned; session.updated_at = new Date().toISOString(); await this.save(session); return session; }
+  async setArchived(id: string, archived: boolean): Promise<Session> { const session = await this.get(id); session.archived = archived; if (archived) session.pinned = false; else if (session.mode === "chat") session.status = "waiting_for_input"; session.updated_at = new Date().toISOString(); await this.save(session); return session; }
+  async setPinned(id: string, pinned: boolean): Promise<Session> { const session = await this.get(id); if (pinned && session.archived) throw new Error("archived session cannot be pinned"); session.pinned = pinned; session.updated_at = new Date().toISOString(); await this.save(session); return session; }
   async close(id: string): Promise<Session> { const session = await this.get(id); session.status = "closed"; session.updated_at = new Date().toISOString(); await this.save(session); return session; }
   async setStatus(id: string, status: SessionStatus): Promise<Session> { const session = await this.get(id); session.status = status; session.updated_at = new Date().toISOString(); await this.save(session); return session; }
   async delete(id: string): Promise<void> { const { rm } = await import("node:fs/promises"); await rm(path.join(this.root, id), { recursive: true, force: true }); }
@@ -30,7 +30,7 @@ export class SessionStore {
       if (!entry.isDirectory()) continue;
       try { const session = await this.get(entry.name); if (includeArchived || !session.archived) result.push(session); } catch { /* ignore incomplete sessions */ }
     }
-    return result.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    return result.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at) || b.id.localeCompare(a.id));
   }
   async appendMessage(id: string, message: Omit<SessionMessage, "ts"> & { ts?: string }): Promise<void> {
     await mkdir(path.join(this.root, id), { recursive: true });
