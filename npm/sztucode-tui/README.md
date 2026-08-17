@@ -20,4 +20,13 @@ sztucode /path/to/project
 sztucode-tui /path/to/project
 ```
 
+The launcher starts the bundled TypeScript daemon when needed and reuses an existing daemon on the configured loopback port. CLI subcommands are forwarded unchanged:
+
+```sh
+sztucode ping
+sztucode run --goal "inspect this repository"
+sztucode core status
+sztucode core stop
+```
+
 See the [SztuCode repository](https://github.com/rojim666/SztuCode) for configuration and usage.

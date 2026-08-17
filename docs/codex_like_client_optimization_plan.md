@@ -195,7 +195,7 @@ UI 字体：Microsoft YaHei UI / Noto Sans SC
 
 当前落地为 **Tauri 2 + Vue 3 + TypeScript** 桌面端，TypeScript daemon 作为本地服务。Tauri 负责窗口、文件选择、系统通知和安全的系统桥接；Vue 负责工作台布局、时间线、Diff、快捷键和可访问性；TCP 上的 NDJSON/JSON-RPC 协议负责事件流。
 
-Node CLI 与桌面端共享 `packages/protocol` 的 TypeScript 类型、会话/运行领域模型、事件命名、设置格式与端到端场景测试。legacy Textual/Python 客户端仅用于兼容和历史验证，不属于默认产品链。
+Node CLI 与桌面端共享 `packages/protocol` 的 TypeScript 类型、会话/运行领域模型、事件命名、设置格式与端到端场景测试。旧 Textual/Python 客户端已经从产品代码中移除，仅有截图和归档文档保留其历史记录。
 
 建议分层：
 

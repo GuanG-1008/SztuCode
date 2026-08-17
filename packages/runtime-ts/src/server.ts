@@ -76,7 +76,7 @@ export class RuntimeServer {
     return new Promise((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(this.port, this.host, () => {
-        this.events.publish({ type: "core.started", listen_addr: `${this.host}:${this.port}`, version: "ts-0.1.0" });
+        this.events.publish({ type: "core.started", listen_addr: `${this.host}:${this.port}`, version: "ts-0.2.0" });
         const address = this.server.address();
         resolve(typeof address === "object" && address ? `${address.address}:${address.port}` : `${this.host}:${this.port}`);
       });

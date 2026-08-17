@@ -4,7 +4,7 @@ import type { EventEnvelope, JsonRpcResponse, RuntimeEvent } from "@sztucode/pro
 
 export class IpcClient {
   private socket: net.Socket | null = null; private buffer = ""; private pending = new Map<string, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
-  constructor(readonly host = process.env.SZTU_HOST ?? "127.0.0.1", readonly port = Number(process.env.SZTU_PORT ?? 7438), private readonly eventHandler: (event: RuntimeEvent) => void = () => undefined) {}
+  constructor(readonly host = process.env.SZTU_TS_HOST ?? process.env.SZTU_HOST ?? "127.0.0.1", readonly port = Number(process.env.SZTU_TS_PORT ?? process.env.SZTU_PORT ?? 7438), private readonly eventHandler: (event: RuntimeEvent) => void = () => undefined) {}
   async connect(attempts = 20): Promise<void> {
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < attempts; attempt += 1) {

@@ -31,7 +31,7 @@
 | [Wire Protocol](reference/wire-protocol.md) | 自动生成 | JSON-RPC 命令、事件和 Schema |
 | [系统提示词架构](reference/system-prompts.html) | 参考 | 分层提示词结构的可视化说明 |
 | [评估指南](guides/evaluation.md) | 指南 | SWE-bench 与轨迹质量评估方法 |
-| [多智能体固定场景基线](evaluations/multi-agent-workflow.md) | 现行 | 五个跨模块场景的证据与单 Agent 对比 |
+| [多智能体工作流现状](evaluations/multi-agent-workflow.md) | 现行 | TypeScript DAG、角色化子 Agent 与当前验证边界 |
 | [AI 辅助开发方法论](guides/ai-assisted-development.md) | 指南 | 使用 AI 开发时的验证、审查与取舍 |
 
 ## 历史资料

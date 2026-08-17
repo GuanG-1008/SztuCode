@@ -14,17 +14,13 @@ if (!existsSync(runtime) || !existsSync(cli)) {
   process.exit(1);
 }
 
-const daemon = spawn(process.execPath, [runtime], {
-  detached: true,
-  stdio: "ignore",
-  windowsHide: true,
-  env: { ...process.env, SZTU_TS_PORT: process.env.SZTU_PORT ?? "7438" },
-});
-daemon.unref();
-
-const child = spawn(process.execPath, [cli, "chat", ...process.argv.slice(2)], {
+const rawArgs = process.argv.slice(2);
+const commands = new Set(["ping", "run", "chat", "trace", "core", "version", "--version", "--help", "help"]);
+const cliArgs = rawArgs.length === 0 ? ["chat"] : commands.has(rawArgs[0]) ? rawArgs : ["chat", ...rawArgs];
+const child = spawn(process.execPath, [cli, ...cliArgs], {
   stdio: "inherit",
   windowsHide: false,
+  env: { ...process.env, SZTU_AUTO_START: "1" },
 });
 child.on("error", (error) => { console.error(`Unable to start SztuCode: ${error.message}`); process.exitCode = 1; });
 child.on("exit", (code, signal) => { if (signal && process.platform !== "win32") process.kill(process.pid, signal); else process.exitCode = code ?? 1; });

@@ -200,9 +200,8 @@ SztuCode/
 │  ├─ cli/           # Node 命令行客户端
 │  └─ evaluation/    # TypeScript 评测 runner 与报告
 ├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
-├─ scripts/          # TypeScript 工程与诊断脚本
-├─ tmp/               # 本地评测产物（不提交）
 ├─ scripts/          # 协议生成等工程脚本
+├─ tmp/              # 本地评测产物（不提交）
 └─ docs/             # 使用、开发、架构、运维、评测和历史文档
 ```
 

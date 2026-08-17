@@ -86,5 +86,5 @@ SztuCode 可以读取、修改和执行本地代码，因此权限绕过、路�
 - 初次打开陌生仓库时使用只读或计划模式；
 - 不把 API Key 写入仓库、提示词、Issue、截图或 Trace；
 - 执行高风险命令前检查完整参数和目标路径；
-- 定期更新 SztuCode 及其 Python、Node.js 和 Rust 依赖；
+- 定期更新 SztuCode 的 Node.js 和 Rust 依赖；使用 artifact Skill 时，也要更新该 Skill 明确要求的隔离 Python 依赖；
 - 发现凭据泄漏时立即撤销凭据，再进行清理和报告。

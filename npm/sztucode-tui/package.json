@@ -1,6 +1,6 @@
 {
   "name": "sztucode-tui",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "TypeScript terminal client for the SztuCode agent runtime",
   "license": "MIT",
   "type": "module",

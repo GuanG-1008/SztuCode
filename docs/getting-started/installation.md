@@ -61,6 +61,17 @@ npm run daemon
 npm run cli -- chat
 ```
 
+全局安装的 npm 包会在需要时自动启动随包发布的 TypeScript daemon，并复用当前端口上已经运行的 SztuCode daemon：
+
+```bash
+npm install --global sztucode-tui
+sztucode /path/to/project
+sztucode ping
+sztucode run --goal "inspect the repository"
+sztucode core status
+sztucode core stop
+```
+
 ## 启动桌面端
 
 桌面工作台会从安装资源启动 TypeScript daemon；当前版本需要系统 PATH 中存在 Node.js 20+。也可手动分开调试：
