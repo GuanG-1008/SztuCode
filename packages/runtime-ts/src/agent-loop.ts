@@ -3,6 +3,7 @@ import { EventBus } from "./event-bus.js";
 import { ToolRegistry, type ToolContext } from "./tools.js";
 import type { PermissionGate } from "./permissions.js";
 import { ContextManager, sanitizeContextMessages, type ContextMessage } from "./context.js";
+import { DenialTracker } from "./denial-tracker.js";
 
 export type ChatMessage = ContextMessage;
 export type ModelToolCall = { id: string; name: string; input: Record<string, unknown> };
@@ -27,6 +28,7 @@ export class AgentLoop {
     const initialSystem = messages.find((message) => message.role === "system");
     if (initialSystem) { const text = typeof initialSystem.content === "string" ? initialSystem.content : JSON.stringify(initialSystem.content); this.publish({ type: "context.injected", run_id: runId, source: "system", label: "上下文注入", chars: text.length, preview: text.slice(0, 160), text, ts: now() }); }
     const usage: ModelUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const denials = new DenialTracker();
     for (let step = 1; step <= maxSteps; step += 1) {
       signal?.throwIfAborted();
       if (context.needsCompaction()) {
@@ -36,6 +38,11 @@ export class AgentLoop {
         if (this.options.sessionId) this.publish({ type: "context.compacted", session_id: this.options.sessionId, run_id: runId, original_tokens: result.originalTokens, summary_tokens: result.summaryTokens, ts: now() });
       }
       this.publish({ type: "step.started", run_id: runId, step, ts: now() });
+      const intervention = denials.intervention();
+      if (intervention) {
+        messages.push({ role: "user", content: intervention.message });
+        this.publish({ type: "denial.intervention", run_id: runId, tool_name: intervention.toolName, consecutive_count: intervention.consecutiveCount, total_denials: intervention.totalDenials, message: intervention.message, ts: now() });
+      }
       const steering = takeSteering?.() ?? [];
       if (steering.length) {
         messages.push(...steering);
@@ -69,6 +76,7 @@ export class AgentLoop {
         }
         const allowed = await this.permissions.check(runId, call.id, call.name, call.input, tool.permission, signal);
         if (!allowed) {
+          denials.recordDenial(call.name);
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "permission_denied", error_message: "Permission denied or approval timed out", elapsed_ms: 0, ts: now() });
           messages.push({ role: "tool", tool_call_id: call.id, content: "Permission denied" });
           continue;
@@ -77,6 +85,7 @@ export class AgentLoop {
         const result = await tool.invoke(call.input, { ...this.context, signal });
         const elapsedMs = Date.now() - started;
         if (result.ok) {
+          denials.recordSuccess(call.name);
           this.publish({ type: "tool.call_finished", run_id: runId, tool_use_id: call.id, tool_name: call.name, elapsed_ms: elapsedMs, output: result.output, ts: now() });
           if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "passed", summary: testSummary(String(call.input.command ?? ""), result.output), ts: now() });
         }

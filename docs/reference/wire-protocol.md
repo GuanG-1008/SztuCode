@@ -503,6 +503,18 @@
 | `decision` | `string` | yes |
 | `ts` | `string` | yes |
 
+### DenialInterventionEvent
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `"denial.intervention"` | yes |
+| `run_id` | `string` | yes |
+| `tool_name` | `string` | yes |
+| `consecutive_count` | `number` | yes |
+| `total_denials` | `number` | yes |
+| `message` | `string` | yes |
+| `ts` | `string` | yes |
+
 ### ToolCallStartedEvent
 
 | Field | Type | Required |

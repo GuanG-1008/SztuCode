@@ -14,6 +14,7 @@ import { createWorkspaceTools } from "../src/tools.js";
 import { WorkflowOrchestrator } from "../src/workflow.js";
 import type { HandoffArtifact, WorkflowTask } from "@sztucode/protocol";
 import { normalizeWorkflowPath, workflowPathIsAllowed } from "../src/workflow-scope.js";
+import { AgentLoop } from "../src/agent-loop.js";
 
 const task = (id: string, dependencies: string[] = []) => ({ id, title: id, description: id, owner: "coder" as const, dependencies, completion_criteria: ["done"], allowed_paths: ["src"], depth: 0, token_budget: 0, time_budget_s: 0, max_retries: null });
 const artifact = (workflowTask: WorkflowTask, status: HandoffArtifact["status"] = "succeeded", tokens = 0): HandoffArtifact => ({ workflow_id: "w", task_id: workflowTask.id, role: workflowTask.owner, status, summary: status === "succeeded" ? "done" : "failed", changed_paths: [], scope_escalations: [], commands: [], output: "", conclusion: status, diff_summary: "", test_summary: "", security_summary: "", review_decision: null, tokens, elapsed_s: 0, attempt: 0, child_run_id: "" });
@@ -42,6 +43,50 @@ test("workflow scope upgrades only out-of-scope file writes", async () => {
   await gate.check("r", "1", "write_file", { path: "src/main.ts" }, "workspace_write");
   await gate.check("r", "2", "edit_file", { path: "docs/readme.md" }, "workspace_write");
   assert.deepEqual(observed, [{ toolName: "write_file", permission: "workspace_write" }, { toolName: "edit_file", permission: "danger_full_access" }]);
+});
+
+test("permission always decisions persist while full-access calls still require approval", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-permission-policy-"));
+  try {
+    const policyPath = path.join(root, "policy.toml");
+    const firstEvents = new EventBus(path.join(root, "first-events.jsonl"));
+    const first = new PermissionManager(firstEvents, 100, policyPath);
+    const pending = first.check("run-1", "permission-1", "write_file", { path: "src/a.ts" }, "workspace_write");
+    assert.equal(first.respond("permission-1", "always_allow"), true);
+    assert.equal(await pending, true);
+
+    const second = new PermissionManager(new EventBus(path.join(root, "second-events.jsonl")), 10, policyPath);
+    assert.equal(await second.check("run-2", "permission-2", "write_file", { path: "src/b.ts" }, "workspace_write"), true);
+    assert.equal(await second.check("run-2", "permission-3", "write_file", { path: "docs/b.ts" }, "danger_full_access"), false);
+    assert.match(await readFile(policyPath, "utf8"), /write_file = "allow"/);
+
+    const denyPending = second.check("run-2", "permission-4", "edit_file", { path: "src/a.ts" }, "workspace_write");
+    assert.equal(second.respond("permission-4", "always_deny"), true);
+    assert.equal(await denyPending, false);
+    const third = new PermissionManager(new EventBus(path.join(root, "third-events.jsonl")), 10, policyPath);
+    assert.equal(await third.check("run-3", "permission-5", "edit_file", { path: "src/b.ts" }, "workspace_write"), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("agent loop injects a traceable intervention after repeated permission denials", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-denial-intervention-"));
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl"));
+    const trace: string[] = [];
+    events.subscribe((event) => trace.push(event.type));
+    const seenMessages: string[] = [];
+    let calls = 0;
+    const provider: ModelProvider = { complete: async (messages) => {
+      seenMessages.push(messages.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n"));
+      calls += 1;
+      return calls <= 3 ? { text: "", tool_calls: [{ id: `write-${calls}`, name: "write_file", input: { path: "result.txt", content: "blocked" } }], stop_reason: "tool_use" } : { text: "changed approach", tool_calls: [], stop_reason: "end_turn" };
+    } };
+    const loop = new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async () => false });
+    const result = await loop.run("denial-run", "write result", 5);
+    assert.equal(result.text, "changed approach");
+    assert.match(seenMessages[3] ?? "", /repeatedly rejected/);
+    assert.ok(trace.includes("denial.intervention"));
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("workflow retries failed tasks exactly max_retries times", async () => {
