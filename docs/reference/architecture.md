@@ -59,7 +59,9 @@ npm 发布入口会启动 TypeScript daemon，并让 Node CLI 创建绑定到目
 
 ### 上下文
 
-Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-ts/src/context.ts` 计算；达到阈值时截断工具结果并执行压缩。
+Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-ts/src/context.ts` 计算；工具结果超过阈值时，`packages/runtime-ts/src/offload.ts` 将完整内容保存到当前 run 的 `refs/`，上下文保留摘要并可通过只读 `read_ref` 分页回读。写盘失败时才回退到有标记的截断；达到整体上下文阈值时再执行压缩。
+
+默认卸载阈值为 2,000 字符或 50 行，`bash`、`grep_search` 和 `glob_search` 始终卸载。可通过 `SZTU_OFFLOAD_ENABLED`、`SZTU_OFFLOAD_MIN_CHARS` 和 `SZTU_OFFLOAD_MIN_LINES` 调整。
 
 ### 工具
 

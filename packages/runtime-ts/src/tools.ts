@@ -20,6 +20,7 @@ const globMatch = (value: string, pattern: string): boolean => new RegExp(`^${pa
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
   register(tool: Tool): void { if (this.tools.has(tool.name)) throw new Error(`Tool already registered: ${tool.name}`); this.tools.set(tool.name, tool); }
+  replace(tool: Tool): void { this.tools.set(tool.name, tool); }
   get(name: string): Tool | undefined { return this.tools.get(name); }
   list(): Tool[] { return [...this.tools.values()]; }
   restrictTo(names: string[]): this { if (!names.length) return this; const allowed = new Set(names); for (const name of this.tools.keys()) if (!allowed.has(name)) this.tools.delete(name); return this; }
@@ -51,7 +52,7 @@ export function createWorkspaceTools(extraTools: Tool[] = []): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register({ name: "read_file", description: "Read a UTF-8 file inside the workspace", permission: "read_only", schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, async invoke(params, context) {
     const file = str(params, "path"); if (!file) return fail("path is required", "schema_error");
-    try { const bytes = await readFile(context.workspace.resolve(file)); const truncated = bytes.length > 512 * 1024; return ok(bytes.subarray(0, 512 * 1024).toString("utf8") + (truncated ? "\n[truncated]" : "")); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+    try { return ok((await readFile(context.workspace.resolve(file))).toString("utf8")); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
   }});
   registry.register({ name: "write_file", description: "Write a UTF-8 file inside the workspace", permission: "workspace_write", schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] }, async invoke(params, context) {
     const file = str(params, "path"); const content = str(params, "content"); if (!file || content === null) return fail("path and content are required", "schema_error");
@@ -83,7 +84,7 @@ export function createWorkspaceTools(extraTools: Tool[] = []): ToolRegistry {
       context.signal?.addEventListener("abort", abort, { once: true });
       child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); }); child.stderr.on("data", (chunk: Buffer) => { output += chunk.toString(); });
       child.on("error", (error) => finish(fail(error.message)));
-      child.on("close", (code) => { const text = output.slice(0, 64 * 1024) + (output.length > 64 * 1024 ? "\n[truncated]" : ""); finish(code === 0 ? ok(text) : { ok: false, output: text, error: `command exited with code ${code}`, errorType: "runtime_error" }); });
+      child.on("close", (code) => finish(code === 0 ? ok(output) : { ok: false, output, error: `command exited with code ${code}`, errorType: "runtime_error" }));
     });
   }});
   for (const tool of extraTools) registry.register(tool);

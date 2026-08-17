@@ -5,13 +5,15 @@ import type { PermissionGate } from "./permissions.js";
 import { ContextManager, sanitizeContextMessages, type ContextMessage } from "./context.js";
 import { DenialTracker } from "./denial-tracker.js";
 import { StuckLoopTracker, stuckSignature } from "./stuck-tracker.js";
+import path from "node:path";
+import { createReadRefTool, OffloadManager } from "./offload.js";
 
 export type ChatMessage = ContextMessage;
 export type ModelToolCall = { id: string; name: string; input: Record<string, unknown> };
 export type ModelUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
 export type ModelResponse = { text: string; tool_calls: ModelToolCall[]; stop_reason: "end_turn" | "tool_use"; usage?: Partial<ModelUsage>; model?: string; streamed?: boolean };
 export interface ModelProvider { complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void): Promise<ModelResponse> }
-export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number };
+export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number; offloadEnabled?: boolean; offloadMinChars?: number; offloadMinLines?: number; offloadRoot?: string };
 
 export class EchoProvider implements ModelProvider {
   async complete(messages: ChatMessage[]): Promise<ModelResponse> {
@@ -24,6 +26,8 @@ export class AgentLoop {
   constructor(private readonly provider: ModelProvider, private readonly tools: ToolRegistry, private readonly context: ToolContext, private readonly events: EventBus, private readonly permissions: PermissionGate, private readonly options: AgentLoopOptions = {}) {}
 
   async run(runId: string, goal: string, maxSteps = 20, history: ChatMessage[] = [], signal?: AbortSignal, takeSteering?: () => ChatMessage[]): Promise<{ text: string; steps: number; messages: ChatMessage[]; usage: ModelUsage }> {
+    const offload = new OffloadManager(this.options.offloadRoot ?? path.join(dataRoot(), "runs", safeRunId(runId)), { enabled: this.options.offloadEnabled ?? booleanEnv("SZTU_OFFLOAD_ENABLED", true), minChars: this.options.offloadMinChars ?? nonNegativeEnv("SZTU_OFFLOAD_MIN_CHARS", 2_000), minLines: this.options.offloadMinLines ?? nonNegativeEnv("SZTU_OFFLOAD_MIN_LINES", 50) });
+    this.tools.replace(createReadRefTool(offload));
     const context = new ContextManager([...history, { role: "user", content: goal }], { maxTokens: this.options.contextWindow ?? 128_000, reservedOutputTokens: this.options.maxOutputTokens ?? 8_192, maxToolResultChars: 8_000 });
     const messages = context.messages;
     const initialSystem = messages.find((message) => message.role === "system");
@@ -93,14 +97,19 @@ export class AgentLoop {
         const started = Date.now();
         const result = await tool.invoke(call.input, { ...this.context, signal });
         const elapsedMs = Date.now() - started;
+        const rawOutput = result.ok ? result.output : [result.output, result.error].filter(Boolean).join("\n") || "Tool failed";
+        let contextOutput = rawOutput;
+        if (offload.shouldOffload(call.name, rawOutput)) {
+          try { contextOutput = offload.placeholder(await offload.offload(call.name, call.id, rawOutput, runId, !result.ok)); } catch { /* Context truncation remains the fallback. */ }
+        }
         if (result.ok) {
           denials.recordSuccess(call.name);
           stuck.recordSuccess(stuckSignature(call));
-          this.publish({ type: "tool.call_finished", run_id: runId, tool_use_id: call.id, tool_name: call.name, elapsed_ms: elapsedMs, output: result.output, ts: now() });
+          this.publish({ type: "tool.call_finished", run_id: runId, tool_use_id: call.id, tool_name: call.name, elapsed_ms: elapsedMs, output: contextOutput, ts: now() });
           if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "passed", summary: testSummary(String(call.input.command ?? ""), result.output), ts: now() });
         }
         else { stuck.recordFailure(stuckSignature(call)); this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: result.errorType ?? "runtime_error", error_message: result.error ?? "Tool failed", elapsed_ms: elapsedMs, ts: now() }); if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "failed", summary: testSummary(String(call.input.command ?? ""), result.error ?? "Tool failed"), ts: now() }); }
-        messages.push({ role: "tool", tool_call_id: call.id, content: result.ok ? result.output : result.error ?? "Tool failed" });
+        messages.push({ role: "tool", tool_call_id: call.id, content: contextOutput });
       }
       this.publish({ type: "step.finished", run_id: runId, step, ts: now() });
     }
@@ -112,5 +121,8 @@ export class AgentLoop {
 
 const now = () => new Date().toISOString();
 const nonNegativeEnv = (name: string, fallback: number): number => { const value = Number(process.env[name]); return Number.isInteger(value) && value >= 0 ? value : fallback; };
+const booleanEnv = (name: string, fallback: boolean): boolean => process.env[name] === undefined ? fallback : !/^(0|false|no)$/i.test(process.env[name] ?? "");
+const dataRoot = () => process.env.SZTU_DATA_DIR ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? process.cwd(), ".sztu");
+const safeRunId = (runId: string) => runId.replace(/[^A-Za-z0-9_.-]/g, "_") || "run";
 const isTestCommand = (command: string): boolean => /(^|\s)(pytest|vitest|jest|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test)(\s|$)/i.test(command);
 const testSummary = (command: string, output: string): string => { const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const relevant = lines.filter((line) => /passed|failed|error|test/i.test(line)); return (relevant.at(-1) ?? lines.at(-1) ?? command).slice(0, 300); };
