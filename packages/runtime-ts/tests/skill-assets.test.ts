@@ -14,11 +14,11 @@ test("published skill assets compile TypeScript scripts and rewrite instructions
   const target = path.join(temporaryRoot, "target");
   await mkdir(path.join(source, "sample", "scripts"), { recursive: true });
   await writeFile(path.join(source, "sample", "scripts", "hello.ts"), "const value: string = 'ready'; console.log(value);\n", "utf8");
-  await writeFile(path.join(source, "sample", "SKILL.md"), "Run `npx tsx scripts/hello.ts` and inspect `scripts/hello.ts`.\n", "utf8");
+  await writeFile(path.join(source, "sample", "SKILL.md"), "Run `npx tsx \"<skill>/scripts/hello.ts\"`.\nInspect `scripts/hello.ts`.\n", "utf8");
 
   await prepareSkillAssets(source, target, repositoryRoot);
 
   await assert.rejects(readFile(path.join(target, "sample", "scripts", "hello.ts"), "utf8"));
   assert.match(await readFile(path.join(target, "sample", "scripts", "hello.mjs"), "utf8"), /console\.log/);
-  assert.equal(await readFile(path.join(target, "sample", "SKILL.md"), "utf8"), "Run `node scripts/hello.mjs` and inspect `scripts/hello.mjs`.\n");
+  assert.equal(await readFile(path.join(target, "sample", "SKILL.md"), "utf8"), "Run `node \"<skill>/scripts/hello.mjs\"`.\nInspect `scripts/hello.mjs`.\n");
 });

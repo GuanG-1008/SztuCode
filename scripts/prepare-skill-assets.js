@@ -30,17 +30,22 @@ export async function prepareSkillAssets(source, target, repositoryRoot) {
       windowsHide: true,
     });
     if (result.status !== 0) throw new Error(`Failed to compile skill script: ${script}`);
-    await unlink(script);
   }
+  await Promise.all(scripts.map((script) => unlink(script)));
 
   if (scripts.length === 0) return;
   const scriptNames = new Set(scripts.map((file) => path.basename(file, ".ts")));
   for (const file of files.filter((candidate) => candidate.endsWith(".md"))) {
     const original = await readFile(file, "utf8");
-    const updated = original.replace(/\b(?:(npx\s+tsx)\s+)?((?:\.\.\/|\.\/)?(?:[^\s`"']+\/)?scripts\/([\w-]+))\.ts\b/g, (match, runner, scriptPath, name) => {
-      if (!scriptNames.has(name)) return match;
-      return `${runner ? "node " : ""}${scriptPath}.mjs`;
-    });
+    const updated = original.split(/(?<=\n)/).map((line) => {
+      let rewritten = line;
+      let referencesCompiledScript = false;
+      for (const name of scriptNames) {
+        const pattern = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.ts\\b`, "g");
+        if (pattern.test(rewritten)) { referencesCompiledScript = true; rewritten = rewritten.replace(pattern, `${name}.mjs`); }
+      }
+      return referencesCompiledScript ? rewritten.replace(/\bnpx\s+tsx\b/g, "node") : rewritten;
+    }).join("");
     if (updated !== original) await writeFile(file, updated, "utf8");
   }
 }

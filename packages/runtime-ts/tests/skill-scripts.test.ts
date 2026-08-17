@@ -11,6 +11,8 @@ const execute = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const tsx = path.join(repositoryRoot, "node_modules", "tsx", "dist", "cli.mjs");
 const pluginScripts = path.join(repositoryRoot, "packages", "runtime-ts", "skills", "plugin-creator", "scripts");
+const skillCreatorScripts = path.join(repositoryRoot, "packages", "runtime-ts", "skills", "skill-creator", "scripts");
+const skillInstallerScripts = path.join(repositoryRoot, "packages", "runtime-ts", "skills", "skill-installer", "scripts");
 const runTs = (script: string, args: string[]) => execute(process.execPath, [tsx, script, ...args]);
 
 test("read_marketplace_name prints the configured marketplace name", async () => {
@@ -44,4 +46,23 @@ test("plugin scaffold passes the TypeScript validator", async () => {
   assert.match(stdout, /Plugin validation passed/);
   const market = JSON.parse(await readFile(marketplace, "utf8")) as { plugins: Array<{ name: string; source: { path: string } }> };
   assert.deepEqual(market.plugins, [{ name: "my-demo", source: { source: "local", path: "./plugins/my-demo" }, policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Productivity" }]);
+});
+
+test("skill initializer produces Node-first resources and valid editable metadata", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-skill-scaffold-"));
+  await runTs(path.join(skillCreatorScripts, "init_skill.ts"), ["GitHub API", "--path", root, "--resources", "scripts,references,assets", "--examples"]);
+  const skill = path.join(root, "github-api");
+  assert.match(await readFile(path.join(skill, "scripts", "example.mjs"), "utf8"), /node/);
+  assert.match(await readFile(path.join(skill, "agents", "openai.yaml"), "utf8"), /display_name: "GitHub API"/);
+  await writeFile(path.join(skill, "SKILL.md"), "---\nname: github-api\ndescription: Work with GitHub APIs and repository automation.\n---\n\n# GitHub API\n", "utf8");
+  const { stdout } = await runTs(path.join(skillCreatorScripts, "quick_validate.ts"), [skill]);
+  assert.equal(stdout.trim(), "Skill is valid!");
+});
+
+test("skill installer rejects paths outside the source repository before network access", async () => {
+  const destination = await mkdtemp(path.join(os.tmpdir(), "sztu-skill-install-"));
+  await assert.rejects(
+    runTs(path.join(skillInstallerScripts, "install_skill_from_github.ts"), ["--repo", "openai/skills", "--path", "../outside", "--dest", destination]),
+    (error: unknown) => error instanceof Error && "stderr" in error && String((error as { stderr: string }).stderr).includes("relative path inside the repo"),
+  );
 });

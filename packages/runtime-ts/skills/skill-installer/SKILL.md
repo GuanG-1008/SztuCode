@@ -33,12 +33,12 @@ After installing a skill, tell the user it will be available on their next turn.
 
 All of these scripts use network, so when running in the sandbox, request escalation when running them.
 
-- `scripts/list-skills.py` (prints skills list with installed annotations)
-- `scripts/list-skills.py --format json`
-- Example (experimental list): `scripts/list-skills.py --path skills/.experimental`
-- `scripts/install-skill-from-github.py --repo <owner>/<repo> --path <path/to/skill> [<path/to/skill> ...]`
-- `scripts/install-skill-from-github.py --url https://github.com/<owner>/<repo>/tree/<ref>/<path>`
-- Example (experimental skill): `scripts/install-skill-from-github.py --repo openai/skills --path skills/.experimental/<skill-name>`
+- `npx tsx scripts/list_skills.ts` (prints skills list with installed annotations)
+- `npx tsx scripts/list_skills.ts --format json`
+- Example (experimental list): `npx tsx scripts/list_skills.ts --path skills/.experimental`
+- `npx tsx scripts/install_skill_from_github.ts --repo <owner>/<repo> --path <path/to/skill> [<path/to/skill> ...]`
+- `npx tsx scripts/install_skill_from_github.ts --url https://github.com/<owner>/<repo>/tree/<ref>/<path>`
+- Example (experimental skill): `npx tsx scripts/install_skill_from_github.ts --repo openai/skills --path skills/.experimental/<skill-name>`
 
 ## Behavior and Options
 
