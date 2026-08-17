@@ -183,6 +183,7 @@ from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.permissions.policy import PermissionMode
 from sztu_code.core.permissions.storage import load_policy_file
 from sztu_code.core.plugins import Marketplace, MarketplaceManager, MarketplacePlugin
+from sztu_code.core.run_store import RunStore
 from sztu_code.core.runner import AgentRunner
 from sztu_code.core.runs import events_file, new_run_id
 from sztu_code.core.session import SessionManager, SessionStore
@@ -252,6 +253,7 @@ class CoreApp:
         self._run_status: dict[str, str] = {}
         self._client_message_runs: dict[tuple[str, str], str] = {}
         self._active_session_runs: dict[str, asyncio.Task[str]] = {}
+        self._run_store: RunStore | None = None
         self._sessions: SessionManager | None = None
         self._permission_manager: PermissionManager | None = None
         self._user_question_manager = UserQuestionManager(self._bus)
@@ -302,14 +304,20 @@ class CoreApp:
             self._active_run_tasks.pop(run_id, None)
         if task.cancelled():
             self._run_status[run_id] = "cancelled"
+            if self._run_store is not None:
+                self._run_store.finish(run_id, status="cancelled", reason="cancelled")
             return
         try:
             task.result()
         except Exception:
             self._run_status[run_id] = "completed"
             logger.exception("run failed run_id=%s", run_id)
+            if self._run_store is not None:
+                self._run_store.finish(run_id, status="completed", reason="error")
         else:
             self._run_status[run_id] = "completed"
+            if self._run_store is not None:
+                self._run_store.finish(run_id, status="completed")
 
     # 处理 core.ping 请求，返回服务版本、运行时长和接收时间
     async def _ping_handler(self, params: dict[str, Any]) -> PongResult:
@@ -347,6 +355,8 @@ class CoreApp:
         cmd = AgentRunCommand.model_validate(params)
         session = await self._sessions.create(mode="one_shot", title=cmd.goal[:40])
         run_id = new_run_id()
+        if self._run_store is not None:
+            self._run_store.start(run_id, goal=cmd.goal, session_id=session.id)
         run_task = asyncio.create_task(
             self._sessions.send_message(session.id, cmd.goal, run_id=run_id)
         )
@@ -708,6 +718,8 @@ class CoreApp:
                 # 上一轮失败也已经完成清理，不应阻止排队的下一轮启动
                 pass
         run_id = new_run_id()
+        if self._run_store is not None:
+            self._run_store.start(run_id, goal=cmd.content, session_id=cmd.session_id)
         if cmd.client_message_id:
             self._client_message_runs[(cmd.session_id, cmd.client_message_id)] = run_id
         run_task = asyncio.create_task(
@@ -752,7 +764,13 @@ class CoreApp:
     # 返回当前进程所知的 run 生命周期状态，供客户端重连后恢复控制状态
     async def _run_get_handler(self, params: dict[str, Any]) -> RunGetResult:
         cmd = RunGetCommand.model_validate(params)
-        status = self._run_status.get(cmd.run_id, "unknown")
+        # 优先内存中的活动状态；重启后回退到持久化 RunStore，避免误报 unknown
+        status: str | None = self._run_status.get(cmd.run_id)
+        if status is None and self._run_store is not None:
+            record = self._run_store.get(cmd.run_id)
+            status = record.status if record is not None else None
+        if status is None:
+            status = "unknown"
         return RunGetResult(run_id=cmd.run_id, status=status)  # type: ignore[arg-type]
 
     # 读取已持久化的运行事件，供客户端在切换或重连后重建工作台状态
@@ -1752,6 +1770,12 @@ class CoreApp:
         _pid_file = Path("~/.sztu/sztu-code.pid").expanduser()
         _pid_file.parent.mkdir(parents=True, exist_ok=True)
         _pid_file.write_text(str(os.getpid()))
+
+        # 启动时对账：把上次崩溃遗留的 running 记录标记为 cancelled，使 run.get 状态与磁盘一致
+        self._run_store = RunStore()
+        reconciled = self._run_store.reconcile()
+        if reconciled:
+            logger.info("run store: reconciled %d interrupted run(s)", len(reconciled))
 
         if self._config.trace.enabled:
             trace_path = Path(self._config.trace.file).expanduser()

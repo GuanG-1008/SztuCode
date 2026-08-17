@@ -14,9 +14,18 @@ _PERMISSION_GRANT_TOKEN = object()
 
 class ToolPermission(StrEnum):
     """工具权限级别，与 PermissionMode 对应"""
-    READ_ONLY = "read_only"            # 只读：read_file, list_dir 等
+
+    READ_ONLY = "read_only"  # 只读：read_file, list_dir 等
     WORKSPACE_WRITE = "workspace_write"  # 工作区内写入：write_file, note_save
     DANGER_FULL_ACCESS = "danger_full_access"  # 高风险：bash, 外部路径操作
+
+
+class ToolExecutionState(StrEnum):
+    """工具失败时，对本次执行状态的判断。"""
+
+    NOT_STARTED = "not_started"
+    COMPLETED = "completed"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -27,6 +36,10 @@ class ToolResult:
     error_type: str | None = None
     # 供内部组合工具读取的结构化执行元数据，不直接展示给模型
     metadata: dict[str, object] = field(default_factory=dict)
+    # 仅由工具实现者为已知的短暂失败显式标记；不能从 runtime_error 文本推断。
+    retryable: bool = False
+    # 超时等无法判断操作是否已生效的情况必须标记为 UNKNOWN。
+    execution_state: ToolExecutionState = ToolExecutionState.COMPLETED
 
 
 class BaseTool(ABC):
@@ -48,6 +61,10 @@ class BaseTool(ABC):
     # 执行工具调用，返回结果或错误
     @abstractmethod
     async def invoke(self, params: dict[str, object]) -> ToolResult: ...
+
+    def is_retry_safe(self, params: dict[str, object]) -> bool:
+        """判断当前调用是否可安全重复执行；子类可根据参数覆盖。"""
+        return self.retry_safe
 
     # 动态权限分级：根据输入参数返回实际所需权限级别（子类可覆盖）
     def classify_permission(self, params: dict[str, object]) -> ToolPermission:

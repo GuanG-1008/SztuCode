@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -17,6 +18,7 @@ from sztu_code.core.loop import AgentLoop
 from sztu_code.core.permissions.denial_tracker import DenialTracker
 from sztu_code.core.permissions.manager import PermissionManager
 from sztu_code.core.permissions.policy import PermissionDecision, ToolPolicy
+from sztu_code.core.pricing import ModelPricing, PricingCatalog
 from sztu_code.core.subagent.registry import BackgroundTaskRegistry
 from sztu_code.core.tools.base import BaseTool, ToolPermission, ToolResult
 from sztu_code.core.tools.registry import ToolRegistry
@@ -1160,6 +1162,67 @@ async def test_cumulative_token_budget_does_not_stop_loop() -> None:
     await loop.run(ctx)
     assert ctx.status == "success"
     assert ctx.result == "done"
+
+
+# 功能：验证未知模型价格不会回退旧 3/15 美元默认估价
+# 设计：设置足以触发旧估价的 usage 和预算，但不传 catalog，fail-open 下应正常成功
+async def test_unknown_pricing_does_not_use_legacy_budget_estimate() -> None:
+    provider = _MockProvider([
+        LlmResponse(
+            stop_reason="end_turn",
+            text="ok",
+            usage=UsageStats(input_tokens=1_000_000, output_tokens=1_000_000),
+        )
+    ])
+    loop = AgentLoop(
+        provider,
+        ToolRegistry(),
+        EventBus(),
+        pricing_provider="unknown",
+        pricing_model="unknown",
+    )
+    ctx = _ctx()
+    ctx.max_budget_usd = 1.0
+
+    await loop.run(ctx)
+
+    assert ctx.status == "success"
+    assert ctx.reason == "success"
+
+
+# 功能：验证 loop 使用 pricing catalog 执行 max_budget_usd 判断
+# 设计：注入测试价格表让单次 usage 成本超过预算，断言 run 以成本上限中断
+async def test_pricing_catalog_budget_stops_loop() -> None:
+    provider = _MockProvider([
+        LlmResponse(
+            stop_reason="tool_use",
+            tool_calls=[],
+            usage=UsageStats(input_tokens=1_000_000, output_tokens=0),
+        )
+    ])
+    catalog = PricingCatalog([
+        ModelPricing(
+            provider="test",
+            model="priced",
+            input_per_million=Decimal("2.00"),
+            output_per_million=Decimal("1.00"),
+        )
+    ])
+    loop = AgentLoop(
+        provider,
+        ToolRegistry(),
+        EventBus(),
+        pricing_provider="test",
+        pricing_model="priced",
+        pricing_catalog=catalog,
+    )
+    ctx = _ctx(max_steps=10)
+    ctx.max_budget_usd = 1.0
+
+    await loop.run(ctx)
+
+    assert ctx.status == "interrupted"
+    assert ctx.reason == "max_budget_usd"
 
 
 # 功能：验证墙钟超时在 loop 内正确终止
