@@ -22,6 +22,7 @@ from sztu_code.core.llm.types import ToolCallBlock
 from sztu_code.core.tools.base import (
     _PERMISSION_GRANT_KEY,
     _PERMISSION_GRANT_TOKEN,
+    ToolExecutionState,
     ToolPermission,
     ToolResult,
 )
@@ -34,12 +35,50 @@ if TYPE_CHECKING:
 _DEFAULT_TIMEOUT: float = 120.0
 _MAX_RETRIES: int = 2
 _RETRY_BASE_S: float = 2.0  # backoff base; tests can monkeypatch to 0
-# 可重试错误：瞬时失败（超时/限流/偶发运行时错误）值得再试，其余直接失败
-_RETRYABLE: frozenset[str] = frozenset({"runtime_error", "rate_limited", "timeout"})
+_RETRYABLE: frozenset[str] = frozenset({"rate_limited"})
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _retry_reason(
+    error_class: str,
+    retryable: bool,
+    execution_state: ToolExecutionState,
+    tool_retry_safe: bool,
+    attempt: int,
+) -> str:
+    if execution_state == ToolExecutionState.UNKNOWN:
+        return "execution_state_is_unknown"
+    if error_class not in _RETRYABLE:
+        return "error_is_not_explicitly_transient"
+    if not retryable:
+        return "failure_is_not_explicitly_retryable"
+    if not tool_retry_safe:
+        return "tool_is_not_declared_retry_safe"
+    if attempt > _MAX_RETRIES:
+        return "retry_limit_exhausted"
+    return "explicit_transient_failure_on_retry_safe_tool"
+
+
+def _retry_explanation(reason: str) -> str:
+    explanations = {
+        "execution_state_is_unknown": (
+            "Automatic retry was skipped because the operation may still be running."
+        ),
+        "error_is_not_explicitly_transient": (
+            "Automatic retry was skipped because the failure was not explicitly transient."
+        ),
+        "failure_is_not_explicitly_retryable": (
+            "Automatic retry was skipped because the failure was not marked retryable."
+        ),
+        "tool_is_not_declared_retry_safe": (
+            "Automatic retry was skipped because the tool did not declare this call safe to retry."
+        ),
+        "retry_limit_exhausted": "Automatic retry stopped because the retry limit was exhausted.",
+    }
+    return explanations.get(reason, "")
 
 
 # 判断 bash 调用是否为可汇总的常见测试命令
@@ -96,7 +135,19 @@ async def _fail(
     queue_ms: int = 0,
     queued_at: str = "",
     started_at: str = "",
+    retryable: bool = False,
+    execution_state: ToolExecutionState = ToolExecutionState.COMPLETED,
+    retry_reason: str = "",
+    tool_retry_safe: bool = False,
 ) -> ToolResult:
+    if not retry_reason:
+        retry_reason = _retry_reason(
+            error_class,
+            retryable,
+            execution_state,
+            tool_retry_safe,
+            attempt,
+        )
     finished_at = _now()
     await bus.publish(
         ToolCallFailedEvent(
@@ -107,6 +158,9 @@ async def _fail(
             error_message=error_message,
             elapsed_ms=elapsed_ms,
             attempt=attempt,
+            retry_reason=retry_reason,
+            tool_retry_safe=tool_retry_safe,
+            execution_state=execution_state.value,
             batch_id=batch_id,
             scheduler_mode=scheduler_mode,
             queue_ms=queue_ms,
@@ -117,7 +171,21 @@ async def _fail(
         )
     )
     await _publish_test_result(bus, run_id, tool_call, "failed", error_message)
-    return ToolResult(content=error_message, is_error=True, error_type=error_class)
+    explanation = _retry_explanation(retry_reason)
+    result_content = f"{error_message}\n{explanation}" if explanation else error_message
+    return ToolResult(
+        content=result_content,
+        is_error=True,
+        error_type=error_class,
+        metadata={
+            "retry_decision": "stop",
+            "retry_reason": retry_reason,
+            "tool_retry_safe": tool_retry_safe,
+            "execution_state": execution_state.value,
+        },
+        retryable=retryable,
+        execution_state=execution_state,
+    )
 
 
 # 校验参数、检查权限、限时调用工具、发布进度事件，失败时指数退避重试，返回 ToolResult（不抛异常）
@@ -138,11 +206,7 @@ async def invoke_tool(
 ) -> ToolResult:
     t0 = time.monotonic()
     started_at = _now()
-    queue_ms = (
-        max(0, int((t0 - queued_monotonic) * 1000))
-        if queued_monotonic is not None
-        else 0
-    )
+    queue_ms = max(0, int((t0 - queued_monotonic) * 1000)) if queued_monotonic is not None else 0
     tool_call.input = registry.enrich_tool_input(tool_call.name, tool_call.input)
     runtime_params = dict(tool_call.input)
     runtime_params.pop("description", None)
@@ -174,8 +238,12 @@ async def invoke_tool(
     tool = registry.get(tool_call.name)
     if tool is None:
         return await _fail(
-            bus, run_id, tool_call,
-            "runtime_error", f"unknown tool: {tool_call.name}", elapsed(),
+            bus,
+            run_id,
+            tool_call,
+            "runtime_error",
+            f"unknown tool: {tool_call.name}",
+            elapsed(),
             batch_id=batch_id,
             scheduler_mode=scheduler_mode,
             queue_ms=queue_ms,
@@ -188,8 +256,12 @@ async def invoke_tool(
             tool.params_model.model_validate(runtime_params)
         except ValidationError as exc:
             return await _fail(
-                bus, run_id, tool_call,
-                "schema_error", str(exc), elapsed(),
+                bus,
+                run_id,
+                tool_call,
+                "schema_error",
+                str(exc),
+                elapsed(),
                 batch_id=batch_id,
                 scheduler_mode=scheduler_mode,
                 queue_ms=queue_ms,
@@ -220,8 +292,12 @@ async def invoke_tool(
             raise
         except Exception as exc:
             return await _fail(
-                bus, run_id, tool_call,
-                "runtime_error", str(exc), elapsed(),
+                bus,
+                run_id,
+                tool_call,
+                "runtime_error",
+                str(exc),
+                elapsed(),
                 batch_id=batch_id,
                 scheduler_mode=scheduler_mode,
                 queue_ms=queue_ms,
@@ -252,7 +328,9 @@ async def invoke_tool(
                     )
                 )
             return await _fail(
-                bus, run_id, tool_call,
+                bus,
+                run_id,
+                tool_call,
                 "permission_denied",
                 "Permission denied by user. You may not execute this command. "
                 "Try an alternative approach or ask the user what to do.",
@@ -264,9 +342,13 @@ async def invoke_tool(
                 started_at=started_at,
             )
 
+    tool_retry_safe = tool.is_retry_safe(runtime_params)
+
     for attempt in range(1, _MAX_RETRIES + 2):
         error_class: str | None = None
         error_message: str | None = None
+        retryable = False
+        execution_state = ToolExecutionState.COMPLETED
 
         try:
             if tool.allows_indefinite_wait:
@@ -280,6 +362,8 @@ async def invoke_tool(
             if result.is_error:
                 error_class = result.error_type or "runtime_error"
                 error_message = result.content
+                retryable = result.retryable
+                execution_state = result.execution_state
             else:
                 finished_at = _now()
                 await bus.publish(
@@ -304,8 +388,11 @@ async def invoke_tool(
         except RateLimitedError as exc:
             error_class = "rate_limited"
             error_message = str(exc)
+            retryable = True
+            execution_state = ToolExecutionState.NOT_STARTED
         except TimeoutError:
             error_class = "timeout"
+            execution_state = ToolExecutionState.UNKNOWN
             error_message = (
                 f"tool timed out after {timeout}s; the operation may still be running. "
                 "Retry the call, increase the timeout, or break it into smaller steps."
@@ -317,8 +404,16 @@ async def invoke_tool(
         assert error_class is not None and error_message is not None
         ms = elapsed()
 
-        if error_class in _RETRYABLE and attempt <= _MAX_RETRIES:
+        should_retry = (
+            error_class in _RETRYABLE
+            and retryable
+            and execution_state != ToolExecutionState.UNKNOWN
+            and tool_retry_safe
+            and attempt <= _MAX_RETRIES
+        )
+        if should_retry:
             failed_at = _now()
+            retry_delay_s = _RETRY_BASE_S * (2 ** (attempt - 1))
             await bus.publish(
                 ToolCallFailedEvent(
                     run_id=run_id,
@@ -328,6 +423,17 @@ async def invoke_tool(
                     error_message=error_message,
                     elapsed_ms=ms,
                     attempt=attempt,
+                    retry_decision="retry",
+                    retry_reason=_retry_reason(
+                        error_class,
+                        retryable,
+                        execution_state,
+                        tool_retry_safe,
+                        attempt,
+                    ),
+                    retry_delay_ms=int(retry_delay_s * 1000),
+                    tool_retry_safe=tool_retry_safe,
+                    execution_state=execution_state.value,
                     batch_id=batch_id,
                     scheduler_mode=scheduler_mode,
                     queue_ms=queue_ms,
@@ -337,18 +443,32 @@ async def invoke_tool(
                     ts=failed_at,
                 )
             )
-            await asyncio.sleep(_RETRY_BASE_S * (2 ** (attempt - 1)))
+            await asyncio.sleep(retry_delay_s)
             continue
 
         return await _fail(
-            bus, run_id, tool_call,
-            error_class, error_message, ms,
+            bus,
+            run_id,
+            tool_call,
+            error_class,
+            error_message,
+            ms,
             attempt=attempt,
             batch_id=batch_id,
             scheduler_mode=scheduler_mode,
             queue_ms=queue_ms,
             queued_at=queued_at,
             started_at=started_at,
+            retryable=retryable,
+            execution_state=execution_state,
+            retry_reason=_retry_reason(
+                error_class,
+                retryable,
+                execution_state,
+                tool_retry_safe,
+                attempt,
+            ),
+            tool_retry_safe=tool_retry_safe,
         )
 
     # unreachable, but keeps mypy happy

@@ -94,6 +94,11 @@ class ToolCallFailedEvent(BaseModel):
     error_message: str
     elapsed_ms: int
     attempt: int = 1  # 1=first attempt, 2=first retry, 3=second retry
+    retry_decision: Literal["retry", "stop"] = "stop"
+    retry_reason: str = ""
+    retry_delay_ms: int = 0
+    tool_retry_safe: bool = False
+    execution_state: str = "completed"
     batch_id: str = ""
     scheduler_mode: ToolSchedulerMode = "serial"
     queue_ms: int = 0
