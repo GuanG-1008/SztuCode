@@ -6,7 +6,8 @@
   "type": "module",
   "bin": {
     "sztucode": "bin/sztucode.js",
-    "sztucode-tui": "bin/sztucode.js"
+    "sztucode-tui": "bin/sztucode.js",
+    "sztu-ts": "bin/sztucode.js"
   },
   "files": [
     "bin",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { OpenAiCompatibleProvider } from "../src/providers/openai.js";
-import { AnthropicMessagesProvider } from "../src/providers/anthropic.js";
+import { AnthropicMessagesProvider, toAnthropicMessages } from "../src/providers/anthropic.js";
 import { ToolRegistry } from "../src/tools.js";
 
 test("OpenAI Responses provider uses /responses and parses text and function calls", async () => {
@@ -96,5 +96,66 @@ test("Anthropic messages provider parses streaming text, tool JSON, and usage", 
     assert.equal(result.usage?.input_tokens, 7);
     assert.equal(result.usage?.output_tokens, 4);
     assert.equal(result.streamed, true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Anthropic messages provider groups tool results and repairs missing results", () => {
+  const messages = toAnthropicMessages([
+    { role: "user", content: "inspect" },
+    { role: "assistant", content: "", tool_calls: [
+      { id: "call-1", name: "read_file", input: { path: "a.txt" } },
+      { id: "call-2", name: "read_file", input: { path: "b.txt" } },
+    ] },
+    { role: "tool", tool_call_id: "call-1", content: "a" },
+    { role: "tool", tool_call_id: "call-2", content: "not found", is_error: true },
+    { role: "user", content: "continue" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call-3", name: "bash", input: { command: "pwd" } }] },
+  ]);
+
+  assert.deepEqual(messages, [
+    { role: "user", content: [{ type: "text", text: "inspect" }] },
+    { role: "assistant", content: [
+      { type: "tool_use", id: "call-1", name: "read_file", input: { path: "a.txt" } },
+      { type: "tool_use", id: "call-2", name: "read_file", input: { path: "b.txt" } },
+    ] },
+    { role: "user", content: [
+      { type: "tool_result", tool_use_id: "call-1", content: "a" },
+      { type: "tool_result", tool_use_id: "call-2", content: "not found", is_error: true },
+      { type: "text", text: "continue" },
+    ] },
+    { role: "assistant", content: [{ type: "tool_use", id: "call-3", name: "bash", input: { command: "pwd" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "call-3", content: "Tool execution was interrupted before a result was recorded.", is_error: true }] },
+  ]);
+});
+
+test("Anthropic messages provider streams and preserves signed thinking blocks", async () => {
+  const originalFetch = globalThis.fetch; const thinking: string[] = []; let requestBody: Record<string, any> = {};
+  globalThis.fetch = (async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)); const encoder = new TextEncoder();
+    const frames = [
+      `event: message_start\ndata: ${JSON.stringify({ message: { usage: { input_tokens: 5 } } })}\n\n`,
+      `event: content_block_start\ndata: ${JSON.stringify({ index: 0, content_block: { type: "thinking", thinking: "", signature: "" } })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({ index: 0, delta: { type: "thinking_delta", thinking: "inspect " } })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({ index: 0, delta: { type: "thinking_delta", thinking: "files" } })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({ index: 0, delta: { type: "signature_delta", signature: "signed-1" } })}\n\n`,
+      `event: content_block_start\ndata: ${JSON.stringify({ index: 1, content_block: { type: "text", text: "" } })}\n\n`,
+      `event: content_block_delta\ndata: ${JSON.stringify({ index: 1, delta: { type: "text_delta", text: "done" } })}\n\n`,
+      `event: message_delta\ndata: ${JSON.stringify({ delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } })}\n\n`,
+    ];
+    return new Response(new ReadableStream({ start(controller) { for (const frame of frames) controller.enqueue(encoder.encode(frame)); controller.close(); } }), { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    const provider = new AnthropicMessagesProvider({ apiKey: "test", baseUrl: "http://mock/v1", model: "claude-test", reasoningEffort: "high" });
+    const result = await provider.complete([{ role: "user", content: "work" }], new ToolRegistry(), undefined, () => undefined, { runId: "run-thinking", step: 2 }, (delta) => thinking.push(delta));
+    assert.deepEqual(thinking, ["inspect ", "files"]);
+    assert.deepEqual(result.thinking_blocks, [{ type: "thinking", thinking: "inspect files", signature: "signed-1" }]);
+    assert.deepEqual(requestBody.thinking, { type: "adaptive" }); assert.deepEqual(requestBody.output_config, { effort: "high" });
+
+    const next = toAnthropicMessages([
+      { role: "user", content: "work" },
+      { role: "assistant", content: [...result.thinking_blocks!, { type: "text", text: result.text }] },
+      { role: "user", content: "continue" },
+    ]);
+    assert.deepEqual(next[1]?.content[0], { type: "thinking", thinking: "inspect files", signature: "signed-1" });
   } finally { globalThis.fetch = originalFetch; }
 });

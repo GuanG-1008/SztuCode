@@ -18,7 +18,11 @@ Both command names are available:
 ```sh
 sztucode /path/to/project
 sztucode-tui /path/to/project
+sztu-ts /path/to/project
 ```
+
+`sztu-ts` is the explicit TypeScript entry point. The separately installed
+Python package uses `sztu-py`, so both implementations can coexist.
 
 The launcher starts the bundled TypeScript daemon when needed and reuses an existing daemon on the configured loopback port. CLI subcommands are forwarded unchanged:
 

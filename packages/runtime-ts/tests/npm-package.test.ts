@@ -47,8 +47,9 @@ test("published npm entry starts and reuses the bundled TypeScript daemon", asyn
 
 test("published package and CLI report the product version", async () => {
   const rootPackage = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8")) as { version: string };
-  const publishedPackage = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as { version: string };
+  const publishedPackage = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as { version: string; bin: Record<string, string> };
   assert.equal(publishedPackage.version, rootPackage.version);
+  assert.equal(publishedPackage.bin["sztu-ts"], "bin/sztucode.js");
   const version = await execute(process.execPath, [bin, "--version"], { cwd: packageRoot, timeout: 30_000 });
   assert.equal(version.stdout.trim(), rootPackage.version);
 });

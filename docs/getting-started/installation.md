@@ -5,6 +5,7 @@
 ## 环境要求
 
 - Node.js 20+
+- Python 3.12 与 `uv`（使用 Python runtime 时）
 - Git
 - Anthropic 或 OpenAI-compatible API 凭据
 - 桌面安装包当前还要求系统可执行 `node`（Node.js 20+）；开发构建另需 Rust 与平台对应的 Tauri 依赖
@@ -21,8 +22,27 @@ npm run build
 确认命令可用：
 
 ```bash
-npm run cli -- ping
+npm run cli:ts -- --version
+npm run cli:py -- --version
 ```
+
+## 两个运行时入口
+
+安装后的命令互不冲突：
+
+```bash
+# TypeScript，默认端口 7438
+sztu-ts core start
+sztu-ts chat
+
+# Python，默认端口 7437
+sztu-py core start
+sztu-py chat
+```
+
+源码开发时使用 `npm run daemon:ts` / `npm run cli:ts -- ...`，或
+`npm run daemon:py` / `npm run cli:py -- ...`。Python 脚本通过锁定的
+`uv` 环境运行。
 
 ## 配置模型
 
@@ -65,7 +85,7 @@ npm run cli -- chat
 
 ```bash
 npm install --global sztucode-tui
-sztucode /path/to/project
+sztu-ts /path/to/project
 sztucode ping
 sztucode run --goal "inspect the repository"
 sztucode core status
@@ -102,7 +122,7 @@ Tauri 在不同操作系统上的系统依赖不同，请按 [Tauri prerequisite
 npm run cli -- ping
 ```
 
-默认服务地址为 `127.0.0.1:7438`。若端口冲突，可通过环境变量修改 `SZTU_TS_PORT`，daemon 与客户端必须使用相同配置。
+TypeScript 默认服务地址为 `127.0.0.1:7438`，Python 默认为 `127.0.0.1:7437`。若端口冲突，可分别通过 `SZTU_TS_PORT` 和 `SZTU_PORT` 修改，daemon 与对应客户端必须使用相同配置。
 
 ## 下一步
 

@@ -50,6 +50,21 @@ test("workflow scope upgrades only out-of-scope file writes", async () => {
   assert.deepEqual(observed, [{ toolName: "write_file", permission: "workspace_write" }, { toolName: "edit_file", permission: "danger_full_access" }]);
 });
 
+test("agent loop publishes thinking deltas and preserves signed blocks in history", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-thinking-loop-"));
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl")); const thinking: string[] = [];
+    events.subscribe((event) => { if (event.type === "llm.thinking") thinking.push(event.thinking); });
+    const provider: ModelProvider = { complete: async (_messages, _tools, _signal, _onToken, _invocation, onThinking) => {
+      onThinking?.("inspect "); onThinking?.("files");
+      return { text: "done", thinking_blocks: [{ type: "thinking", thinking: "inspect files", signature: "signed-1" }], tool_calls: [], stop_reason: "end_turn" };
+    } };
+    const result = await new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async () => true }).run("thinking-run", "work", 1);
+    assert.deepEqual(thinking, ["inspect ", "files"]);
+    assert.deepEqual(result.messages.at(-1)?.content, [{ type: "thinking", thinking: "inspect files", signature: "signed-1" }, { type: "text", text: "done" }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("agent loop applies dynamic bash permission before approval", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "sztu-bash-permission-"));
   try {

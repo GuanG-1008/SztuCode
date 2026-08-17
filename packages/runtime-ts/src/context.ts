@@ -1,10 +1,11 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { ModelInvocation } from "./agent-loop.js";
 
 export type ContentBlock = { type: string; text?: string; content?: string; [key: string]: unknown };
 export type ContextToolCall = { id: string; name: string; input: Record<string, unknown> };
-export type ContextMessage = { role: "system" | "user" | "assistant" | "tool"; content: string | ContentBlock[]; tool_call_id?: string; tool_calls?: ContextToolCall[] };
-export type ContextCompactionProvider = { complete(messages: ContextMessage[], tools: { list(): unknown[] }, signal?: AbortSignal): Promise<{ text: string; usage?: { output_tokens?: number }; stop_reason?: string }> };
+export type ContextMessage = { role: "system" | "user" | "assistant" | "tool"; content: string | ContentBlock[]; tool_call_id?: string; tool_calls?: ContextToolCall[]; is_error?: boolean };
+export type ContextCompactionProvider = { complete(messages: ContextMessage[], tools: { list(): unknown[] }, signal?: AbortSignal, onToken?: (token: string) => void, invocation?: ModelInvocation): Promise<{ text: string; usage?: { output_tokens?: number }; stop_reason?: string }> };
 export type ContextCompactionResult = { originalTokens: number; summaryTokens: number; removedMessages: number; summaryText: string; usedModel: boolean };
 
 const CJK_RANGES: Array<[number, number]> = [[0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xf900, 0xfaff], [0x20000, 0x2a6df]];
@@ -94,7 +95,7 @@ export class ContextManager {
     this.messages = sanitizeContextMessages([...system, { role: "user", content: "[Earlier conversation compacted. Continue using the recent messages and current task state.]" }, ...recent], this.budget.maxToolResultChars);
     return { originalTokens, summaryTokens: this.tokenEstimate(), removedMessages, summaryText: "", usedModel: false };
   }
-  async compactWithProvider(provider: ContextCompactionProvider, focus = "", slidingWindow = 8, signal?: AbortSignal): Promise<ContextCompactionResult> {
+  async compactWithProvider(provider: ContextCompactionProvider, focus = "", slidingWindow = 8, signal?: AbortSignal, invocation?: ModelInvocation): Promise<ContextCompactionResult> {
     const originalTokens = this.tokenEstimate();
     if (this.messages.length <= slidingWindow) return { originalTokens, summaryTokens: originalTokens, removedMessages: 0, summaryText: "", usedModel: false };
     const system = this.messages.filter((message) => message.role === "system");
@@ -111,7 +112,7 @@ export class ContextManager {
       "\nEarlier messages:\n---\n" + messagesToText(old),
     ].filter(Boolean).join("\n");
     try {
-      const response = await provider.complete([{ role: "user", content: prompt }], { list: () => [] }, signal);
+      const response = await provider.complete([{ role: "user", content: prompt }], { list: () => [] }, signal, undefined, invocation ? { ...invocation, purpose: "compaction" } : undefined);
       const summaryText = response.text.trim();
       const summaryTokens = Number(response.usage?.output_tokens ?? this.counter.count(summaryText));
       const valid = summaryText.length >= 40 && summaryTokens > 0 && summaryTokens < oldTokens && /goal|progress|next steps|open issues|decisions/i.test(summaryText);

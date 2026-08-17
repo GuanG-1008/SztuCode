@@ -2,7 +2,7 @@ import type { RuntimeEvent } from "@sztucode/protocol";
 import { EventBus } from "./event-bus.js";
 import { ToolRegistry, type Tool, type ToolContext, type ToolResult } from "./tools.js";
 import type { PermissionGate } from "./permissions.js";
-import { ContextManager, sanitizeContextMessages, type ContextMessage } from "./context.js";
+import { ContextManager, sanitizeContextMessages, type ContentBlock, type ContextMessage } from "./context.js";
 import { DenialTracker } from "./denial-tracker.js";
 import { StuckLoopTracker, stuckSignature } from "./stuck-tracker.js";
 import path from "node:path";
@@ -12,8 +12,9 @@ import { validateSchema } from "./schema-validator.js";
 export type ChatMessage = ContextMessage;
 export type ModelToolCall = { id: string; name: string; input: Record<string, unknown> };
 export type ModelUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
-export type ModelResponse = { text: string; tool_calls: ModelToolCall[]; stop_reason: "end_turn" | "tool_use"; usage?: Partial<ModelUsage>; model?: string; streamed?: boolean };
-export interface ModelProvider { complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void): Promise<ModelResponse> }
+export type ModelResponse = { text: string; tool_calls: ModelToolCall[]; stop_reason: "end_turn" | "tool_use"; thinking_blocks?: ContentBlock[]; usage?: Partial<ModelUsage>; model?: string; streamed?: boolean };
+export type ModelInvocation = { runId: string; step: number; purpose?: "agent" | "compaction" };
+export interface ModelProvider { complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void, invocation?: ModelInvocation, onThinking?: (thinking: string) => void): Promise<ModelResponse> }
 export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number; offloadEnabled?: boolean; offloadMinChars?: number; offloadMinLines?: number; offloadRoot?: string; toolMaxRetries?: number; toolRetryBaseMs?: number };
 
 export class EchoProvider implements ModelProvider {
@@ -40,7 +41,7 @@ export class AgentLoop {
       signal?.throwIfAborted();
       if (context.needsCompaction()) {
         if (this.options.sessionId) this.publish({ type: "context.compacting", session_id: this.options.sessionId, run_id: runId, ts: now() });
-        const result = await context.compactWithProvider(this.provider, "", 8, signal);
+        const result = await context.compactWithProvider(this.provider, "", 8, signal, { runId, step, purpose: "compaction" });
         this.publish({ type: "log.line", run_id: runId, level: "INFO", source: "context", message: `${result.usedModel ? "Summarized" : "Compacted"} ${result.removedMessages} messages`, ts: now() });
         if (this.options.sessionId) this.publish({ type: "context.compacted", session_id: this.options.sessionId, run_id: runId, original_tokens: result.originalTokens, summary_tokens: result.summaryTokens, ts: now() });
       }
@@ -63,7 +64,7 @@ export class AgentLoop {
       }
       const sanitized = sanitizeContextMessages(messages, context.budgetMaxToolResultChars());
       if (sanitized.length !== messages.length || sanitized.some((message, index) => message !== messages[index])) { messages.splice(0, messages.length, ...sanitized); }
-      const response = await this.provider.complete(messages, this.tools, signal, (token) => this.publish({ type: "llm.token", run_id: runId, token, ts: now() }));
+      const response = await this.provider.complete(messages, this.tools, signal, (token) => this.publish({ type: "llm.token", run_id: runId, token, ts: now() }), { runId, step, purpose: "agent" }, (thinking) => this.publish({ type: "llm.thinking", run_id: runId, step, thinking, ts: now() }));
       usage.input_tokens += Number(response.usage?.input_tokens ?? 0);
       usage.output_tokens += Number(response.usage?.output_tokens ?? 0);
       usage.cache_read_input_tokens += Number(response.usage?.cache_read_input_tokens ?? 0);
@@ -74,10 +75,10 @@ export class AgentLoop {
       if (response.text && (!this.options.streaming || !response.streamed)) this.publish({ type: "llm.token", run_id: runId, token: response.text, ts: now() });
       if (response.stop_reason === "end_turn" || response.tool_calls.length === 0) {
         this.publish({ type: "step.finished", run_id: runId, step, ts: now() });
-        messages.push({ role: "assistant", content: response.text });
+        messages.push({ role: "assistant", content: responseContent(response) });
         return { text: response.text, steps: step, messages, usage };
       }
-      messages.push({ role: "assistant", content: response.text, tool_calls: response.tool_calls });
+      messages.push({ role: "assistant", content: responseContent(response), tool_calls: response.tool_calls });
       for (const call of response.tool_calls) {
         signal?.throwIfAborted();
         const tool = this.tools.get(call.name);
@@ -87,14 +88,14 @@ export class AgentLoop {
         if (!tool) {
           stuck.recordFailure(stuckSignature(call));
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "unknown_tool", error_message: `Unknown tool: ${call.name}`, elapsed_ms: 0, ts: now() });
-          messages.push({ role: "tool", tool_call_id: call.id, content: `Unknown tool: ${call.name}` });
+          messages.push({ role: "tool", tool_call_id: call.id, content: `Unknown tool: ${call.name}`, is_error: true });
           continue;
         }
         const validation = validateSchema(call.input, tool.schema);
         if (!validation.valid) {
           stuck.recordFailure(stuckSignature(canonicalCall));
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: "schema_error", error_message: validation.error, elapsed_ms: 0, ts: now() });
-          messages.push({ role: "tool", tool_call_id: call.id, content: validation.error });
+          messages.push({ role: "tool", tool_call_id: call.id, content: validation.error, is_error: true });
           continue;
         }
         const permission = tool.classifyPermission?.(call.input) ?? tool.permission;
@@ -102,7 +103,7 @@ export class AgentLoop {
         if (!allowed) {
           denials.recordDenial(toolName);
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: "permission_denied", error_message: "Permission denied or approval timed out", elapsed_ms: 0, ts: now() });
-          messages.push({ role: "tool", tool_call_id: call.id, content: "Permission denied" });
+          messages.push({ role: "tool", tool_call_id: call.id, content: "Permission denied", is_error: true });
           continue;
         }
         const started = Date.now();
@@ -122,7 +123,7 @@ export class AgentLoop {
           if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "passed", summary: testSummary(String(call.input.command ?? ""), result.output), ts: now() });
         }
         else { stuck.recordFailure(stuckSignature(canonicalCall)); this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: toolName, error_class: result.errorType ?? "runtime_error", error_message: result.error ?? "Tool failed", elapsed_ms: elapsedMs, ts: now() }); if (isTestCommand(String(call.input.command ?? ""))) this.publish({ type: "test.result", run_id: runId, tool_use_id: call.id, status: "failed", summary: testSummary(String(call.input.command ?? ""), result.error ?? "Tool failed"), ts: now() }); }
-        messages.push({ role: "tool", tool_call_id: call.id, content: contextOutput });
+        messages.push({ role: "tool", tool_call_id: call.id, content: contextOutput, is_error: !result.ok });
       }
       this.publish({ type: "step.finished", run_id: runId, step, ts: now() });
     }
@@ -140,6 +141,7 @@ const safeRunId = (runId: string) => runId.replace(/[^A-Za-z0-9_.-]/g, "_") || "
 const isTestCommand = (command: string): boolean => /(^|\s)(pytest|vitest|jest|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test)(\s|$)/i.test(command);
 const testSummary = (command: string, output: string): string => { const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const relevant = lines.filter((line) => /passed|failed|error|test/i.test(line)); return (relevant.at(-1) ?? lines.at(-1) ?? command).slice(0, 300); };
 const retryableToolErrors = new Set<ToolResult["errorType"]>(["runtime_error", "rate_limited"]);
+const responseContent = (response: ModelResponse): ChatMessage["content"] => response.thinking_blocks?.length ? [...response.thinking_blocks, ...(response.text ? [{ type: "text", text: response.text }] : [])] : response.text;
 
 async function invokeToolWithRetry(tool: Tool, input: Record<string, unknown>, context: ToolContext, maxRetries: number, retryBaseMs: number, onRetry: (attempt: number, failure: ToolResult) => void): Promise<ToolResult> {
   for (let attempt = 0; ; attempt += 1) {

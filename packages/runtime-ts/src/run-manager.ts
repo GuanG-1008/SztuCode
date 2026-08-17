@@ -65,6 +65,12 @@ export class RunManager {
     return "cancelling";
   }
 
+  cancelAll(): number {
+    const active = [...this.runs.values()].filter((run) => run.status === "running").map((run) => run.runId);
+    for (const runId of active) this.cancel(runId);
+    return active.length;
+  }
+
   private async execute(run: RunState, history: ChatMessage[], onComplete?: (messages: ChatMessage[], usage: RunState["usage"]) => Promise<void>, workspaceRoot?: string, sessionId?: string): Promise<void> {
     let result: { text: string; steps: number; messages: ChatMessage[]; usage: RunState["usage"] };
     const tracker = workspaceRoot ? new WorkspaceChangeTracker(workspaceRoot, run.runId) : null;

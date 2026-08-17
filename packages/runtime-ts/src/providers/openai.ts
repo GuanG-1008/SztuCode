@@ -1,4 +1,4 @@
-import type { ChatMessage, ModelProvider, ModelResponse } from "../agent-loop.js";
+import type { ChatMessage, ModelInvocation, ModelProvider, ModelResponse } from "../agent-loop.js";
 import type { ToolRegistry } from "../tools.js";
 import { AnthropicMessagesProvider } from "./anthropic.js";
 
@@ -9,7 +9,7 @@ export type OpenAiProviderOptions = { apiKey?: string; baseUrl?: string; model: 
 
 export class OpenAiCompatibleProvider implements ModelProvider {
   constructor(private readonly options: OpenAiProviderOptions) {}
-  async complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void): Promise<ModelResponse> {
+  async complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void, _invocation?: ModelInvocation, _onThinking?: (thinking: string) => void): Promise<ModelResponse> {
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });

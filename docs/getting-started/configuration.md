@@ -51,6 +51,9 @@ SZTU_LLM_KEYLESS=true
 | `SZTU_HOST` / `SZTU_TS_HOST` | `127.0.0.1` | daemon 监听地址 |
 | `SZTU_PORT` / `SZTU_TS_PORT` | `7438` | daemon 与客户端端口 |
 | `SZTU_DATA_DIR` | `~/.sztu` | 会话、设置、工作区和 trace 根目录 |
+| `SZTU_TRACE_ENABLED` | `true` | 是否写入 TypeScript 结构化 IPC/Event/LLM trace |
+| `SZTU_TRACE_FILE` | `~/.sztu/traces/runtime-ts.jsonl` | TypeScript 结构化 trace 路径 |
+| `SZTU_TRACE_INCLUDE_LLM_PAYLOAD` | `true` | 是否在结构化 trace 中保留完整 LLM 请求和响应 |
 | `SZTU_LLM_PROVIDER` | `openai` | `openai` 或 `anthropic` |
 | `SZTU_LLM_DEFAULT_MODEL` / `SZTU_MODEL` | `gpt-4o-mini` | Provider 模型 ID |
 | `SZTU_LLM_CONTEXT_WINDOW` | `128000` | 上下文窗口估算值 |
@@ -111,6 +114,7 @@ TCP 示例：
 | `~/.sztu/workspaces.json` | 最近和归档工作区 |
 | `~/.sztu/plugin-settings.json` | 插件启用状态 |
 | `~/.sztu/plugin-marketplaces.json` | 插件市场配置 |
-| `~/.sztu/traces/runtime-ts-events.jsonl` | runtime 事件 trace |
+| `~/.sztu/traces/runtime-ts-events.jsonl` | runtime 事件回放日志 |
+| `~/.sztu/traces/runtime-ts.jsonl` | IPC、EventBus、LLM 三层结构化审计 trace |
 
 这些文件可能包含凭据、源码片段、提示词和模型响应。备份或共享前先脱敏。

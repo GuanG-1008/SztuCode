@@ -4,7 +4,7 @@
 
 ## 系统边界
 
-SztuCode 是本地优先的双进程 Agent 系统：常驻 TypeScript daemon 管理会话和运行，桌面端、Node CLI 与评测工具通过 TCP 上的 NDJSON/JSON-RPC 2.0 连接。客户端负责交互和展示，Agent 执行状态以 daemon 为准。
+SztuCode 是本地优先的 daemon/client Agent 系统。TypeScript 与 Python 各自提供 daemon 和 CLI 入口；桌面端连接 TypeScript runtime。客户端通过 TCP 上的 NDJSON/JSON-RPC 2.0 连接，Agent 执行状态以所选 daemon 为准。
 
 ```text
 Tauri Desktop ─┐
@@ -36,11 +36,17 @@ daemon 入口位于 `packages/runtime-ts/src/main.ts`，负责：
 
 npm 发布入口会启动 TypeScript daemon，并让 Node CLI 创建绑定到目标项目的会话。仓库内可使用 `npm run cli -- chat`。
 
+显式 TypeScript 命令为 `sztu-ts`，默认端口为 `7438`。
+
+### `sztu-py` / Python CLI
+
+Python 包入口连接 `src/sztu_code` 中的 Python daemon，默认端口为 `7437`。仓库内可使用 `npm run cli:py -- ...` 和 `npm run daemon:py`。
+
 ### Tauri Desktop
 
 `desktop/` 使用 Tauri 2、Vue 3 和 TypeScript。Rust 层负责原生窗口、目录选择和受控 TCP 桥；前端负责工作区、会话、执行时间线、权限、文件预览和 Diff 审阅。
 
-仓库不再包含 Python daemon、CLI 或 TUI。仅部分 artifact Skill 按需调用 Python helper；这些脚本不定义产品协议或运行时行为。
+两套 runtime 使用不同的命令名和默认端口，因此可以并行安装和运行。桌面产品路径仍使用 TypeScript runtime。
 
 ## 请求与事件链路
 

@@ -3,6 +3,7 @@
 > 一个本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-2F855A)](LICENSE)
@@ -23,7 +24,7 @@
 
 ![SztuCode TUI 任务结果](docs/images/image5.png)
 
-SztuCode 面向真实代码仓库工作。用户通过桌面工作台或 Node 终端客户端提交任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。上方 Textual 截图仅保留为项目演进记录。
+SztuCode 面向真实代码仓库工作。桌面工作台使用 TypeScript daemon；命令行可选择 TypeScript 或 Python runtime。后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。
 
 它既是一个持续完善的本地 AI 编程工具，也是一个用于学习 Agent 工程、软件协作与可信 AI Coding 的开放项目。
 
@@ -92,7 +93,7 @@ Eval Runner ───┘                                  │
                                                   └─ EventBus / Trace
 ```
 
-默认监听 `127.0.0.1:7438`。IPC 命令和事件由 `packages/protocol` 的 TypeScript 类型定义，详情见[架构说明](docs/reference/architecture.md)。
+TypeScript runtime 默认监听 `127.0.0.1:7438`，Python runtime 默认监听 `127.0.0.1:7437`，可以同时运行。IPC 命令和事件详情见[架构说明](docs/reference/architecture.md)。
 
 ## 快速开始
 
@@ -100,6 +101,7 @@ Eval Runner ───┘                                  │
 
 - Git；
 - Node.js 20+；
+- Python 3.12 与 `uv`（使用 Python runtime 时）；
 - Anthropic 或 OpenAI-compatible API 凭据；
 - 可选：Rust 和 Tauri 平台依赖，用于桌面端开发。专业 artifact Skill 可能按需调用 Python，但不属于项目运行时依赖。
 
@@ -159,7 +161,7 @@ npm run cli -- run --goal "分析当前项目并修复测试失败"
 npm run cli -- chat
 ```
 
-发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztucode [项目路径]`。该入口包含 TypeScript daemon 和终端客户端，不创建 Python 虚拟环境。
+TypeScript 发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztu-ts [项目路径]`（`sztucode` 仍是兼容别名）。Python 包安装后使用 `sztu-py`。两套入口互不覆盖。
 
 更完整的安装说明见[安装与启动](docs/getting-started/installation.md)。
 

@@ -1,4 +1,4 @@
-import type { ChatMessage, ModelProvider, ModelResponse } from "../agent-loop.js";
+import type { ChatMessage, ModelInvocation, ModelProvider, ModelResponse } from "../agent-loop.js";
 import type { ToolRegistry } from "../tools.js";
 import { SettingsStore } from "../settings.js";
 import { AnthropicMessagesProvider } from "./anthropic.js";
@@ -6,17 +6,17 @@ import { OpenAiCompatibleProvider } from "./openai.js";
 
 export class ConfigurableProvider implements ModelProvider {
   constructor(private readonly settings: SettingsStore) {}
-  async complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void): Promise<ModelResponse> {
+  async complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void, invocation?: ModelInvocation, onThinking?: (thinking: string) => void): Promise<ModelResponse> {
     const config = await this.settings.getProviderConfig();
     const completeOnce = async () => {
       if (config.provider === "anthropic" || config.api_format === "anthropic_messages") {
         const apiKey = config.api_key ?? process.env.ANTHROPIC_API_KEY;
         if (!apiKey) throw new Error("Anthropic API key is not configured");
-        return new AnthropicMessagesProvider({ apiKey, baseUrl: config.base_url || process.env.ANTHROPIC_BASE_URL, model: config.model, maxTokens: config.max_output_tokens, timeoutMs: config.timeout_s * 1000, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, cacheControl: config.cache_control }).complete(messages, tools, signal, onToken);
+        return new AnthropicMessagesProvider({ apiKey, baseUrl: config.base_url || process.env.ANTHROPIC_BASE_URL, model: config.model, maxTokens: config.max_output_tokens, timeoutMs: config.timeout_s * 1000, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, cacheControl: config.cache_control }).complete(messages, tools, signal, onToken, invocation, onThinking);
       }
       const apiKey = config.keyless ? undefined : config.api_key ?? process.env.OPENAI_API_KEY ?? process.env.DEEPSEEK_API_KEY;
       if (!config.keyless && !apiKey) throw new Error("OpenAI-compatible API key is not configured");
-      return new OpenAiCompatibleProvider({ apiKey, baseUrl: config.base_url || (process.env.OPENAI_BASE_URL ?? process.env.DEEPSEEK_BASE_URL), model: config.model, apiFormat: config.api_format, maxOutputTokens: config.max_output_tokens, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, timeoutMs: config.timeout_s * 1000, stream: true }).complete(messages, tools, signal, onToken);
+      return new OpenAiCompatibleProvider({ apiKey, baseUrl: config.base_url || (process.env.OPENAI_BASE_URL ?? process.env.DEEPSEEK_BASE_URL), model: config.model, apiFormat: config.api_format, maxOutputTokens: config.max_output_tokens, temperature: config.temperature, topP: config.top_p, reasoningEffort: config.reasoning_effort, timeoutMs: config.timeout_s * 1000, stream: true }).complete(messages, tools, signal, onToken, invocation, onThinking);
     };
     let lastError: unknown;
     for (let attempt = 0; attempt <= Math.max(0, Math.min(10, config.max_retries)); attempt += 1) {

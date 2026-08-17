@@ -22,6 +22,7 @@ import { McpManager } from "./mcp.js";
 import { SubagentManager } from "./subagent.js";
 import { MarketplaceManager } from "./marketplaces.js";
 import type { ModelProvider } from "./agent-loop.js";
+import { TraceWriter, TracingProvider } from "./trace.js";
 
 const PARSE_ERROR = -32700;
 const INVALID_REQUEST = -32600;
@@ -29,6 +30,7 @@ const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 const SESSION_BUSY = -32012;
+const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 const TEXT_READ_LIMIT = 1_000_000;
 const IMAGE_READ_LIMIT = 5_000_000;
 
@@ -54,6 +56,7 @@ export class RuntimeServer {
   readonly workspaces = new WorkspaceManager();
   readonly git = new GitManager(this.workspaces);
   readonly models = new ModelProfileStore(this.settings);
+  readonly trace: TraceWriter | null;
   private readonly provider: ModelProvider;
   private readonly server: net.Server;
   private readonly clients = new Set<net.Socket>();
@@ -63,11 +66,17 @@ export class RuntimeServer {
   private readonly workflows = new Map<string, { controller: AbortController; status: "running" | "completed" | "cancelled" }>();
   private startedAt = Date.now();
 
-  constructor(private readonly host = "127.0.0.1", private readonly port = 7438, provider?: ModelProvider) {
-    this.provider = provider ?? new ConfigurableProvider(this.settings);
+  constructor(private readonly host = "127.0.0.1", private readonly port = 7438, provider?: ModelProvider, private readonly maxFrameBytes = MAX_FRAME_BYTES) {
+    const traceEnabled = !/^(0|false|no)$/i.test(process.env.SZTU_TRACE_ENABLED ?? "true");
+    this.trace = traceEnabled ? new TraceWriter(process.env.SZTU_TRACE_FILE ?? path.join(dataRoot(), "traces", "runtime-ts.jsonl")) : null;
+    const baseProvider = provider ?? new ConfigurableProvider(this.settings);
+    this.provider = this.trace ? new TracingProvider(baseProvider, this.trace, !/^(0|false|no)$/i.test(process.env.SZTU_TRACE_INCLUDE_LLM_PAYLOAD ?? "true")) : baseProvider;
     this.runs = new RunManager(this.events, this.provider, process.cwd(), this.questions, () => this.mcp.listTools(), async () => { const settings = await this.settings.get(); return { contextWindow: settings.context_window, maxOutputTokens: settings.max_output_tokens, streaming: true }; }, this.sessions);
     this.server = net.createServer((socket) => this.handleClient(socket));
-    this.events.subscribe((event) => { this.broadcast({ kind: "event", event }); void this.persistRunEvent(event); });
+    this.events.subscribe((event) => {
+      this.trace?.emit({ ts: new Date().toISOString(), direction: "CORE", layer: "event", kind: "event", run_id: "run_id" in event ? event.run_id : null, data: event as unknown as Record<string, unknown> });
+      this.broadcast({ kind: "event", event }); void this.persistRunEvent(event);
+    });
   }
 
   async listen(): Promise<string> {
@@ -77,17 +86,19 @@ export class RuntimeServer {
     return new Promise((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(this.port, this.host, () => {
-        this.events.publish({ type: "core.started", listen_addr: `${this.host}:${this.port}`, version: "ts-0.2.0" });
         const address = this.server.address();
-        resolve(typeof address === "object" && address ? `${address.address}:${address.port}` : `${this.host}:${this.port}`);
+        const listenAddress = typeof address === "object" && address ? `${address.address}:${address.port}` : `${this.host}:${this.port}`;
+        this.events.publish({ type: "core.started", listen_addr: listenAddress, version: "ts-0.2.0" });
+        resolve(listenAddress);
       });
     });
   }
 
   async close(): Promise<void> {
+    this.runs.cancelAll();
     for (const workflow of this.workflows.values()) if (workflow.status === "running") workflow.controller.abort();
     for (const client of this.clients) client.destroy();
-    await this.mcp.close(); await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    await this.mcp.close(); await new Promise<void>((resolve) => this.server.close(() => resolve())); await this.trace?.flush();
   }
 
   private handleClient(socket: net.Socket): void {
@@ -96,9 +107,13 @@ export class RuntimeServer {
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
       buffer += chunk;
+      if (Buffer.byteLength(buffer, "utf8") > this.maxFrameBytes && !buffer.includes("\n")) {
+        this.send(socket, error(null, INVALID_REQUEST, "Request too large")); socket.end(); buffer = ""; return;
+      }
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
         const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (Buffer.byteLength(line, "utf8") > this.maxFrameBytes) { this.send(socket, error(null, INVALID_REQUEST, "Request too large")); socket.end(); buffer = ""; return; }
         void this.handleLine(socket, line);
         newline = buffer.indexOf("\n");
       }
@@ -114,6 +129,7 @@ export class RuntimeServer {
       this.send(socket, error(null, INVALID_REQUEST, "Invalid Request")); return;
     }
     const request = raw as JsonRpcRequest;
+    this.trace?.emit({ ts: new Date().toISOString(), direction: "CLIENT→CORE", layer: "ipc", kind: "command", run_id: requestRunId(request), client_id: clientId(socket), data: { method: request.method, id: request.id, params: request.params } });
     try { this.send(socket, await this.dispatch(request, socket)); }
     catch (cause) {
       const classified = classifyError(cause);
@@ -196,7 +212,7 @@ export class RuntimeServer {
         let runId = "";
         runId = this.runs.start(goal, history, async (messages, usage) => {
           const assistant = messages.at(-1);
-          if (assistant?.role === "assistant" && typeof assistant.content === "string") await this.sessions.appendMessage(params.session_id, { role: "assistant", content: assistant.content, run_id: runId });
+          if (assistant?.role === "assistant") await this.sessions.appendMessage(params.session_id, { role: "assistant", content: assistant.content, run_id: runId });
         }, workspaceRoot, params.session_id, (createdRunId) => this.runSessions.set(createdRunId, params.session_id));
         if (params.client_message_id) this.clientMessageRuns.set(`${params.session_id}:${params.client_message_id}`, runId);
         await this.sessions.attachRun(params.session_id, runId);
@@ -225,8 +241,21 @@ export class RuntimeServer {
       case "git.commit": { const params = request.params as { workspace_id: string; message: string }; if (!params.message?.trim()) throw new Error("message is required"); return ok(request.id, { commit_hash: await this.git.commit(params.workspace_id, params.message.trim()) }); }
       case "git.history": { const params = request.params as { workspace_id: string; limit?: number; skip?: number }; return ok(request.id, await this.git.history(params.workspace_id, params.limit, params.skip)); }
       case "settings.get": return ok(request.id, { settings: await this.settings.get() });
-      case "settings.update": { const update = request.params as Record<string, unknown>; const settings = await this.settings.update(update as Partial<import("./settings.js").RuntimeSettings>); this.runs.permissions.setMode(settings.permission_mode); return ok(request.id, { settings }); }
-      case "permission.set_mode": { const params = request.params as { mode: import("@sztucode/protocol").PermissionMode }; this.runs.permissions.setMode(params.mode); const settings = await this.settings.update({ permission_mode: params.mode }); return ok(request.id, { ok: true, mode: settings.permission_mode }); }
+      case "settings.update": {
+        const previous = await this.settings.getProviderConfig();
+        const { update, updated } = normalizeSettingsUpdate(request.params as Record<string, unknown>, previous);
+        const settings = await this.settings.update(update);
+        if (settings.permission_mode !== previous.permission_mode) {
+          this.runs.permissions.setMode(settings.permission_mode);
+        }
+        return ok(request.id, { settings, updated });
+      }
+      case "permission.set_mode": {
+        const params = request.params as { mode: import("@sztucode/protocol").PermissionMode };
+        this.runs.permissions.setMode(params.mode);
+        const settings = await this.settings.update({ permission_mode: params.mode });
+        return ok(request.id, { ok: true, mode: settings.permission_mode });
+      }
       case "provider.status": { const settings = await this.settings.get(); const config = await this.settings.getProviderConfig(); const keyConfigured = Boolean(config.keyless || config.api_key || (settings.provider === "openai" ? process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY : process.env.ANTHROPIC_API_KEY)); const skills = (await new SkillLoader(process.cwd()).list()).map(publicSkill); return ok(request.id, { provider: settings.provider, api_format: settings.api_format, model: settings.model, api_key_configured: keyConfigured, ready_for_next_run: keyConfigured && Boolean(settings.model), skills, mcp_servers: this.mcp.statuses() }); }
       case "skill.list": { const params = request.params as { workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); const skills = await new SkillLoader(root).list(); return ok(request.id, { skills: skills.map(publicSkill) }); }
       case "skill.set_enabled": { const params = request.params as { skill_id: string; enabled: boolean; workspace_id?: string | null }; const root = params.workspace_id ? (await this.workspaces.get(params.workspace_id)).path : process.cwd(); const { system_prompt_template: _body, allowed_tools: _tools, ...skill } = await new SkillLoader(root).setEnabled(params.skill_id, params.enabled); return ok(request.id, { skill }); }
@@ -316,7 +345,16 @@ export class RuntimeServer {
     }
   }
 
-  private send(socket: net.Socket, message: JsonRpcResponse | EventEnvelope): void { if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`); }
+  private send(socket: net.Socket, message: JsonRpcResponse | EventEnvelope): void {
+    if (socket.destroyed) return;
+    socket.write(`${JSON.stringify(message)}\n`);
+    if ("kind" in message) {
+      const event = message.event;
+      this.trace?.emit({ ts: new Date().toISOString(), direction: "CORE→CLIENT", layer: "ipc", kind: "push", run_id: "run_id" in event ? event.run_id : null, client_id: clientId(socket), data: { event_type: event.type } });
+      return;
+    }
+    this.trace?.emit({ ts: new Date().toISOString(), direction: "CORE→CLIENT", layer: "ipc", kind: "error" in message ? "error" : "response", run_id: responseRunId(message), client_id: clientId(socket), data: message as unknown as Record<string, unknown> });
+  }
   private async persistRunEvent(event: import("@sztucode/protocol").RuntimeEvent): Promise<void> {
     if (!("run_id" in event)) return;
     const sessionId = this.runSessions.get(event.run_id); if (!sessionId) return;
@@ -355,6 +393,62 @@ const matchesSubscription = (event: import("@sztucode/protocol").RuntimeEvent, s
   if (subscription.scope === "global") return true;
   return "run_id" in event && event.run_id === subscription.scope.slice(4);
 };
+
+const dataRoot = (): string => process.env.SZTU_DATA_DIR ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? process.cwd(), ".sztu");
+const clientId = (socket: net.Socket): string => `${socket.remoteAddress ?? "unknown"}:${socket.remotePort ?? 0}`;
+const requestRunId = (request: JsonRpcRequest): string | null => typeof request.params?.run_id === "string" ? request.params.run_id : null;
+const responseRunId = (response: JsonRpcResponse): string | null => "result" in response && response.result && typeof response.result === "object" && typeof (response.result as { run_id?: unknown }).run_id === "string" ? (response.result as { run_id: string }).run_id : null;
+
+type SettingsUpdateKey = keyof import("./settings.js").RuntimeSettings | "api_key";
+type StoredSettingsUpdate = Partial<import("./settings.js").RuntimeSettings> & { api_key?: string; keyless?: boolean };
+const SETTINGS_UPDATE_KEYS: SettingsUpdateKey[] = ["provider", "api_format", "model", "base_url", "api_key", "max_output_tokens", "temperature", "top_p", "reasoning_effort", "timeout_s", "max_retries", "context_window", "cache_control", "permission_mode"];
+
+function normalizeSettingsUpdate(input: Record<string, unknown>, current: Awaited<ReturnType<SettingsStore["getProviderConfig"]>>): { update: StoredSettingsUpdate; updated: SettingsUpdateKey[] } {
+  const update: StoredSettingsUpdate = {}; const updated: SettingsUpdateKey[] = []; const next = { ...current };
+  for (const key of SETTINGS_UPDATE_KEYS) {
+    const value = input[key];
+    if (value === undefined || value === null) continue;
+    validateSetting(key, value);
+  }
+  if (typeof input.provider === "string" && input.provider !== next.provider) {
+    next.provider = input.provider as typeof next.provider; next.api_format = next.provider === "anthropic" ? "anthropic_messages" : "openai_chat_completions";
+    update.provider = next.provider; update.api_format = next.api_format; update.keyless = false; updated.push("provider");
+  }
+  if (typeof input.api_format === "string" && input.api_format !== next.api_format) {
+    next.api_format = input.api_format as typeof next.api_format; next.provider = next.api_format === "anthropic_messages" ? "anthropic" : "openai";
+    update.api_format = next.api_format; update.provider = next.provider; updated.push("api_format");
+  }
+  const remaining: SettingsUpdateKey[] = ["model", "base_url", "api_key", "max_output_tokens", "temperature", "top_p", "reasoning_effort", "timeout_s", "max_retries", "context_window", "cache_control", "permission_mode"];
+  for (const key of remaining) {
+    const value = input[key];
+    if (value === undefined || value === null || value === next[key]) continue;
+    (next as Record<string, unknown>)[key] = value; (update as Record<string, unknown>)[key] = value; updated.push(key);
+  }
+  if (updated.some((key) => key === "model" || key === "base_url")) update.keyless = false;
+  return { update, updated };
+}
+
+function validateSetting(key: SettingsUpdateKey, value: unknown): void {
+  const oneOf = (values: readonly unknown[]) => { if (!values.includes(value)) throw new Error(`${key} must be one of: ${values.join(", ")}`); };
+  const text = (min: number, max: number) => { if (typeof value !== "string" || value.length < min || value.length > max) throw new Error(`${key} must be a string with length ${min}..${max}`); };
+  const number = (min: number, max: number, integer = false, exclusiveMin = false) => {
+    const validRange = typeof value === "number" && (exclusiveMin ? value > min : value >= min) && value <= max;
+    if (!validRange || !Number.isFinite(value) || integer && !Number.isInteger(value)) throw new Error(`${key} must be ${integer ? "an integer" : "a number"} in range ${exclusiveMin ? "(" : "["}${min}, ${max}]`);
+  };
+  if (key === "provider") oneOf(["anthropic", "openai"]);
+  else if (key === "api_format") oneOf(["openai_chat_completions", "anthropic_messages", "openai_responses"]);
+  else if (key === "permission_mode") oneOf(["normal", "accept_edits", "plan", "auto"]);
+  else if (key === "reasoning_effort") oneOf(["", "low", "medium", "high", "xhigh", "max"]);
+  else if (key === "model") text(1, 200);
+  else if (key === "base_url") text(0, 2_000);
+  else if (key === "api_key") text(1, 4_000);
+  else if (key === "max_output_tokens") number(1, 128_000, true);
+  else if (key === "temperature" || key === "top_p") number(0, 1);
+  else if (key === "timeout_s") number(0, 600, false, true);
+  else if (key === "max_retries") number(0, 10, true);
+  else if (key === "context_window") number(0, 10_000_000, true);
+  else if (key === "cache_control" && typeof value !== "boolean") throw new Error("cache_control must be a boolean");
+}
 
 async function probeModel(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   const started = Date.now(); const apiFormat = String(input.api_format ?? (input.provider === "anthropic" ? "anthropic_messages" : "openai_chat_completions")); const model = String(input.model ?? "").trim();
