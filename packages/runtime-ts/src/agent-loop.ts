@@ -7,6 +7,7 @@ import { DenialTracker } from "./denial-tracker.js";
 import { StuckLoopTracker, stuckSignature } from "./stuck-tracker.js";
 import path from "node:path";
 import { createReadRefTool, OffloadManager } from "./offload.js";
+import { validateSchema } from "./schema-validator.js";
 
 export type ChatMessage = ContextMessage;
 export type ModelToolCall = { id: string; name: string; input: Record<string, unknown> };
@@ -85,6 +86,13 @@ export class AgentLoop {
           stuck.recordFailure(stuckSignature(call));
           this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "unknown_tool", error_message: `Unknown tool: ${call.name}`, elapsed_ms: 0, ts: now() });
           messages.push({ role: "tool", tool_call_id: call.id, content: `Unknown tool: ${call.name}` });
+          continue;
+        }
+        const validation = validateSchema(call.input, tool.schema);
+        if (!validation.valid) {
+          stuck.recordFailure(stuckSignature(call));
+          this.publish({ type: "tool.call_failed", run_id: runId, tool_use_id: call.id, tool_name: call.name, error_class: "schema_error", error_message: validation.error, elapsed_ms: 0, ts: now() });
+          messages.push({ role: "tool", tool_call_id: call.id, content: validation.error });
           continue;
         }
         const allowed = await this.permissions.check(runId, call.id, call.name, call.input, tool.permission, signal);

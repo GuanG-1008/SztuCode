@@ -69,6 +69,8 @@ Runner 组合会话消息与当前目标。上下文预算由 `packages/runtime-
 
 Prompt Harness 从 `prompts/content/*/index.json` 加载原子提示，并按实际注册工具、权限模式、记忆能力与任务风险动态组合。标记为 `reference-only` 的提示不会进入模型上下文，避免向 Agent 声明运行时并不存在的 IDE、Hook 或沙箱能力。
 
+模型生成的工具参数不会因 TypeScript 类型声明而被假定可信。AgentLoop 在权限审批和调用前按工具 JSON Schema 做运行时校验；缺失字段、错误类型、非法枚举和越界数值会作为 `schema_error` 写入 trace，并反馈给模型修正。
+
 ### 工具
 
 内置工具通过 Tool Registry 注册。工具参数在调用边界校验，运行时根据工具类型和具体输入计算权限：
