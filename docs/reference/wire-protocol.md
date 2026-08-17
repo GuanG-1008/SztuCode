@@ -396,6 +396,7 @@
 | `total_input_tokens` | `number` | yes |
 | `total_output_tokens` | `number` | yes |
 | `cache_read_input_tokens` | `number` | yes |
+| `cache_creation_input_tokens` | `number` | yes |
 | `elapsed_s` | `number` | yes |
 | `context_pct` | `number` | yes |
 | `ts` | `string` | yes |
