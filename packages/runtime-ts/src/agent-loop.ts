@@ -1,6 +1,6 @@
 import type { RuntimeEvent } from "@sztucode/protocol";
 import { EventBus } from "./event-bus.js";
-import { ToolRegistry, type ToolContext } from "./tools.js";
+import { ToolRegistry, type Tool, type ToolContext, type ToolResult } from "./tools.js";
 import type { PermissionGate } from "./permissions.js";
 import { ContextManager, sanitizeContextMessages, type ContextMessage } from "./context.js";
 import { DenialTracker } from "./denial-tracker.js";
@@ -14,7 +14,7 @@ export type ModelToolCall = { id: string; name: string; input: Record<string, un
 export type ModelUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
 export type ModelResponse = { text: string; tool_calls: ModelToolCall[]; stop_reason: "end_turn" | "tool_use"; usage?: Partial<ModelUsage>; model?: string; streamed?: boolean };
 export interface ModelProvider { complete(messages: ChatMessage[], tools: ToolRegistry, signal?: AbortSignal, onToken?: (token: string) => void): Promise<ModelResponse> }
-export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number; offloadEnabled?: boolean; offloadMinChars?: number; offloadMinLines?: number; offloadRoot?: string };
+export type AgentLoopOptions = { contextWindow?: number; maxOutputTokens?: number; sessionId?: string; streaming?: boolean; stuckMaxFailures?: number; stuckMaxTotal?: number; offloadEnabled?: boolean; offloadMinChars?: number; offloadMinLines?: number; offloadRoot?: string; toolMaxRetries?: number; toolRetryBaseMs?: number };
 
 export class EchoProvider implements ModelProvider {
   async complete(messages: ChatMessage[]): Promise<ModelResponse> {
@@ -105,7 +105,9 @@ export class AgentLoop {
           continue;
         }
         const started = Date.now();
-        const result = await tool.invoke(call.input, { ...this.context, signal });
+        const result = await invokeToolWithRetry(tool, call.input, { ...this.context, signal }, this.options.toolMaxRetries ?? nonNegativeEnv("SZTU_TOOL_MAX_RETRIES", 1), this.options.toolRetryBaseMs ?? nonNegativeEnv("SZTU_TOOL_RETRY_BASE_MS", 2_000), (attempt, failure) => {
+          this.publish({ type: "log.line", run_id: runId, level: "WARN", source: "tool", message: `Retrying ${toolName} after attempt ${attempt}: ${failure.error ?? "Tool failed"}`, ts: now() });
+        });
         const elapsedMs = Date.now() - started;
         const rawOutput = result.ok ? result.output : [result.output, result.error].filter(Boolean).join("\n") || "Tool failed";
         let contextOutput = rawOutput;
@@ -136,3 +138,31 @@ const dataRoot = () => process.env.SZTU_DATA_DIR ?? path.join(process.env.USERPR
 const safeRunId = (runId: string) => runId.replace(/[^A-Za-z0-9_.-]/g, "_") || "run";
 const isTestCommand = (command: string): boolean => /(^|\s)(pytest|vitest|jest|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test)(\s|$)/i.test(command);
 const testSummary = (command: string, output: string): string => { const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean); const relevant = lines.filter((line) => /passed|failed|error|test/i.test(line)); return (relevant.at(-1) ?? lines.at(-1) ?? command).slice(0, 300); };
+const retryableToolErrors = new Set<ToolResult["errorType"]>(["runtime_error", "rate_limited"]);
+
+async function invokeToolWithRetry(tool: Tool, input: Record<string, unknown>, context: ToolContext, maxRetries: number, retryBaseMs: number, onRetry: (attempt: number, failure: ToolResult) => void): Promise<ToolResult> {
+  for (let attempt = 0; ; attempt += 1) {
+    context.signal?.throwIfAborted();
+    let result: ToolResult;
+    try { result = await tool.invoke(input, context); }
+    catch (error) {
+      context.signal?.throwIfAborted();
+      result = { ok: false, output: "", error: error instanceof Error ? error.message : String(error), errorType: "runtime_error" };
+    }
+    const errorType = result.errorType ?? "runtime_error";
+    if (result.ok || !retryableToolErrors.has(errorType) || attempt >= maxRetries) return result;
+    onRetry(attempt + 1, result);
+    await abortableDelay(retryBaseMs * 2 ** attempt, context.signal);
+  }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? new Error("Run cancelled")); };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}

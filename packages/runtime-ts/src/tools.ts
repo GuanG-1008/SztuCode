@@ -7,7 +7,7 @@ import type { EventBus } from "./event-bus.js";
 import { TaskManager, type TaskStatus } from "./task-manager.js";
 
 export type { ToolPermission } from "./tools-types.js";
-export type ToolResult = { ok: boolean; output: string; error?: string; errorType?: "runtime_error" | "timeout" | "schema_error" | "permission_denied" };
+export type ToolResult = { ok: boolean; output: string; error?: string; errorType?: "runtime_error" | "rate_limited" | "timeout" | "schema_error" | "permission_denied" };
 export type ToolContext = { workspace: Workspace; signal?: AbortSignal; onFileChanged?: (relativePath: string) => void };
 export interface Tool { readonly name: string; readonly aliases?: readonly string[]; readonly description: string; readonly permission: ToolPermission; readonly schema: Record<string, unknown>; invoke(params: Record<string, unknown>, context: ToolContext): Promise<ToolResult>; }
 

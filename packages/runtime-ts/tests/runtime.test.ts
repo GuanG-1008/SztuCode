@@ -100,7 +100,7 @@ test("agent loop injects a traceable intervention after the same tool failure re
     const events = new EventBus(path.join(root, "events.jsonl")); const trace: string[] = []; events.subscribe((event) => trace.push(event.type));
     const prompts: string[] = []; let calls = 0;
     const provider: ModelProvider = { complete: async (messages) => { prompts.push(messages.map((message) => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n")); calls += 1; return calls <= 2 ? { text: "", tool_calls: [{ id: `missing-${calls}`, name: "read_file", input: { path: "missing.txt" } }], stop_reason: "tool_use" } : { text: "changed approach", tool_calls: [], stop_reason: "end_turn" }; } };
-    const loop = new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async () => true });
+    const loop = new AgentLoop(provider, createWorkspaceTools(), { workspace: new Workspace(root) }, events, { check: async () => true }, { toolRetryBaseMs: 0 });
     assert.equal((await loop.run("stuck-run", "read missing", 4)).text, "changed approach");
     assert.match(prompts[2] ?? "", /appears to be stuck/);
     assert.ok(trace.includes("stuck.loop"));
@@ -119,6 +119,50 @@ test("agent loop canonicalizes tool aliases before permissions and telemetry", a
     assert.deepEqual(permissions, ["write_file"]);
     assert.deepEqual(names, ["write_file", "write_file"]);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("agent loop retries transient tool failures once without repeating permission checks", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-tool-retry-"));
+  try {
+    const events = new EventBus(path.join(root, "events.jsonl")); const trace: string[] = []; events.subscribe((event) => { if (event.type === "log.line" || event.type.startsWith("tool.call_")) trace.push(event.type === "log.line" ? event.message : event.type); });
+    let toolCalls = 0; let permissionChecks = 0; let modelCalls = 0;
+    const tools = createWorkspaceTools([{ name: "transient", description: "transient", permission: "workspace_write", schema: { type: "object" }, async invoke() { toolCalls += 1; return toolCalls === 1 ? { ok: false, output: "", error: "temporary", errorType: "rate_limited" } : { ok: true, output: "recovered" }; } }]);
+    const provider: ModelProvider = { complete: async () => { modelCalls += 1; return modelCalls === 1 ? { text: "", tool_calls: [{ id: "retry", name: "transient", input: {} }], stop_reason: "tool_use" } : { text: "done", tool_calls: [], stop_reason: "end_turn" }; } };
+    const loop = new AgentLoop(provider, tools, { workspace: new Workspace(root) }, events, { check: async () => { permissionChecks += 1; return true; } }, { toolRetryBaseMs: 0 });
+    assert.equal((await loop.run("retry", "run", 3)).text, "done");
+    assert.equal(toolCalls, 2); assert.equal(permissionChecks, 1);
+    assert.deepEqual(trace.filter((item) => item.startsWith("tool.call_")), ["tool.call_started", "tool.call_finished"]);
+    assert.ok(trace.some((item) => /Retrying transient after attempt 1: temporary/.test(item)));
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); }
+});
+
+test("agent loop does not retry timeout failures and contains thrown tool errors", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-tool-retry-policy-"));
+  try {
+    let timeoutCalls = 0; let throwingCalls = 0; let modelCalls = 0;
+    const tools = createWorkspaceTools([
+      { name: "times_out", description: "timeout", permission: "read_only", schema: { type: "object" }, async invoke() { timeoutCalls += 1; return { ok: false, output: "", error: "slow", errorType: "timeout" }; } },
+      { name: "throws", description: "throws", permission: "read_only", schema: { type: "object" }, async invoke() { throwingCalls += 1; throw new Error("broken"); } },
+    ]);
+    const provider: ModelProvider = { complete: async () => { modelCalls += 1; if (modelCalls === 1) return { text: "", tool_calls: [{ id: "timeout", name: "times_out", input: {} }, { id: "throws", name: "throws", input: {} }], stop_reason: "tool_use" }; return { text: "continued", tool_calls: [], stop_reason: "end_turn" }; } };
+    const loop = new AgentLoop(provider, tools, { workspace: new Workspace(root) }, new EventBus(path.join(root, "events.jsonl")), { check: async () => true }, { toolRetryBaseMs: 0 });
+    assert.equal((await loop.run("retry-policy", "run", 3)).text, "continued");
+    assert.equal(timeoutCalls, 1); assert.equal(throwingCalls, 2);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); }
+});
+
+test("agent loop cancellation interrupts tool retry backoff", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-tool-retry-cancel-"));
+  try {
+    let toolCalls = 0;
+    const tools = createWorkspaceTools([{ name: "fails", description: "fails", permission: "read_only", schema: { type: "object" }, async invoke() { toolCalls += 1; return { ok: false, output: "", error: "temporary", errorType: "runtime_error" }; } }]);
+    const provider: ModelProvider = { complete: async () => ({ text: "", tool_calls: [{ id: "fails", name: "fails", input: {} }], stop_reason: "tool_use" }) };
+    const controller = new AbortController();
+    const running = new AgentLoop(provider, tools, { workspace: new Workspace(root) }, new EventBus(path.join(root, "events.jsonl")), { check: async () => true }, { toolMaxRetries: 3, toolRetryBaseMs: 5_000 }).run("retry-cancel", "run", 3, [], controller.signal);
+    setTimeout(() => controller.abort(new Error("cancelled")), 10);
+    await assert.rejects(running, /cancelled/);
+    assert.equal(toolCalls, 1);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); }
 });
 
 test("stuck tracking preserves nested tool arguments and supports a hard-stop threshold", () => {
