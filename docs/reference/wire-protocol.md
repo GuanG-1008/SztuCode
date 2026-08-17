@@ -5770,6 +5770,11 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
 | `error_message` | `string` | yes |
 | `elapsed_ms` | `integer` | yes |
 | `attempt` | `integer` | no |
+| `retry_decision` | `string` | no |
+| `retry_reason` | `string` | no |
+| `retry_delay_ms` | `integer` | no |
+| `tool_retry_safe` | `boolean` | no |
+| `execution_state` | `string` | no |
 | `batch_id` | `string` | no |
 | `scheduler_mode` | `string` | no |
 | `queue_ms` | `integer` | no |
@@ -5815,6 +5820,35 @@ Events written to `runs/<run_id>/events.jsonl` and forwarded over IPC to subscri
       "default": 1,
       "title": "Attempt",
       "type": "integer"
+    },
+    "retry_decision": {
+      "default": "stop",
+      "enum": [
+        "retry",
+        "stop"
+      ],
+      "title": "Retry Decision",
+      "type": "string"
+    },
+    "retry_reason": {
+      "default": "",
+      "title": "Retry Reason",
+      "type": "string"
+    },
+    "retry_delay_ms": {
+      "default": 0,
+      "title": "Retry Delay Ms",
+      "type": "integer"
+    },
+    "tool_retry_safe": {
+      "default": false,
+      "title": "Tool Retry Safe",
+      "type": "boolean"
+    },
+    "execution_state": {
+      "default": "completed",
+      "title": "Execution State",
+      "type": "string"
     },
     "batch_id": {
       "default": "",
