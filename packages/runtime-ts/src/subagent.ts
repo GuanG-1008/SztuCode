@@ -20,7 +20,7 @@ export class SubagentManager {
     const basePrompt = await buildSystemPrompt(this.workspaceRoot, role);
     const rolePrompt = profile.systemPrompt || `Act as the ${role} role for this task.`;
     const tools = createWorkspaceTools().restrictTo(profile.allowedTools);
-    const loop = new AgentLoop(this.provider, tools, { workspace: new Workspace(this.workspaceRoot) }, this.events, this.permissions);
+    const loop = new AgentLoop(this.provider, tools, { workspace: new Workspace(this.workspaceRoot) }, this.events, this.permissions.scoped(profile.permissionMode));
     try { const result = await loop.run(runId, goal, profile.maxSteps || 20, [{ role: "system", content: `${basePrompt}\n\n# Role instructions\n${rolePrompt}` }, ...history]); this.events.publish({ type: "subagent.finished", run_id: runId, parent_run_id: parentRunId, status: "success", ts: new Date().toISOString() }); return { runId, text: result.text }; }
     catch (error) { this.events.publish({ type: "subagent.finished", run_id: runId, parent_run_id: parentRunId, status: "failed", ts: new Date().toISOString() }); throw error; }
   }

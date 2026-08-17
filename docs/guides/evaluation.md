@@ -2,7 +2,7 @@
 
 [返回文档中心](../README.md)
 
-`sztu-eval` 是统一评测入口。它负责加载版本化任务、为每次运行创建隔离工作区、调用可替换
+`npm run eval` 是统一的 TypeScript 评测入口。它负责加载版本化任务、为每次运行创建隔离工作区、调用可替换
 runner、执行独立验证，并同时生成机器可读 JSON 与人类可读 Markdown 报告。
 
 评测结果区分三件事：
@@ -71,7 +71,7 @@ reference runner 只证明任务 fixture、验证器、指标聚合和报告链�
 `auto` 模式：
 
 ```bash
-uv run sztu-eval run \
+npm run eval -- run \
   --suite internal \
   --runner sztucode-rpc \
   --permission-mode auto \
@@ -91,7 +91,7 @@ uv run sztu-eval run \
 command runner 直接执行解析后的 argv，不经过 Shell：
 
 ```bash
-uv run sztu-eval run \
+npm run eval -- run \
   --suite internal \
   --runner command \
   --command "python path/to/agent_adapter.py" \
@@ -157,7 +157,7 @@ command runner 是接入接口，不是操作系统沙箱；只应运行受信�
 }
 ```
 
-`{python}` 会替换为运行 `sztu-eval` 的解释器。所有清单路径必须使用 `/`，绝对路径、`..` 和
+`{python}` 会替换为当前平台的 Python 解释器，仅用于执行 Python fixture 的独立验证器；评测调度器本身仍由 TypeScript 运行。所有清单路径必须使用 `/`，绝对路径、`..` 和
 Windows 反斜杠会在创建工作区前被拒绝。公开任务文件不会包含 `workspace_files` 或
 `reference_changes`，外部 Agent 无法通过 runner 契约读取参考答案。
 
@@ -190,7 +190,7 @@ Windows 反斜杠会在创建工作区前被拒绝。公开任务文件不会包
 先让 SztuCode 在三个固定实例上生成 patch：
 
 ```bash
-uv run sztu-eval run \
+npm run eval -- run \
   --suite swebench-lite \
   --runner sztucode-rpc \
   --permission-mode auto \
@@ -203,7 +203,7 @@ uv run sztu-eval run \
 官方预测格式：
 
 ```bash
-uv run sztu-eval export-swebench \
+npm run eval -- export-swebench \
   --suite swebench-lite \
   --report eval/reports/swebench-smoke/report.json \
   --output eval/reports/swebench-smoke/predictions.jsonl \
@@ -230,7 +230,7 @@ resolved。参见 [SWE-bench Harness Reference](https://www.swebench.com/SWE-ben
 Markdown 模板可以独立于评测重新生成：
 
 ```bash
-uv run sztu-eval report \
+npm run eval -- report \
   --input eval/reports/internal-agent/report.json \
   --output eval/reports/internal-agent/summary.md
 ```
@@ -242,4 +242,4 @@ uv run sztu-eval report \
 
 `python -m eval.swebench.adapter`、`python -m eval.trajectory.analyzer` 和
 `python -m eval.reports.generator` 暂时保留，便于读取历史实验。新评测和跨版本比较应使用
-`sztu-eval` 的版本化 JSON 报告；旧脚本输出不具备相同的失败与稳定性语义。
+`npm run eval` 的版本化 JSON 报告；旧脚本输出不具备相同的失败与稳定性语义。

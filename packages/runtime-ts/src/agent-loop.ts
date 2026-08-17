@@ -1,7 +1,7 @@
 import type { RuntimeEvent } from "@sztucode/protocol";
 import { EventBus } from "./event-bus.js";
 import { ToolRegistry, type ToolContext } from "./tools.js";
-import { PermissionManager } from "./permissions.js";
+import type { PermissionGate } from "./permissions.js";
 import { ContextManager, sanitizeContextMessages, type ContextMessage } from "./context.js";
 
 export type ChatMessage = ContextMessage;
@@ -19,7 +19,7 @@ export class EchoProvider implements ModelProvider {
 }
 
 export class AgentLoop {
-  constructor(private readonly provider: ModelProvider, private readonly tools: ToolRegistry, private readonly context: ToolContext, private readonly events: EventBus, private readonly permissions: PermissionManager, private readonly options: AgentLoopOptions = {}) {}
+  constructor(private readonly provider: ModelProvider, private readonly tools: ToolRegistry, private readonly context: ToolContext, private readonly events: EventBus, private readonly permissions: PermissionGate, private readonly options: AgentLoopOptions = {}) {}
 
   async run(runId: string, goal: string, maxSteps = 20, history: ChatMessage[] = [], signal?: AbortSignal, takeSteering?: () => ChatMessage[]): Promise<{ text: string; steps: number; messages: ChatMessage[]; usage: ModelUsage }> {
     const context = new ContextManager([...history, { role: "user", content: goal }], { maxTokens: this.options.contextWindow ?? 128_000, reservedOutputTokens: this.options.maxOutputTokens ?? 8_192, maxToolResultChars: 8_000 });

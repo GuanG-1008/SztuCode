@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { PermissionMode } from "@sztucode/protocol";
 
 const execFileAsync = promisify(execFile);
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -10,7 +11,7 @@ const promptRoot = path.resolve(moduleDirectory, "../prompts/content");
 const agentRoot = path.resolve(moduleDirectory, "../agents/builtin");
 const instructionNames = ["AGENT.md", "AGENTS.md", "CLAUDE.md", "SZTUCODE.md", "CLAW.md"];
 
-export type AgentProfile = { name: string; description: string; systemPrompt: string; allowedTools: string[]; permissionMode: string; maxSteps: number };
+export type AgentProfile = { name: string; description: string; systemPrompt: string; allowedTools: string[]; permissionMode: PermissionMode; maxSteps: number };
 
 async function markdownGroup(group: string): Promise<string[]> {
   const root = path.join(promptRoot, group);
@@ -77,7 +78,8 @@ export async function buildSystemPrompt(workspaceRoot: string, role = "coder"): 
 function parseTomlProfile(text: string, name: string): AgentProfile {
   const description = text.match(/^description\s*=\s*["']([^"']*)["']/m)?.[1] ?? `${name} agent`;
   const promptId = text.match(/^prompt_id\s*=\s*["']([^"']*)["']/m)?.[1] ?? "";
-  const permissionMode = text.match(/^permission_mode\s*=\s*["']([^"']*)["']/m)?.[1] ?? "normal";
+  const parsedMode = text.match(/^permission_mode\s*=\s*["']([^"']*)["']/m)?.[1] ?? "normal";
+  const permissionMode: PermissionMode = ["normal", "plan", "accept_edits", "auto"].includes(parsedMode) ? parsedMode as PermissionMode : "normal";
   const maxSteps = Number(text.match(/^max_steps\s*=\s*(\d+)/m)?.[1] ?? 20);
   const allowedTools = [...text.matchAll(/^[ \t]*"([^"]+)"[ \t]*,?$/gm)].map((match) => match[1]);
   const inlinePrompt = text.match(/system_prompt\s*=\s*"""([\s\S]*?)"""/)?.[1]?.trim() ?? "";

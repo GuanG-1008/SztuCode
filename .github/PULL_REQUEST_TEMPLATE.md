@@ -11,10 +11,14 @@
 <!-- 列出实际运行过的命令和结果；未运行的检查说明原因。 -->
 
 ```text
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest ...
+npm run typecheck
+npm test
+npm run build
+npm run docs:protocol
+npm run docs:links
 ```
+
+如只修改 legacy Python 兼容代码或 artifact 工具，再补充对应的 `uv` / Ruff / mypy / pytest 检查。
 
 ## Risk
 

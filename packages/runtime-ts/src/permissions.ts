@@ -3,17 +3,24 @@ import { EventBus } from "./event-bus.js";
 import type { ToolPermission } from "./tools-types.js";
 
 type Pending = { resolve: (allowed: boolean) => void; runId: string };
+export interface PermissionGate {
+  check(runId: string, permissionId: string, toolName: string, params: Record<string, unknown>, permission: ToolPermission, signal?: AbortSignal): Promise<boolean>;
+}
 export class PermissionManager {
   private mode: PermissionMode = "normal";
   private readonly pending = new Map<string, Pending>();
   constructor(private readonly events: EventBus, private readonly timeoutMs = 60_000) {}
   getMode(): PermissionMode { return this.mode; }
   setMode(mode: PermissionMode): void { const old = this.mode; this.mode = mode; if (old !== mode) this.events.publish({ type: "permission.mode_changed", old_mode: old, new_mode: mode, ts: new Date().toISOString() }); }
+  scoped(mode: PermissionMode): PermissionGate { return { check: (runId, permissionId, toolName, params, permission, signal) => this.checkWithMode(mode, runId, permissionId, toolName, params, permission, signal) }; }
   check(runId: string, permissionId: string, toolName: string, params: Record<string, unknown>, permission: ToolPermission, signal?: AbortSignal): Promise<boolean> {
+    return this.checkWithMode(this.mode, runId, permissionId, toolName, params, permission, signal);
+  }
+  private checkWithMode(mode: PermissionMode, runId: string, permissionId: string, toolName: string, params: Record<string, unknown>, permission: ToolPermission, signal?: AbortSignal): Promise<boolean> {
     if (signal?.aborted) return Promise.resolve(false);
     if (toolName === "bash" && isDangerousCommand(String(params.command ?? ""))) return this.ask(runId, permissionId, toolName, params, signal);
-    if (this.mode === "auto" || permission === "read_only" || (this.mode === "accept_edits" && permission === "workspace_write")) return Promise.resolve(true);
-    if (this.mode === "plan") return Promise.resolve(false);
+    if (mode === "auto" || permission === "read_only" || (mode === "accept_edits" && permission === "workspace_write")) return Promise.resolve(true);
+    if (mode === "plan") return Promise.resolve(false);
     return this.ask(runId, permissionId, toolName, params, signal);
   }
   private ask(runId: string, permissionId: string, toolName: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<boolean> {
