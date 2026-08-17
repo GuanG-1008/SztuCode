@@ -1,4 +1,7 @@
 .venv/
 *.tgz
+*.whl
+vendor/
+tmp/
 __pycache__/
 *.pyc

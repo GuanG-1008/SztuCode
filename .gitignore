@@ -19,6 +19,8 @@ npm/sztucode-tui/runtime/
 npm/sztucode-tui/skills/
 npm/sztucode-tui/prompts/
 npm/sztucode-tui/agents/
+npm/sztucode-tui/vendor/
+npm/sztucode-tui/*.tgz
 node_modules/
 .vscode/
 .codegraph/
