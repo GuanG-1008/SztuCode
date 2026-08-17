@@ -1,52 +1,39 @@
 # CLAUDE.md
 
+> Current product path: TypeScript. The daemon, Agent Loop, protocol, CLI, desktop IPC, and evaluation orchestrator live under `packages/`. Python code is legacy compatibility or artifact tooling unless a task explicitly targets it.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
 
 ```bash
-# Install / sync dependencies
-uv sync
-
-# Lint
-uv run ruff check src tests scripts
-uv run mypy src
-
-# Tests
-uv run pytest tests/unit -v           # unit only (fast, no daemon)
-uv run pytest tests/integration -v    # needs no running daemon; fixture spawns one
-uv run pytest tests/ -v               # all
-
-# Single test
-uv run pytest tests/unit/test_envelope.py::test_request_roundtrip -v
-
-# Regenerate docs/reference/wire-protocol.md after changing bus models
-uv run python scripts/gen_protocol_doc.py
-
-# Verify docs/reference/wire-protocol.md is in sync (used in CI equivalent)
-uv run python scripts/gen_protocol_doc.py --check
-
-# Run daemon manually
-uv run sztu-code                        # foreground; Ctrl+C to stop
-SZTU_PORT=8000 uv run sztu-code        # override port
-
-# Send a ping
-uv run sztu ping
-uv run sztu --version
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run docs:protocol
+npm run docs:links
+npm run daemon
+npm run cli -- ping
+npm run cli -- core stop
 ```
 
 ## Architecture
 
-This is a **dual-process** local AI agent system. `sztu-code` is a persistent daemon; `sztu` and `sztu-tui` are clients that connect to it over a Unix domain socket.
+This is a local TypeScript agent system. The desktop application and TypeScript CLI connect to the persistent TypeScript daemon over JSON-RPC 2.0 NDJSON.
 
 ```
-sztu-code (daemon)
-  └─ listens on 127.0.0.1:7437 (TCP)
+packages/runtime-ts (daemon)
+  └─ listens on 127.0.0.1:7438 (TCP)
        ↑ JSON-RPC 2.0 NDJSON
-sztu (CLI)   sztu-tui (TUI, S2+)
+packages/cli   desktop (Tauri)
 ```
 
 **`sztu-tui` is the primary frontend.** All user-facing work on task management, observability, and interaction should be designed for and validated in the TUI first. The `sztu` CLI exists only for quick scripted testing and debugging — it is not a product surface. When implementing features that touch the user interface, invest in the TUI layout, event rendering, and keyboard interactions. Do not shortcut TUI work by pointing to the CLI as an alternative.
+
+## Legacy Python Reference
+
+The sections below describe the retained Python implementation. Use them only when modifying legacy compatibility code or Python-specific artifact tooling; they do not define the current product runtime.
 
 ### Protocol layer (`src/sztu_code/core/bus/`)
 
@@ -56,7 +43,7 @@ All IPC messages are typed pydantic v2 models with a **discriminated union on th
 - `commands.py` — `Command` union; currently only `PingCommand` + `PongResult`
 - `events.py` — `Event` union; currently only `CoreStartedEvent`
 
-`docs/reference/wire-protocol.md` is **generated** from these models by `scripts/gen_protocol_doc.py`. Always regenerate and commit it after changing bus models.
+The current `docs/reference/wire-protocol.md` is generated from `packages/protocol` by `npm run docs:protocol`. The Python generator is retained only for legacy compatibility.
 
 ### Transport layer (`src/sztu_code/core/transport/`)
 
@@ -66,7 +53,7 @@ All IPC messages are typed pydantic v2 models with a **discriminated union on th
 
 Four-tier priority: **built-in defaults → `~/.sztu/config.toml` → `.env` → env vars**.
 
-S0 keys: `host` (default `127.0.0.1`), `port` (default `7437`), `log_level`, `log_file`. Config file is silently skipped if absent; unknown keys cause a hard exit.
+The current daemon defaults to `127.0.0.1:7438`; Python S0 configuration below applies only to the legacy implementation.
 
 Relevant env vars: `SZTU_CONFIG`, `SZTU_HOST`, `SZTU_PORT`, `SZTU_LOG_LEVEL`, `SZTU_LOG_FILE`, `SZTU_LOG_FORMAT`.
 

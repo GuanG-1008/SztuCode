@@ -67,11 +67,9 @@ npm run typecheck
 
 ```bash
 npm run docs:links
-uv run pytest tests/unit/test_markdown_links.py -v
 ```
 
-第一条检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效，第二条覆盖解析与退出行为。
-移动或重命名文档后应运行，规则见[文档规范](documentation.md)。
+该命令检查根目录 Markdown 与 `docs/**/*.md` 的本地相对链接是否有效。移动或重命名文档后应运行，规则见[文档规范](documentation.md)。旧 Python 链接检查器仅作为 legacy 兼容实现保留，不属于现行文档门禁。
 
 ## 桌面端
 

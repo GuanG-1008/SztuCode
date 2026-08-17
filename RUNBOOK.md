@@ -5,82 +5,60 @@
 ### 启动守护进程
 
 ```bash
-uv run sztu-code
+npm run daemon
 ```
 
-默认监听 `127.0.0.1:7437`，按 `Ctrl+C` 优雅退出。
+默认监听 `127.0.0.1:7438`，按 `Ctrl+C` 优雅退出。
 
 ### 验证连通
 
 ```bash
-uv run sztu ping
-# → pong server=0.0.1 uptime=12ms latency=2ms
+npm run cli -- ping
 ```
 
 ### 停止守护进程
 
 ```bash
-kill $(pgrep -f sztu-code)
+npm run cli -- core stop
 ```
 
 ---
 
 ## 配置
 
-优先级（低 → 高）：**内建默认值 → `~/.sztu/config.toml` → `.env` → 系统环境变量**。
-
-### `~/.sztu/config.toml`
-
-```toml
-[core]
-host = "127.0.0.1"
-port = 7437
-
-[logging]
-level  = "INFO"
-file   = "~/.sztu/logs/core.log"
-format = "text"    # "text" | "json"
-```
-
-### `.env`
-
-从 `.env.example` 复制后修改，存放本机配置与密钥（不提交 git）：
-
-```bash
-cp .env.example .env
-```
+运行时设置保存在 `~/.sztu/runtime-settings.json`，可由桌面端或设置 RPC 更新。监听地址优先读取环境变量。
 
 ### 系统环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SZTU_CONFIG` | `~/.sztu/config.toml` | 覆盖配置文件路径 |
-| `SZTU_HOST` | `127.0.0.1` | TCP 监听地址 |
-| `SZTU_PORT` | `7437` | TCP 监听端口 |
-| `SZTU_LOG_LEVEL` | `INFO` | 日志级别（DEBUG / INFO / WARNING / ERROR） |
-| `SZTU_LOG_FILE` | `~/.sztu/logs/core.log` | 日志文件路径（留空则仅输出 stderr） |
-| `SZTU_LOG_FORMAT` | `text` | 日志格式（`text` 或 `json`） |
+| `SZTU_DATA_DIR` | `~/.sztu` | 运行时设置、会话和 trace 数据目录 |
+| `SZTU_TS_HOST` / `SZTU_HOST` | `127.0.0.1` | TCP 监听地址 |
+| `SZTU_TS_PORT` / `SZTU_PORT` | `7438` | TCP 监听端口 |
+| `SZTU_LLM_PROVIDER` | `openai` | Provider 类型 |
+| `SZTU_MODEL` | `gpt-4o-mini` | 默认模型 |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | 无 | Provider 凭据，不提交到 Git |
 
 ---
 
 ## 开发
 
 ```bash
-uv run ruff check src tests scripts   # lint
-uv run mypy src                       # 类型检查
-uv run pytest tests/ -v               # 全量测试
-uv run pytest tests/unit/ -v         # 仅单元测试（无需启动 daemon）
-
-make docs                             # 重新生成 docs/reference/wire-protocol.md
-make verify-s0                        # 完整验证（lint + 类型 + 测试 + 协议同源检查）
+npm run typecheck                     # 类型检查
+npm test                              # TypeScript 主链测试
+npm run build                         # 构建 runtime、CLI 和协议包
+npm run docs:protocol                 # 重新生成协议文档
+npm run docs:links                    # 检查 Markdown 本地链接
 ```
+
+Legacy Python 测试和脚本仅用于兼容 fixture 与专业 artifact；产品 daemon 和 CLI 不依赖 Python。
 
 ---
 
 ## 日志
 
 ```bash
-tail -f ~/.sztu/logs/core.log
+Get-Content ~/.sztu/traces/runtime-ts-events.jsonl -Wait
 ```
 
 ---
@@ -89,7 +67,7 @@ tail -f ~/.sztu/logs/core.log
 
 | 报错 | 原因 | 处理 |
 |------|------|------|
-| `core already running at 127.0.0.1:7437` | 已有守护进程在运行 | `kill $(pgrep -f sztu-code)` |
-| `core not running` | 未启动守护进程 | `uv run sztu-code` |
-| `Address already in use` | 端口被其他进程占用 | `SZTU_PORT=8000 uv run sztu-code` |
-| `Config error: SZTU_PORT must be an integer` | `.env` 或环境变量中端口值非整数 | 检查 `SZTU_PORT` 的值 |
+| `core already running at 127.0.0.1:7438` | 已有守护进程在运行 | `npm run cli -- core stop` |
+| `core not running` | 未启动守护进程 | `npm run daemon` |
+| `Address already in use` | 端口被其他进程占用 | `SZTU_PORT=8000 npm run daemon` |
+| `Invalid port` 或无法监听 | 环境变量中端口值无效 | 检查 `SZTU_TS_PORT` / `SZTU_PORT` 的值 |

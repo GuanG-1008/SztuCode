@@ -21,6 +21,7 @@ import { listCcswitchProviders } from "./ccswitch.js";
 import { McpManager } from "./mcp.js";
 import { SubagentManager } from "./subagent.js";
 import { MarketplaceManager } from "./marketplaces.js";
+import type { ModelProvider } from "./agent-loop.js";
 
 const PARSE_ERROR = -32700;
 const INVALID_REQUEST = -32600;
@@ -41,6 +42,7 @@ export class RuntimeServer {
   readonly workspaces = new WorkspaceManager();
   readonly git = new GitManager(this.workspaces);
   readonly models = new ModelProfileStore(this.settings);
+  private readonly provider: ModelProvider;
   private readonly server: net.Server;
   private readonly clients = new Set<net.Socket>();
   private readonly subscriptions = new Map<net.Socket, { id: string; topics: string[]; scope: string }>();
@@ -48,8 +50,9 @@ export class RuntimeServer {
   private readonly runSessions = new Map<string, string>();
   private startedAt = Date.now();
 
-  constructor(private readonly host = "127.0.0.1", private readonly port = 7438) {
-    this.runs = new RunManager(this.events, new ConfigurableProvider(this.settings), process.cwd(), this.questions, () => this.mcp.listTools(), async () => { const settings = await this.settings.get(); return { contextWindow: settings.context_window, maxOutputTokens: settings.max_output_tokens, streaming: true }; });
+  constructor(private readonly host = "127.0.0.1", private readonly port = 7438, provider?: ModelProvider) {
+    this.provider = provider ?? new ConfigurableProvider(this.settings);
+    this.runs = new RunManager(this.events, this.provider, process.cwd(), this.questions, () => this.mcp.listTools(), async () => { const settings = await this.settings.get(); return { contextWindow: settings.context_window, maxOutputTokens: settings.max_output_tokens, streaming: true }; });
     this.server = net.createServer((socket) => this.handleClient(socket));
     this.events.subscribe((event) => { this.broadcast({ kind: "event", event }); void this.persistRunEvent(event); });
   }
@@ -275,15 +278,14 @@ export class RuntimeServer {
         const params = request.params as { session_id: string; focus?: string };
         const settings = await this.settings.get(); const history = await this.sessions.history(params.session_id); const context = new ContextManager(history.map((message) => ({ role: message.role, content: message.content })), { maxTokens: settings.context_window, reservedOutputTokens: settings.max_output_tokens, maxToolResultChars: 8_000 });
         this.events.publish({ type: "context.compacting", session_id: params.session_id, run_id: "", ts: new Date().toISOString() });
-        const before = context.tokenEstimate(); const result = context.compact(8); const after = context.tokenEstimate();
+        const before = context.tokenEstimate(); const result = await context.compactWithProvider(this.provider, params.focus ?? "", 8); const after = context.tokenEstimate();
         if (result.removedMessages > 0) {
           const compactedAt = new Date().toISOString();
-          const persisted = context.messages.filter((message): message is typeof message & { role: "user" | "assistant"; content: string } => (message.role === "user" || message.role === "assistant") && typeof message.content === "string").map((message) => ({ role: message.role, content: message.content, ts: compactedAt }));
-          if (params.focus?.trim() && persisted.length) persisted[0] = { ...persisted[0], content: `${persisted[0].content}\nCompaction focus: ${params.focus.trim()}` };
+          const persisted = context.messages.filter((message): message is typeof message & { role: "user" | "assistant" } => message.role === "user" || message.role === "assistant").map((message) => ({ role: message.role, content: message.content, ts: compactedAt }));
           await this.sessions.replaceHistory(params.session_id, persisted);
         }
         this.events.publish({ type: "context.compacted", session_id: params.session_id, run_id: "", original_tokens: before, summary_tokens: after, ts: new Date().toISOString() });
-        return ok(request.id, { summary_tokens: after, saved_tokens: Math.max(0, before - after), removed_messages: result.removedMessages });
+        return ok(request.id, { summary_tokens: after, saved_tokens: Math.max(0, before - after), removed_messages: result.removedMessages, used_model: result.usedModel });
       }
       case "session.steer_message": { const params = request.params as unknown as import("@sztucode/protocol").SessionSteerMessageParams; if (!params.session_id || !params.content?.trim()) throw new Error("session_id and content are required"); const content = params.images?.length ? [{ type: "text", text: params.content }, ...params.images.map((image) => ({ type: "image", source: { media_type: image.media_type, data: image.data } }))] : params.content; await this.sessions.appendMessage(params.session_id, { role: "user", content }); const runId = this.runs.steer(params.session_id, { role: "user", content }); this.events.publish({ type: "session.message_steered", session_id: params.session_id, run_id: runId, content: params.content, ts: new Date().toISOString() }); return ok(request.id, { run_id: runId, status: "accepted" }); }
       default: return error(request.id, METHOD_NOT_FOUND, `Method not found: ${request.method}`);

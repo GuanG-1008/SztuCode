@@ -13,9 +13,12 @@
 快速检查：
 
 ```bash
-uv sync
-uv run ruff check src tests scripts
-uv run mypy src
-uv run pytest tests/unit -v
-uv run python scripts/gen_protocol_doc.py --check
+npm install
+npm run typecheck
+npm test
+npm run build
+npm run docs:protocol
+npm run docs:links
 ```
+
+只有修改 legacy Python 客户端、兼容 fixture 或专业 artifact 脚本时，才需要额外运行对应的 `uv`、Ruff、mypy 与 pytest 检查。

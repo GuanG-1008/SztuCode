@@ -281,8 +281,8 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await client.request("session.delete", { session_id: sessionId });
 }
 
-export async function compactSession(sessionId: string, focus = ""): Promise<{ summary_tokens: number; saved_tokens: number }> {
-  return await client.request("session.compact", { session_id: sessionId, focus }) as { summary_tokens: number; saved_tokens: number };
+export async function compactSession(sessionId: string, focus = ""): Promise<{ summary_tokens: number; saved_tokens: number; removed_messages?: number; used_model?: boolean }> {
+  return await client.request("session.compact", { session_id: sessionId, focus }) as { summary_tokens: number; saved_tokens: number; removed_messages?: number; used_model?: boolean };
 }
 
 export async function replayRun(runId: string): Promise<Record<string, unknown>[]> {
