@@ -7,7 +7,7 @@
 - Node.js 20+
 - Git
 - Anthropic 或 OpenAI-compatible API 凭据
-- 可选：Rust 与平台对应的 Tauri 构建依赖
+- 桌面安装包当前还要求系统可执行 `node`（Node.js 20+）；开发构建另需 Rust 与平台对应的 Tauri 依赖
 
 ## 安装 TypeScript 运行时
 
@@ -32,7 +32,7 @@ cp .env.example .env
 
 在 `.env` 中配置 Provider、模型 ID 和凭据。不要提交 `.env`。完整字段见 [配置参考](configuration.md)。
 
-## 启动 CLI
+## 启动终端客户端
 
 推荐入口：
 
@@ -40,7 +40,7 @@ cp .env.example .env
 npm run daemon
 ```
 
-另一个终端使用 Node CLI：
+另一个终端使用 Node 终端客户端：
 
 常用选项：
 
@@ -63,7 +63,7 @@ npm run cli -- chat
 
 ## 启动桌面端
 
-桌面工作台会启动 TypeScript daemon；也可手动分开调试：
+桌面工作台会从安装资源启动 TypeScript daemon；当前版本需要系统 PATH 中存在 Node.js 20+。也可手动分开调试：
 
 ```bash
 # 终端 1：仓库根目录

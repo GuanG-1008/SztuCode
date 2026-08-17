@@ -1,6 +1,6 @@
 # sztucode-tui
 
-The npm package for the SztuCode TypeScript terminal coding agent.
+The npm package for the SztuCode TypeScript terminal coding agent. Despite the legacy package name, the current interface is the Node terminal chat client, not the Python Textual application.
 
 ## Install
 

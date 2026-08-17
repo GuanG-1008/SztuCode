@@ -26,6 +26,6 @@ npm run --prefix packages/runtime-ts dev
 The runtime keeps the same JSON-RPC envelope as the legacy daemon. It supports
 OpenAI-compatible and Anthropic providers, context budgeting, session history,
 workspace tools, permissions, Git operations, skills, MCP clients, subagents,
-and typed workflow orchestration. Remaining compatibility work is tracked in
-the repository plan and centers on the legacy Textual TUI, evaluation harness,
-plugin marketplace mutations, and specialized Python-backed artifact scripts.
+and typed workflow orchestration. The Tauri desktop and Node terminal client
+are the supported product surfaces. Python remains only for legacy validation,
+SWE-bench fixtures, and specialized artifact scripts.

@@ -12,7 +12,7 @@ use std::{
 use base64::Engine;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State, WebviewWindow, Window};
+use tauri::{path::BaseDirectory, Emitter, Manager, State, WebviewWindow, Window};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{tcp::OwnedWriteHalf, TcpStream},
@@ -466,7 +466,7 @@ fn sandbox_pty_close(session_id: String, state: State<'_, PtySessions>) -> Resul
     Ok(())
 }
 
-fn daemon_candidates() -> Vec<(PathBuf, Vec<String>, Option<PathBuf>)> {
+fn daemon_candidates(app: &tauri::AppHandle) -> Vec<(PathBuf, Vec<String>, Option<PathBuf>)> {
     let mut candidates = Vec::new();
     if let Ok(executable) = std::env::var("SZTU_DAEMON_EXECUTABLE") {
         candidates.push((PathBuf::from(executable), Vec::new(), None));
@@ -489,11 +489,20 @@ fn daemon_candidates() -> Vec<(PathBuf, Vec<String>, Option<PathBuf>)> {
             ));
         }
     }
+    if let Ok(runtime) = app.path().resolve("resources/runtime/main.js", BaseDirectory::Resource) {
+        if runtime.exists() {
+            candidates.push((
+                PathBuf::from("node"),
+                vec![runtime.to_string_lossy().into_owned()],
+                runtime.parent().map(PathBuf::from),
+            ));
+        }
+    }
     candidates
 }
 
 #[tauri::command]
-async fn daemon_start(state: State<'_, DaemonProcess>) -> Result<DaemonStartResult, String> {
+async fn daemon_start(app: tauri::AppHandle, state: State<'_, DaemonProcess>) -> Result<DaemonStartResult, String> {
     if TcpStream::connect(("127.0.0.1", 7438)).await.is_ok() {
         return Ok(DaemonStartResult {
             status: "already_running".into(),
@@ -518,7 +527,7 @@ async fn daemon_start(state: State<'_, DaemonProcess>) -> Result<DaemonStartResu
     }
 
     let mut errors = Vec::new();
-    for (executable, args, current_dir) in daemon_candidates() {
+    for (executable, args, current_dir) in daemon_candidates(&app) {
         if executable.is_absolute() && !executable.exists() {
             continue;
         }

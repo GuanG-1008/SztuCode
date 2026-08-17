@@ -1,3 +1,4 @@
+import "./env.js";
 import { RuntimeServer } from "./server.js";
 
 const host = process.env.SZTU_TS_HOST ?? process.env.SZTU_HOST ?? "127.0.0.1";

@@ -29,7 +29,7 @@ packages/runtime-ts (daemon)
 packages/cli   desktop (Tauri)
 ```
 
-**`sztu-tui` is the primary frontend.** All user-facing work on task management, observability, and interaction should be designed for and validated in the TUI first. The `sztu` CLI exists only for quick scripted testing and debugging — it is not a product surface. When implementing features that touch the user interface, invest in the TUI layout, event rendering, and keyboard interactions. Do not shortcut TUI work by pointing to the CLI as an alternative.
+**The Tauri desktop workbench is the primary frontend.** User-facing task management, observability, and interaction work should be designed and validated in `desktop/`. The Node `chat` command is the supported terminal interface; the retained Textual client under `src/sztu_code` is legacy and must not define new product contracts.
 
 ## Legacy Python Reference
 

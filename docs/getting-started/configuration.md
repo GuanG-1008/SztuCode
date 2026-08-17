@@ -2,22 +2,18 @@
 
 [返回文档中心](../README.md)
 
-## 配置优先级
+## 配置来源
 
-SztuCode 按以下顺序加载配置，后者覆盖前者：
+TypeScript daemon 的配置来源按字段分层：
 
-```text
-内置默认值
-  → ~/.sztu/config.toml
-  → .sztu/config.toml
-  → ~/.sztu/client-settings.json
-  → .env
-  → 系统环境变量
-```
+1. 内置默认值先由启动进程环境初始化；
+2. 当前工作目录的 `.env` 只填充系统环境中尚未设置的变量；
+3. `~/.sztu/runtime-settings.json` 中由桌面端或 RPC 保存的 Provider、模型和权限设置覆盖初始化值；
+4. 已保存 API Key 为空时，Provider 才回退到对应的系统环境变量或 `.env` 值。
 
-设置 `SZTU_CONFIG` 后，仅使用指定 TOML 文件替代默认的全局和项目 TOML。桌面设置文件会保存 Provider、模型、权限模式、Base URL 和 API Key；它是本机明文文件，应限制访问权限。
+`.env` 不会覆盖已经存在的系统环境变量。它适用于从仓库或终端启动 daemon；桌面安装包通常通过模型管理页或系统环境配置。运行时设置可能包含 API Key，属于本机明文文件；不要提交或分享它。模型列表和当前模型 ID 保存在 `~/.sztu/model-profiles.json`。
 
-## Provider 配置
+## Provider
 
 Anthropic：
 
@@ -25,7 +21,7 @@ Anthropic：
 SZTU_LLM_PROVIDER=anthropic
 SZTU_LLM_DEFAULT_MODEL=<your-provider-model-id>
 ANTHROPIC_API_KEY=<your-api-key>
-# ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_BASE_URL=https://api.anthropic.com/v1
 ```
 
 OpenAI-compatible：
@@ -34,110 +30,43 @@ OpenAI-compatible：
 SZTU_LLM_PROVIDER=openai
 SZTU_LLM_DEFAULT_MODEL=<your-provider-model-id>
 OPENAI_API_KEY=<your-api-key>
-OPENAI_BASE_URL=https://api.example.com
+OPENAI_BASE_URL=https://api.example.com/v1
 ```
 
-opencode Zen 免费模型（**免 key**，OpenAI 兼容端点 `https://opencode.ai/zen/v1`）：
+免密 OpenAI-compatible 端点必须显式启用 keyless：
 
 ```dotenv
 SZTU_LLM_PROVIDER=openai
 SZTU_LLM_DEFAULT_MODEL=deepseek-v4-flash-free
 OPENAI_BASE_URL=https://opencode.ai/zen/v1
-# 免 key：不要设置 OPENAI_API_KEY
+SZTU_LLM_KEYLESS=true
 ```
 
-可选免费模型（实测可用）：`deepseek-v4-flash-free`、`ling-3.0-flash-free`、`nemotron-3-ultra-free`、`north-mini-code-free`、`longcat-2.0-free`、`mimo-v2.5-free`、`laguna-s-2.1-free`。端点直接可达（无需代理），支持流式与工具调用；注意有速率限制，适合个人日常使用。
-
-SztuCode 不内置厂商模型 ID。模型名称、上下文窗口和端点必须与实际服务商一致。
+桌面模型管理页也提供 opencode Zen 内置 profile。选择内置项会自动设置 keyless，无需手工编辑 `.env`。
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `SZTU_CONFIG` | 未设置 | 显式 TOML 路径 |
-| `SZTU_HOST` | `127.0.0.1` | daemon 监听地址 |
-| `SZTU_PORT` | `7438` | TypeScript daemon 监听端口 |
-| `SZTU_LOG_LEVEL` | `INFO` | 日志级别 |
-| `SZTU_LOG_FILE` | `~/.sztu/logs/core.log` | daemon 日志路径；空字符串表示不写文件 |
-| `SZTU_LOG_FORMAT` | `text` | `text` 或 `json` |
-| `SZTU_LLM_PROVIDER` | `anthropic` | `anthropic` 或 `openai` |
-| `SZTU_LLM_DEFAULT_MODEL` | 空 | 服务商模型 ID |
-| `SZTU_LLM_CONTEXT_WINDOW` | Provider 默认 | 正整数上下文窗口 |
-| `SZTU_LLM_CACHE_CONTROL` | `true` | OpenAI 兼容端点是否发送 cache_control 断点（system + 最后一个 tool）；端点拒收未知字段时设 `false` |
-| `SZTU_MAX_STEPS` | `20` | 单次运行最大 Agent 步数 |
-| `SZTU_TOOL_MAX_CONCURRENCY` | `4` | 同轮全部明确只读时的最大工具并发数；`1` 表示串行 |
+| `SZTU_HOST` / `SZTU_TS_HOST` | `127.0.0.1` | daemon 监听地址 |
+| `SZTU_PORT` / `SZTU_TS_PORT` | `7438` | daemon 与客户端端口 |
+| `SZTU_DATA_DIR` | `~/.sztu` | 会话、设置、工作区和 trace 根目录 |
+| `SZTU_LLM_PROVIDER` | `openai` | `openai` 或 `anthropic` |
+| `SZTU_LLM_DEFAULT_MODEL` / `SZTU_MODEL` | `gpt-4o-mini` | Provider 模型 ID |
+| `SZTU_LLM_CONTEXT_WINDOW` | `128000` | 上下文窗口估算值 |
+| `SZTU_LLM_KEYLESS` | `false` | 允许 OpenAI-compatible 请求不发送 Authorization |
 | `SZTU_PERMISSION_MODE` | `normal` | `normal`、`plan`、`accept_edits`、`auto` |
-| `SZTU_PERMISSION_TIMEOUT_S` | `60` | 审批超时秒数；`0` 表示不超时 |
-| `SZTU_COMPACT_THRESHOLD` | `0.70` | 自动压缩仅在上下文占用率达到阈值时触发；范围 0–1，`0` 关闭 |
-| `SZTU_COMPACT_TOOL_LIMIT` | `8000` | 工具结果截断阈值 |
-| `SZTU_COMPACT_TOOL_KEEP` | `4000` | 截断后保留字符数 |
-| `SZTU_TRACE_ENABLED` | `true` | 是否记录 trace |
-| `SZTU_TRACE_FILE` | `~/.sztu/traces/daemon.jsonl` | trace 文件路径 |
-| `SZTU_TRACE_INCLUDE_LLM_PAYLOAD` | `true` | 是否记录完整 LLM payload |
-| `SZTU_BUDGET_MAX_TOKENS` | `0` | 已废弃；主 Agent 不再按跨轮累计 Token 终止，保留仅为兼容旧配置 |
-| `SZTU_BUDGET_MAX_WALL_CLOCK_S` | `0` | 父运行与工作流墙钟秒数上限；`0` 不限制 |
-| `SZTU_WORKFLOW_MAX_CONCURRENCY` | `4` | 工作流最大并行角色任务数 |
-| `SZTU_WORKFLOW_MAX_DEPTH` | `2` | 工作流与 Subagent 最大嵌套深度 |
-| `SZTU_WORKFLOW_MAX_RETRIES` | `1` | 单个角色任务最大重试次数 |
-
-自动压缩不会因为 turn 数、累计 Token 或步数单独触发。Bash 工具只有一层子进程超时：普通命令默认 30 秒，未显式指定时 Git 命令默认 20 秒；超时结果不会由通用工具层自动重试。通用瞬时错误最多重试一次。简单任务同一工具调用连续失败两次后会要求 Agent 更换方案；如果仍无法推进，再由现有硬止损结束运行。
-
-## TOML 示例
-
-```toml
-[core]
-host = "127.0.0.1"
-port = 7438
-
-[logging]
-level = "INFO"
-file = "~/.sztu/logs/core.log"
-format = "text"
-
-[agent]
-max_steps = 0          # 0 = 不限步数（预算驱动）；到达上限时标 interrupted 而非 failed，可续跑
-wrap_up_on_max_steps = true
-grace_step_on_max_steps = true
-stuck_max_failures = 2
-stuck_max_total = 0
-tool_max_concurrency = 4  # 仅当整批工具均明确为 read_only 且无需审批时生效
-
-[budget]
-# max_tokens 已废弃；主 Agent 不再使用累计 Token 预算
-max_tokens = 0
-max_wall_clock_s = 0
-
-[workflow]
-max_concurrency = 4
-max_depth = 2
-max_retries = 1
-
-[llm]
-provider = "anthropic"
-default_model = "<your-provider-model-id>"
-context_window = 128000
-cache_control = true   # OpenAI 兼容端点发送 cache_control 断点（system + 最后一个 tool）；端点拒收未知字段时改 false
-
-[trace]
-enabled = true
-file = "~/.sztu/traces/daemon.jsonl"
-include_llm_payload = false
-
-[permission]
-mode = "normal"
-timeout_s = 60
-
-[compaction]
-auto_threshold = 0.70
-tool_result_limit = 8000
-tool_result_keep = 4000
-```
+| `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 未设置 | OpenAI-compatible 凭据 |
+| `OPENAI_BASE_URL` / `DEEPSEEK_BASE_URL` | Provider 默认 | OpenAI-compatible 端点 |
+| `ANTHROPIC_API_KEY` | 未设置 | Anthropic 凭据 |
+| `ANTHROPIC_BASE_URL` | Provider 默认 | Anthropic 端点 |
+| `SZTU_MCP_CONFIG` | 未设置 | MCP JSON 配置文件 |
+| `SZTU_CCSWITCH_DB` | 自动发现 | cc-switch SQLite 数据库 |
+| `SZTU_BUILTIN_SKILLS` | 包内 Skills | 覆盖内置 Skills 根目录，主要用于开发测试 |
 
 ## MCP Server
 
-TypeScript runtime 通过 `SZTU_MCP_CONFIG` 指向一个 JSON 文件：
-
-stdio 示例：
+`SZTU_MCP_CONFIG` 指向 JSON 文件。stdio 示例：
 
 ```json
 {
@@ -161,31 +90,27 @@ TCP 示例：
 }
 ```
 
-不要运行来源不明的 MCP Server。stdio 服务继承 daemon 启动环境中显式传入的配置，并可能获得本机访问能力。
+不要运行来源不明的 MCP Server。stdio 服务会继承 daemon 环境，并可能获得本机访问能力。
 
 ## 权限模式
 
 | 模式 | 用途 |
 | --- | --- |
-| `normal` | 根据风险和已保存策略逐次审批 |
-| `plan` | 分析和规划，不执行产生修改的操作 |
-| `accept_edits` | 自动允许分配范围内的受控编辑；角色越界写入仍升级审批 |
-| `auto` | 自动批准包括角色范围升级在内的工具调用，仅用于可信且可恢复环境 |
-
-持久化策略位于 `~/.sztu/policy.toml`。修改或共享该文件前应检查是否扩大了工具权限。
+| `normal` | 根据风险请求审批 |
+| `plan` | 只读分析和规划 |
+| `accept_edits` | 自动允许受控工作区编辑，高风险命令仍审批 |
+| `auto` | 自动批准工具调用，仅用于可信且可恢复环境 |
 
 ## 本地数据
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/.sztu/config.toml` | 全局配置 |
-| `.sztu/config.toml` | 项目配置 |
-| `~/.sztu/client-settings.json` | 桌面端 Provider、凭据和权限设置 |
-| `~/.sztu/trusted-projects.json` | 已信任目录 |
-| `~/.sztu/policy.toml` | 持久化权限策略 |
-| `~/.sztu/sessions/` | 会话、消息、笔记和运行记录 |
-| `~/.sztu/workspaces.json` | 最近工作区索引 |
-| `~/.sztu/logs/` | daemon 与 TUI 日志 |
-| `~/.sztu/traces/` | 系统 trace |
+| `~/.sztu/runtime-settings.json` | Provider、模型、权限和凭据 |
+| `~/.sztu/model-profiles.json` | 模型 profile 与当前 profile ID |
+| `~/.sztu/sessions/` | 会话、消息与运行记录 |
+| `~/.sztu/workspaces.json` | 最近和归档工作区 |
+| `~/.sztu/plugin-settings.json` | 插件启用状态 |
+| `~/.sztu/plugin-marketplaces.json` | 插件市场配置 |
+| `~/.sztu/traces/runtime-ts-events.jsonl` | runtime 事件 trace |
 
-这些文件可能包含敏感内容，备份、共享或删除前请先确认影响。
+这些文件可能包含凭据、源码片段、提示词和模型响应。备份或共享前先脱敏。

@@ -33,8 +33,8 @@ npm run cli -- ping
 - daemon 与客户端的 `SZTU_HOST` / `SZTU_PORT` 一致；
 - `SZTU_LLM_PROVIDER`、模型 ID、Base URL 和 API Key 属于同一服务商；
 - `.env` 未被另一个系统环境变量覆盖；
-- 项目 `.sztu/config.toml` 和全局配置没有冲突；
-- 桌面端是否写入了 `~/.sztu/client-settings.json`。
+- `~/.sztu/runtime-settings.json` 是否包含桌面端最近保存的设置；
+- 系统环境变量是否覆盖了 `.env` 中的同名配置。
 
 临时改用其他端口：
 
@@ -52,9 +52,7 @@ SZTU_PORT=8000 npm run daemon
 默认位置：
 
 ```text
-~/.sztu/logs/core.log
-~/.sztu/logs/tui.log
-~/.sztu/traces/daemon.jsonl
+~/.sztu/traces/runtime-ts-events.jsonl
 ```
 
 实时查看系统 Trace：
@@ -70,9 +68,8 @@ Trace 可能包含提示词、模型响应和工具参数。共享前按 [安全
 执行升级、迁移或大规模历史操作前，建议备份：
 
 ```text
-~/.sztu/config.toml
-~/.sztu/client-settings.json
-~/.sztu/policy.toml
+~/.sztu/runtime-settings.json
+~/.sztu/model-profiles.json
 ~/.sztu/sessions/
 ~/.sztu/workspaces.json
 ```
@@ -97,7 +94,7 @@ npm run cli -- ping
 npm run daemon
 ```
 
-检查 daemon 终端输出和 `~/.sztu/logs/core.log`。确认防火墙没有阻止 loopback TCP，并核对客户端端口。
+检查 daemon 终端输出和 `~/.sztu/traces/runtime-ts-events.jsonl`。确认防火墙没有阻止 loopback TCP，并核对客户端端口。
 
 ### Provider 未就绪
 
@@ -105,7 +102,7 @@ npm run daemon
 
 ### 权限请求没有继续执行
 
-确认客户端仍连接、审批未超时，且响应针对当前 `tool_use_id`。检查是否有多个客户端同时展示同一请求，以及 `~/.sztu/policy.toml` 是否包含意外规则。
+确认客户端仍连接，且响应针对当前 `tool_use_id`。检查是否有多个客户端同时展示同一请求，并核对当前权限模式。
 
 ### 桌面端无法连接
 

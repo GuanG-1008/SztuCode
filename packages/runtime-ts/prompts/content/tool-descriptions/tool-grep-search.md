@@ -1,4 +1,4 @@
-Search text file contents in the current workspace with a Python regular expression. Results use `path:line: text` with workspace-relative paths and 1-based line numbers.
+Search text file contents in the current workspace with a regular expression. Results use `path:line: text` with workspace-relative paths and 1-based line numbers.
 
 Usage:
 - `pattern` is required. Matching is case-insensitive by default; set `case_sensitive=true` when needed.

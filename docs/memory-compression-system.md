@@ -1,5 +1,7 @@
 # SztuCode 记忆与压缩系统
 
+> Legacy Python 设计参考：本文中的 `CompactionConfig`、Python 路径和环境变量描述不定义当前 TypeScript runtime。当前压缩实现位于 `packages/runtime-ts/src/context.ts`，配置以 [配置参考](getting-started/configuration.md) 为准。
+
 ## 概述
 
 SztuCode 的记忆压缩体系采用**三层防御结构**，从持久化记忆到上下文窗口治理逐层递进。当前分支 `szzk_compression` 聚焦于第三层（上下文压缩）的完善。

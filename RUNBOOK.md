@@ -26,7 +26,7 @@ npm run cli -- core stop
 
 ## 配置
 
-运行时设置保存在 `~/.sztu/runtime-settings.json`，可由桌面端或设置 RPC 更新。监听地址优先读取环境变量。
+运行时设置保存在 `~/.sztu/runtime-settings.json`，可由桌面端或设置 RPC 更新。监听地址读取系统环境变量或当前目录 `.env`；已持久化的 Provider、模型和权限设置覆盖环境初始化值。
 
 ### 系统环境变量
 
@@ -36,7 +36,7 @@ npm run cli -- core stop
 | `SZTU_TS_HOST` / `SZTU_HOST` | `127.0.0.1` | TCP 监听地址 |
 | `SZTU_TS_PORT` / `SZTU_PORT` | `7438` | TCP 监听端口 |
 | `SZTU_LLM_PROVIDER` | `openai` | Provider 类型 |
-| `SZTU_MODEL` | `gpt-4o-mini` | 默认模型 |
+| `SZTU_LLM_DEFAULT_MODEL` / `SZTU_MODEL` | `gpt-4o-mini` | 默认模型 |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | 无 | Provider 凭据，不提交到 Git |
 
 ---

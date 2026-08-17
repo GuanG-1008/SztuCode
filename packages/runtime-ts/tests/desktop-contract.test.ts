@@ -14,3 +14,12 @@ test("every desktop RPC request has a TypeScript runtime handler", async () => {
   assert.deepEqual([...requested].filter((method) => !handled.has(method)), []);
   assert.ok(requested.size >= 50, "desktop RPC extraction unexpectedly found too few methods");
 });
+
+test("Tauri production bundles and starts the TypeScript runtime resource", async () => {
+  const config = JSON.parse(await readFile(path.join(repositoryRoot, "desktop/src-tauri/tauri.conf.json"), "utf8")) as { bundle?: { resources?: string[] } };
+  const rust = await readFile(path.join(repositoryRoot, "desktop/src-tauri/src/main.rs"), "utf8");
+  const prepare = await readFile(path.join(repositoryRoot, "desktop/scripts/prepare-runtime.js"), "utf8");
+  assert.ok(config.bundle?.resources?.some((resource) => resource.startsWith("resources/runtime/")));
+  assert.match(rust, /BaseDirectory::Resource/); assert.match(rust, /resources\/runtime\/main\.js/);
+  assert.match(prepare, /runtime-ts/); assert.match(prepare, /resources["']?,\s*["']runtime/); assert.match(prepare, /\["skills",\s*"prompts",\s*"agents"\]/);
+});

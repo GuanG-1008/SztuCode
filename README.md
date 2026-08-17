@@ -15,7 +15,7 @@
 
 ![SztuCode 桌面工作台任务界面](docs/images/image2.png)
 
-### TUI 终端界面
+### 历史 Textual 界面
 
 ![SztuCode TUI 欢迎界面](docs/images/image3.png)
 
@@ -23,7 +23,7 @@
 
 ![SztuCode TUI 任务结果](docs/images/image5.png)
 
-SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 CLI 提交任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。
+SztuCode 面向真实代码仓库工作。用户通过桌面工作台或 Node 终端客户端提交任务，后台 daemon 负责运行 Agent Loop、调用工具、管理权限和保存会话，并通过 JSON-RPC 事件流持续反馈执行状态。上方 Textual 截图仅保留为项目演进记录。
 
 它既是一个持续完善的本地 AI 编程工具，也是一个用于学习 Agent 工程、软件协作与可信 AI Coding 的开放项目。
 
@@ -62,7 +62,7 @@ SztuCode 面向真实代码仓库工作。用户通过 TUI、桌面工作台或 
 | 能力          | 当前实现                                                        |
 | ------------- | --------------------------------------------------------------- |
 | Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制             |
-| 多种客户端    | Textual TUI、Tauri 2 + Vue 3 桌面工作台，以及调试用 CLI         |
+| 多种客户端    | Tauri 2 + Vue 3 桌面工作台、Node 终端 chat 与脚本化 CLI         |
 | 模型接入      | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商         |
 | 工作区工具    | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行       |
 | 权限系统      | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式   |
@@ -139,9 +139,11 @@ ANTHROPIC_API_KEY=<your-api-key>
 # OPENAI_BASE_URL=https://api.example.com
 ```
 
+使用免密 OpenAI-compatible 端点时还需设置 `SZTU_LLM_KEYLESS=true`，或直接在桌面模型管理页选择内置免费 profile。
+
 不要提交 `.env`。完整字段和优先级见[配置参考](docs/getting-started/configuration.md)。
 
-### 启动 CLI
+### 启动终端客户端
 
 推荐直接在目标项目目录启动：
 
@@ -157,7 +159,7 @@ npm run cli -- run --goal "分析当前项目并修复测试失败"
 npm run cli -- chat
 ```
 
-发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztucode`。该入口包含 TypeScript daemon 和 CLI，不创建 Python 虚拟环境。
+发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztucode [项目路径]`。该入口包含 TypeScript daemon 和终端客户端，不创建 Python 虚拟环境。
 
 更完整的安装说明见[安装与启动](docs/getting-started/installation.md)。
 

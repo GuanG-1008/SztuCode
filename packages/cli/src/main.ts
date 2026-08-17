@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./env.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { readFile, unlink, writeFile } from "node:fs/promises";

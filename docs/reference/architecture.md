@@ -101,10 +101,9 @@ Permission Manager 结合当前模式、持久化策略、工具权限和用户�
 | --- | --- | --- |
 | `~/.sztu/sessions/` | Session Store | 会话、消息、notes、runs 和事件 |
 | `~/.sztu/workspaces.json` | Workspace Manager | 最近和归档工作区 |
-| `~/.sztu/policy.toml` | Permission Manager | 持久化允许/拒绝策略 |
-| `~/.sztu/trusted-projects.json` | Trust | 已信任项目 |
-| `~/.sztu/traces/daemon.jsonl` | Trace Writer | IPC、Event 和 LLM trace |
-| `~/.sztu/client-settings.json` | 客户端设置 | Provider、模型、端点、凭据和权限模式 |
+| `~/.sztu/runtime-settings.json` | Settings Store | Provider、模型、端点、凭据和权限模式 |
+| `~/.sztu/model-profiles.json` | Model Profile Store | 模型列表与当前 profile ID |
+| `~/.sztu/traces/runtime-ts-events.jsonl` | EventBus | runtime 事件 trace |
 
 会话与 trace 可能包含源码、提示词和模型响应，应按敏感数据处理。
 

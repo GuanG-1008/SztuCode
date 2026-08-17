@@ -97,9 +97,7 @@ cargo check
 开发时常用位置：
 
 ```text
-~/.sztu/logs/core.log
-~/.sztu/logs/tui.log
-~/.sztu/traces/daemon.jsonl
+~/.sztu/traces/runtime-ts-events.jsonl
 ~/.sztu/sessions/
 ```
 
