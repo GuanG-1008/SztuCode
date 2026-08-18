@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   appimage:
-    name: Build AppImage
+    name: Build Linux packages
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
@@ -68,22 +68,31 @@ jobs:
           npm ci
           npm ci --prefix desktop
 
-      - name: Build AppImage
+      - name: Build AppImage and deb
         working-directory: desktop
         env:
           NO_STRIP: "true"
-        run: npm run tauri build -- --bundles appimage
+        run: npm run tauri build -- --bundles appimage,deb
 
       - name: Verify bundled daemon
         run: |
           test -x desktop/src-tauri/resources/runtime/node
           test -f desktop/src-tauri/resources/runtime/main.js
           find desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f | grep -q .
+          find desktop/src-tauri/target/release/bundle/deb -maxdepth 1 -name '*.deb' -type f | grep -q .
 
       - name: Upload AppImage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: SztuCode-0.1.1-linux-x86_64-AppImage
           path: desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload deb
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SztuCode-0.1.1-linux-x86_64-deb
+          path: desktop/src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 14
