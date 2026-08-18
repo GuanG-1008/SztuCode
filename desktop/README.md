@@ -80,6 +80,8 @@ npm run tauri build
 - Windows：`desktop/src-tauri/target/release/bundle/msi` 或 `nsis`
 - Linux：`desktop/src-tauri/target/release/bundle` 下的 deb/AppImage 等
 
+Linux AppImage 也可通过 GitHub Actions 的 `Linux Desktop` 工作流构建；成功后从该次运行的 Artifacts 下载。工作流在 Ubuntu 上打包 Linux Node 运行时，不能使用 Windows 安装包中的 `node.exe` 替代。
+
 当前不要求代码签名或公证；未签名的 macOS `.app` 可能需要在「隐私与安全性」中允许打开。
 
 桌面端唯一实现是此目录的 Tauri + Vue 3 客户端；新功能应通过共享 TypeScript IPC 协议接入 daemon。

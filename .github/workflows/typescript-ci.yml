@@ -34,6 +34,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install desktop dependencies
+        run: npm ci --prefix desktop
+
       - name: Typecheck
         run: npm run typecheck
 
