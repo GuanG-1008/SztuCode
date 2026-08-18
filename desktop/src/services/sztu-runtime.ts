@@ -129,6 +129,7 @@ export type ModelProfileInput = ModelRequestSettings & { id?: string; name: stri
 
 const client = new IpcClient();
 let subscribed = false;
+let runtimeConnectionError = "";
 const PLUGIN_PROTOCOL_ERROR = "本地服务版本过旧，不支持插件市场。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
 const GIT_PROTOCOL_ERROR = "本地服务版本过旧，不支持当前 Git 功能。请完全退出旧的 SztuCode daemon 后重新打开客户端。";
 client.onDisconnect(() => { subscribed = false; });
@@ -138,13 +139,11 @@ const EVENT_TOPICS = [
 ];
 
 async function waitForDaemon(): Promise<void> {
-  try {
-    await invoke("daemon_start");
-  } catch {
-    // Browser-based UI tests have no Tauri host. The connection attempt below
-    // remains the source of truth for runtime availability.
-  }
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  await invoke("daemon_start");
 }
+
+export function getRuntimeConnectionError(): string { return runtimeConnectionError; }
 
 export async function getNativeSettings(): Promise<NativeSettings> {
   return await invoke<NativeSettings>("native_settings_get");
@@ -176,7 +175,12 @@ export async function sandboxPtyClose(sessionId: string): Promise<void> {
 }
 
 export async function connectRuntime(): Promise<boolean> {
-  await waitForDaemon();
+  try {
+    await waitForDaemon();
+  } catch (error) {
+    runtimeConnectionError = error instanceof Error ? error.message : String(error);
+    return false;
+  }
   const attempts = "__TAURI_INTERNALS__" in window ? 12 : 1;
   for (const port of [7438]) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -186,8 +190,10 @@ export async function connectRuntime(): Promise<boolean> {
           await client.request("event.subscribe", { topics: EVENT_TOPICS, scope: "global" });
           subscribed = true;
         }
+        runtimeConnectionError = "";
         return true;
-      } catch {
+      } catch (error) {
+        runtimeConnectionError = error instanceof Error ? error.message : String(error);
         if (attempt + 1 < attempts) await new Promise((resolve) => window.setTimeout(resolve, 250));
       }
     }

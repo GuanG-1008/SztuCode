@@ -1,6 +1,6 @@
 # SztuCode
 
-> 一个本地优先、事件驱动、可审计的 AI Coding Agent 运行时。
+> 一个本地优先、事件驱动、可审计的 AI Coding Agent 运行时，同时提供 TypeScript 与 Python 双实现。
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
@@ -10,13 +10,13 @@
 
 ## 项目界面
 
-### 桌面工作台
+### 桌面工作台（TypeScript daemon）
 
 ![SztuCode 桌面工作台首页](docs/images/image1.png)
 
 ![SztuCode 桌面工作台任务界面](docs/images/image2.png)
 
-### 历史 Textual 界面
+### Textual TUI（Python daemon）
 
 ![SztuCode TUI 欢迎界面](docs/images/image3.png)
 
@@ -58,21 +58,55 @@ SztuCode 面向真实代码仓库工作。桌面工作台使用 TypeScript daemo
 - 研究项目级代码理解、权限安全、RAG 与执行轨迹评测；
 - 通过 Issue、Pull Request、Review 和 Release 参与真实开源协作。
 
+## 双运行时（TypeScript 与 Python）
+
+SztuCode 不是两套独立产品，而是**同一套 daemon/client 架构的双语言实现**：功能与契约镜像对齐，生态与入口彼此独立，可并行安装、并行运行。
+
+```text
+┌─ TypeScript 主线 ───────────────────────────────┐   ┌─ Python 镜像 ──────────────────────────────┐
+│ desktop/    Tauri 2 + Vue 3 桌面工作台           │   │ src/sztu_code/tui   Textual 终端 TUI        │
+│ packages/cli        Node CLI（sztu-ts）          │   │ src/sztu_code/cli   Python CLI（sztu-py）    │
+│ packages/runtime-ts Node daemon ── 127.0.0.1:7438 │   │ src/sztu_code/core  Python daemon ── 7437  │
+│ packages/protocol   共享契约（类型包）             │   │ src/sztu_code/core/bus pydantic 契约模型    │
+└──────────────────────────────────────────────────┘   └────────────────────────────────────────────┘
+```
+
+| 维度 | TypeScript 版 | Python 版 |
+| --- | --- | --- |
+| 定位 | 当前产品主线，桌面端只连接它 | 并存镜像实现，生态自选 |
+| 代码位置 | `packages/`（protocol / runtime-ts / cli / evaluation） | `src/sztu_code/`（core / cli / tui / evaluation） |
+| daemon 入口 | `packages/runtime-ts/src/main.ts` | `src/sztu_code/core/app.py`（`python -m sztu_code.core`） |
+| 默认端口 | `127.0.0.1:7438` | `127.0.0.1:7437` |
+| CLI 命令 | `sztu-ts`（发布包名 `sztucode` / `sztucode-tui`） | `sztu-py` |
+| 终端界面 | Node 终端 chat（无 TUI） | Textual TUI：`sztu-tui [--replay RUN_ID]` |
+| 图形界面 | Tauri 2 + Vue 3 桌面工作台 | 无（连接 TS daemon 的桌面端） |
+| 依赖管理 | npm workspaces | `uv` + hatchling（PEP 621） |
+| 契约方式 | TS 类型包 + 生成 `wire-protocol.md` | pydantic 模型（`core/bus/*`） |
+| 传输 | TCP / NDJSON / JSON-RPC 2.0（同一套 envelope） | 同左 |
+| 持久化 | `~/.sztu/`（同一目录布局） | 同左 |
+| 质量工具 | tsc、tsx --test、e2e 脚本 | ruff、mypy(strict)、pytest |
+| 版本 | 0.2.0 | 0.0.1 |
+
+两套 runtime 使用不同的命令名和默认端口，因此可以并行安装和运行；客户端通过同一套 JSON-RPC 协议连接，Agent 执行状态以所选 daemon 为准。
+
 ## 核心能力
 
-| 能力          | 当前实现                                                        |
-| ------------- | --------------------------------------------------------------- |
-| Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制             |
-| 多种客户端    | Tauri 2 + Vue 3 桌面工作台、Node 终端 chat 与脚本化 CLI         |
-| 模型接入      | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商         |
-| 工作区工具    | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行       |
-| 权限系统      | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式   |
-| 会话与记忆    | 持久化会话、分层上下文、Notes、历史恢复和上下文压缩             |
-| 扩展机制      | Skills、Subagents 与 MCP 外部工具统一接入                       |
-| 可观测性      | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放               |
-| 变更审阅      | 桌面端展示文件变化和 Diff，支持接受、暂存与回退                 |
-| 项目指令      | 自动发现并注入工作区及父目录的 `CLAUDE.md`、`SZTUCODE.md` 等规则 |
-| Agent 评测    | `sztu-eval` 统一任务协议、重复运行、指标报告和 SWE-bench 适配 |
+以下能力两版基本镜像实现（标注差异处）：
+
+| 能力 | 当前实现 |
+| --- | --- |
+| Agent Runtime | 基于 ReAct 的多步推理、工具调用、结果回填和终止控制；Python 版支持工具并发执行（默认 4），TS 版为串行 |
+| 多种客户端 | Tauri 2 + Vue 3 桌面工作台、Node 终端 chat（TS）；Textual TUI 与脚本化 CLI（Python） |
+| 模型接入 | Anthropic 与 OpenAI-compatible 双协议，可连接兼容服务商；内置免费模型 profile（如 deepseek-v4-flash、mimo-v2.5） |
+| 工作区工具 | 文件读取、目录浏览、搜索、写入、精确编辑和受控 Shell 执行 |
+| 权限系统 | `normal`、`plan`、`accept_edits`、`auto` 四种运行模式，持久化策略与 denial 追踪 |
+| 会话与记忆 | 持久化会话、分层上下文、Notes、历史恢复和上下文压缩（TS 用 js-tiktoken，Python 用 tiktoken，均带 CJK 感知回退） |
+| 扩展机制 | Skills、Subagents 与 MCP 外部工具统一接入 |
+| 可观测性 | IPC、EventBus、LLM 三层 Trace，支持事件跟踪和回放（Python `trace` 额外支持 `--layer` / `--direction` 过滤） |
+| 变更审阅 | 桌面端展示文件变化和 Diff，支持接受、暂存与回退 |
+| 项目指令 | 自动发现并注入工作区及父目录的 `CLAUDE.md`、`SZTUCODE.md` 等规则 |
+| 多 Agent 工作流 | Planner → Coder / Tester / Reviewer 结构化 DAG 编排，范围升级留 Trace 证据 |
+| Agent 评测 | TS：`packages/evaluation`；Python：`src/sztu_code/evaluation`，统一任务协议与 SWE-bench 适配 |
 
 项目级语义索引、统一 LSP、领域 RAG、安全扫描闭环和完整多智能体工作流仍在路线图中，不将设计目标描述为已完成能力。
 
@@ -82,7 +116,7 @@ SztuCode 使用 daemon 与客户端分离的架构。长任务不依赖某个界
 
 ```text
 Tauri Desktop ─┐
-Node CLI ──────┼─ TCP / NDJSON / JSON-RPC 2.0 ─ TypeScript daemon
+Node CLI ──────┼─ TCP / NDJSON / JSON-RPC 2.0 ─ TypeScript daemon (7438)
 Eval Runner ───┘                                  │
                                                   ├─ Workspace / Session
                                                   ├─ Agent Runner / Loop
@@ -91,6 +125,9 @@ Eval Runner ───┘                                  │
                                                   ├─ Skills / Subagents / MCP
                                                   ├─ Memory / Compaction
                                                   └─ EventBus / Trace
+
+sztu-py CLI ──── TCP / NDJSON / JSON-RPC 2.0 ─ Python daemon (7437)
+sztu-tui TUI ──┘                                   └─ 同上，功能镜像
 ```
 
 TypeScript runtime 默认监听 `127.0.0.1:7438`，Python runtime 默认监听 `127.0.0.1:7437`，可以同时运行。IPC 命令和事件详情见[架构说明](docs/reference/architecture.md)。
@@ -100,8 +137,8 @@ TypeScript runtime 默认监听 `127.0.0.1:7438`，Python runtime 默认监听 `
 ### 环境要求
 
 - Git；
-- Node.js 20+；
-- Python 3.12 与 `uv`（使用 Python runtime 时）；
+- Node.js 20+（TypeScript 链）；
+- Python 3.12–3.13 与 `uv`（Python 链）；
 - Anthropic 或 OpenAI-compatible API 凭据；
 - 可选：Rust 和 Tauri 平台依赖，用于桌面端开发。专业 artifact Skill 可能按需调用 Python，但不属于项目运行时依赖。
 
@@ -145,29 +182,73 @@ ANTHROPIC_API_KEY=<your-api-key>
 
 不要提交 `.env`。完整字段和优先级见[配置参考](docs/getting-started/configuration.md)。
 
-### 启动终端客户端
+### 启动 TypeScript 链
 
 推荐直接在目标项目目录启动：
 
 ```bash
-npm run daemon
+npm run daemon:ts          # 等价 npm run daemon，启动 TS daemon（7438）
 ```
 
 另一个终端中：
 
 ```bash
-npm run cli -- ping
-npm run cli -- run --goal "分析当前项目并修复测试失败"
-npm run cli -- chat
+npm run cli:ts -- ping                       # 连通性检查
+npm run cli:ts -- run --goal "分析当前项目并修复测试失败"
+npm run cli:ts -- chat                       # 交互式会话
+npm run cli:ts -- trace                      # 查看运行时事件 trace
+npm run cli:ts -- core status                # daemon 状态
 ```
 
-TypeScript 发布包可使用 `npm install --global sztucode-tui`，然后运行 `sztu-ts [项目路径]`（`sztucode` 仍是兼容别名）。Python 包安装后使用 `sztu-py`。两套入口互不覆盖。
+发布安装后使用 `sztu-ts`（`sztucode` 仍是兼容别名）：
+
+```bash
+npm install --global sztucode-tui
+sztu-ts [项目路径]
+```
+
+### 启动 Python 链
+
+```bash
+npm run daemon:py          # uv run --offline python -m sztu_code.core（7437）
+```
+
+另一个终端中：
+
+```bash
+npm run cli:py -- ping
+npm run cli:py -- run --goal "分析当前项目并修复测试失败"
+npm run cli:py -- chat
+npm run cli:py -- trace --layer llm
+```
+
+发布安装后使用 `sztu-py`（`uv` 环境内 `pip install -e .` 或打包安装）：
+
+```bash
+sztu-py core start         # 后台启动 Python daemon
+sztu-py chat
+sztu-py run --goal "..."
+sztu-py trace --layer llm
+python -m sztu_code.tui --replay <run_id>  # Textual TUI，可回放历史 run
+```
+
+### CLI 命令对照
+
+| 命令 | TypeScript（sztu-ts） | Python（sztu-py） |
+| --- | --- | --- |
+| 连通性检查 | `ping` | `ping` |
+| 执行任务 | `run --goal <task>` | `run --goal <task>` |
+| 交互会话 | `chat [project]` | `chat` |
+| daemon 管理 | `core start / status / stop` | `core start / status / stop` |
+| 事件 trace | `trace [run_id] [--raw] [-f]` | `trace [run_id] [--layer] [--direction] [--raw] [-f]` |
+| 版本 | `--version` | `--version` |
+| 终端 UI | 无（桌面工作台替代） | `python -m sztu_code.tui`（Textual） |
 
 更完整的安装说明见[安装与启动](docs/getting-started/installation.md)。
 
 ## 桌面工作台
 
-`desktop/` 是基于 Tauri 2、Vue 3 和 TypeScript 的图形客户端，提供项目与会话管理、执行时间线、权限审批、文件浏览、代码预览和 Git 变更审阅。
+`desktop/` 是基于 Tauri 2、Vue 3 和 TypeScript 的图形客户端（仅连接 TypeScript daemon），提供项目与会话管理、执行时间线、权限审批、文件浏览、代码预览和 Git 变更审阅。
 
 ```bash
 # 终端 1：仓库根目录
@@ -196,15 +277,22 @@ cargo check
 
 ```text
 SztuCode/
-├─ packages/
-│  ├─ protocol/      # TypeScript JSON-RPC、事件和工作流契约
-│  ├─ runtime-ts/    # daemon、Agent Loop、工具、权限与扩展系统
-│  ├─ cli/           # Node 命令行客户端
-│  └─ evaluation/    # TypeScript 评测 runner 与报告
-├─ desktop/          # Tauri 2 + Vue 3 桌面工作台
-├─ scripts/          # 协议生成等工程脚本
-├─ tmp/              # 本地评测产物（不提交）
-└─ docs/             # 使用、开发、架构、运维、评测和历史文档
+├─ packages/                 # TypeScript 链（npm workspaces）
+│  ├─ protocol/              #   JSON-RPC、事件和工作流契约（类型包）
+│  ├─ runtime-ts/            #   daemon、Agent Loop、工具、权限与扩展系统
+│  ├─ cli/                   #   Node 命令行客户端
+│  └─ evaluation/            #   评测 runner 与报告
+├─ desktop/                  # Tauri 2 + Vue 3 桌面工作台（连 TS daemon）
+├─ src/sztu_code/            # Python 链
+│  ├─ core/                  #   Python daemon（Agent Loop、bus、权限、workflow、skills 等）
+│  ├─ cli/                   #   sztu-py 命令行客户端
+│  ├─ tui/                   #   Textual TUI（sztu-tui）
+│  └─ evaluation/            #   Python 评测 harness 与报告
+├─ tests/                    # Python 测试（pytest）
+├─ scripts/                  # 协议生成、链接检查等工程脚本（.ts 与 .py 成对）
+├─ tmp/                      # 本地评测产物（不提交）
+├─ data/                     # 评测数据集（如 SWE-bench Lite parquet）
+└─ docs/                     # 使用、开发、架构、运维、评测和历史文档
 ```
 
 完整模块边界和运行链路见[架构说明](docs/reference/architecture.md)。
@@ -220,16 +308,25 @@ npm run build
 npm run build --prefix desktop
 ```
 
-共享协议修改位于 `packages/protocol`。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
+Python 链检查：
 
-离线运行 10 个内部 TypeScript Coding Agent 基准并生成 JSON/Markdown 报告：
+```bash
+uv run ruff check src tests
+uv run mypy src
+uv run pytest
+```
+
+共享协议修改位于 `packages/protocol`（TS）与 `src/sztu_code/core/bus`（Python）。测试范围、桌面验证和模块修改清单见[测试指南](docs/development/testing.md)与[开发环境](docs/development/development.md)。
+
+## Agent 评测
+
+TypeScript 评测——离线运行 10 个内部 Coding Agent 基准并生成 JSON/Markdown 报告：
 
 ```bash
 npm run eval -- run --manifest packages/evaluation/tasks/internal-v1.json --repeat 3 --output-dir tmp/eval
 ```
 
-任务格式、真实 daemon runner、指标定义和 SWE-bench Lite 小样本流程见
-[评测指南](docs/guides/evaluation.md)。
+Python 评测入口位于 `src/sztu_code/evaluation`（harness / models / reporting / runners）。两版任务格式、真实 daemon runner、指标定义和 SWE-bench Lite 小样本流程见[评测指南](docs/guides/evaluation.md)。
 
 ## 路线图
 

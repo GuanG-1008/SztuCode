@@ -39,9 +39,9 @@ export class WorkspaceManager {
   async tree(id: string, relative = "", maxDepth = 2, maxEntries = 300): Promise<Array<{ path: string; name: string; kind: "directory" | "file"; children?: unknown[] }>> {
     const record = await this.get(id); const workspace = new Workspace(record.path); const root = workspace.resolve(relative || "."); let count = 0;
     const walk = async (directory: string, depth: number): Promise<Array<{ path: string; name: string; kind: "directory" | "file"; children?: unknown[] }>> => {
-      if (depth > maxDepth || count >= maxEntries) return [];
+      if (count >= maxEntries) return [];
       const { readdir } = await import("node:fs/promises"); const entries = (await readdir(directory, { withFileTypes: true })).filter((entry) => !entry.name.startsWith(".") && entry.name !== "node_modules").sort((a, b) => Number(a.isFile()) - Number(b.isFile()) || a.name.localeCompare(b.name)); const nodes = [] as Array<{ path: string; name: string; kind: "directory" | "file"; children?: unknown[] }>;
-      for (const entry of entries) { if (count >= maxEntries) break; count += 1; const entryPath = path.relative(record.path, path.join(directory, entry.name)).split(path.sep).join("/"); nodes.push(entry.isDirectory() ? { path: entryPath, name: entry.name, kind: "directory", children: await walk(path.join(directory, entry.name), depth + 1) } : { path: entryPath, name: entry.name, kind: "file" }); }
+      for (const entry of entries) { if (count >= maxEntries) break; count += 1; const entryPath = path.relative(record.path, path.join(directory, entry.name)).split(path.sep).join("/"); nodes.push(entry.isDirectory() ? { path: entryPath, name: entry.name, kind: "directory", children: depth + 1 <= maxDepth ? await walk(path.join(directory, entry.name), depth + 1) : undefined } : { path: entryPath, name: entry.name, kind: "file" }); }
       return nodes;
     };
     return walk(root, 1);

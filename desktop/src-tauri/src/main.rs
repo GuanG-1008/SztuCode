@@ -471,6 +471,28 @@ fn daemon_candidates(app: &tauri::AppHandle) -> Vec<(PathBuf, Vec<String>, Optio
     if let Ok(executable) = std::env::var("SZTU_DAEMON_EXECUTABLE") {
         candidates.push((PathBuf::from(executable), Vec::new(), None));
     }
+    if let Ok(runtime) = app.path().resolve("resources/runtime/main.js", BaseDirectory::Resource) {
+        if runtime.exists() {
+            let runtime = child_path(&runtime);
+            let bundled_node = runtime
+                .parent()
+                .map(|directory| directory.join(if cfg!(windows) { "node.exe" } else { "node" }));
+            if let Some(node) = bundled_node.filter(|path| path.exists()) {
+                candidates.push((
+                    node,
+                    vec![runtime.to_string_lossy().into_owned()],
+                    runtime.parent().map(PathBuf::from),
+                ));
+            }
+            candidates.push((
+                PathBuf::from("node"),
+                vec![runtime.to_string_lossy().into_owned()],
+                runtime.parent().map(PathBuf::from),
+            ));
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
     let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|desktop| desktop.parent())
@@ -489,16 +511,35 @@ fn daemon_candidates(app: &tauri::AppHandle) -> Vec<(PathBuf, Vec<String>, Optio
             ));
         }
     }
-    if let Ok(runtime) = app.path().resolve("resources/runtime/main.js", BaseDirectory::Resource) {
-        if runtime.exists() {
-            candidates.push((
-                PathBuf::from("node"),
-                vec![runtime.to_string_lossy().into_owned()],
-                runtime.parent().map(PathBuf::from),
-            ));
-        }
     }
     candidates
+}
+
+fn daemon_log_path() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join(".sztu").join("logs").join("desktop-daemon.log"))
+}
+
+fn child_path(path: &PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{unc}"));
+        }
+        if let Some(local) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(local);
+        }
+    }
+    path.clone()
+}
+
+fn daemon_log_tail(path: &PathBuf) -> String {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|text| text.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | "))
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -527,17 +568,42 @@ async fn daemon_start(app: tauri::AppHandle, state: State<'_, DaemonProcess>) ->
     }
 
     let mut errors = Vec::new();
+    let log_path = daemon_log_path();
+    if let Some(path) = log_path.as_ref() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, "");
+    }
     for (executable, args, current_dir) in daemon_candidates(&app) {
         if executable.is_absolute() && !executable.exists() {
             continue;
         }
         let mut command = Command::new(&executable);
         command
-            .args(args)
+            .args(&args)
             .env("SZTU_TS_PORT", "7438")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdin(Stdio::null());
+        if let Some(path) = log_path.as_ref() {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(mut log) => {
+                    let _ = writeln!(log, "starting {} {}", executable.display(), args.join(" "));
+                    match log.try_clone() {
+                        Ok(stdout) => {
+                            command.stdout(Stdio::from(stdout)).stderr(Stdio::from(log));
+                        }
+                        Err(_) => {
+                            command.stdout(Stdio::null()).stderr(Stdio::from(log));
+                        }
+                    }
+                }
+                Err(_) => {
+                    command.stdout(Stdio::null()).stderr(Stdio::null());
+                }
+            }
+        } else {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
         if let Some(directory) = current_dir {
             command.current_dir(directory);
         }
@@ -561,7 +627,8 @@ async fn daemon_start(app: tauri::AppHandle, state: State<'_, DaemonProcess>) ->
                             .is_some()
                     };
                     if exited {
-                        errors.push(format!("{} exited during startup", executable.display()));
+                        let tail = log_path.as_ref().map(daemon_log_tail).unwrap_or_default();
+                        errors.push(format!("{} exited during startup{}", executable.display(), if tail.is_empty() { String::new() } else { format!(": {tail}") }));
                         *state.child.lock().await = None;
                         break;
                     }

@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop capability set",
-  "webviews": ["main"],
+  "webviews": ["main", "splashscreen"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview",
@@ -13,6 +13,7 @@
     "core:webview:allow-webview-show",
     "core:webview:allow-webview-close",
     "core:window:allow-start-dragging",
+    "core:window:allow-show",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-set-size",

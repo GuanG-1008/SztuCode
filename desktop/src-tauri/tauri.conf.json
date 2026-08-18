@@ -1,47 +1,68 @@
 {
-    "$schema":  "https://schema.tauri.app/config/2",
-    "productName":  "SztuCode",
-    "version":  "0.1.0",
-    "identifier":  "dev.sztucode.desktop",
-    "build":  {
-                  "beforeDevCommand":  "npm run dev",
-                  "beforeBuildCommand":  "npm run build",
-                  "devUrl":  "http://localhost:5173",
-                  "frontendDist":  "../dist"
-              },
-    "app":  {
-                "windows":  [
-                                {
-                                    "title":  "SztuCode",
-                                    "width":  1440,
-                                    "height":  920,
-                                    "minWidth":  420,
-                                    "minHeight":  620,
-                                    "resizable":  true,
-                                    "decorations":  false,
-                                    "shadow":  true,
-                                    "transparent":  true
-                                }
-                            ],
-                "security":  {
-                                 "csp":  null
-                             }
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "SztuCode",
+    "version": "0.1.1",
+    "identifier": "dev.sztucode.desktop",
+    "build": {
+        "beforeDevCommand": "npm run dev",
+        "beforeBuildCommand": "npm run build",
+        "devUrl": "http://localhost:5173",
+        "frontendDist": "../dist"
+    },
+    "app": {
+        "windows": [
+            {
+                "title": "SztuCode",
+                "width": 1440,
+                "height": 920,
+                "minWidth": 420,
+                "minHeight": 620,
+                "resizable": true,
+                "decorations": false,
+                "shadow": true,
+                "transparent": true
             },
-    "bundle":  {
-                   "active":  true,
-                   "targets":  "all",
-                   "resources": ["resources/runtime/**/*"],
-                   "icon":  [
-                                "icons/32x32.png",
-                                "icons/128x128.png",
-                                "icons/128x128@2x.png",
-                                "icons/icon.icns",
-                                "icons/icon.ico"
-                            ],
-                   "windows":  {
-                                   "wix":  {
-                                               "language":  "zh-CN"
-                                           }
-                               }
-               }
+            {
+                "label": "splashscreen",
+                "visible": false,
+                "title": "SztuCode",
+                "width": 460,
+                "height": 300,
+                "resizable": false,
+                "maximizable": false,
+                "minimizable": false,
+                "decorations": false,
+                "backgroundColor": "#0d1117",
+                "alwaysOnTop": true,
+                "skipTaskbar": true,
+                "center": true,
+                "shadow": false
+            }
+        ],
+        "security": {
+            "csp": null
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": "all",
+        "resources": [
+            "resources/runtime/**/*"
+        ],
+        "icon": [
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.icns",
+            "icons/icon.ico"
+        ],
+        "windows": {
+            "wix": {
+                "language": "zh-CN"
+            },
+            "nsis": {
+                "installerIcon": "icons/icon.ico"
+            }
+        }
+    }
 }

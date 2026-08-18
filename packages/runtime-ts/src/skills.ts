@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PluginManager } from "./plugins.js";
@@ -34,6 +35,7 @@ function resolveBuiltinRoot(): string {
   const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
   // The package-owned assets are the product source of truth. The repository fallback
   // is retained only for old development layouts and must not be needed by releases.
-  const bundled = path.resolve(moduleDirectory, "../skills");
-  return bundled;
+  return existsSync(path.join(moduleDirectory, "skills"))
+    ? path.join(moduleDirectory, "skills")
+    : path.resolve(moduleDirectory, "../skills");
 }

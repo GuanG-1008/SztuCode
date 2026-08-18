@@ -30,7 +30,7 @@ import { deriveSessionStats } from "./utils/sessionStats";
 import { resolveComposerSubmitMode, type ComposerSubmitGesture, type QueueDockItem } from "./utils/composerSubmission";
 import { loadAppearanceSettings, type AppearanceSettings } from "./services/appearance";
 import {
-  cancelRun, connectRuntime, createSession, deleteWorkspace, getProviderStatus, getRuntimeSettings, listPendingUserQuestions, listSessions,
+  cancelRun, connectRuntime, createSession, deleteWorkspace, getProviderStatus, getRuntimeConnectionError, getRuntimeSettings, listPendingUserQuestions, listSessions,
   listWorkspaces, onRuntimeDisconnect, onRuntimeEvent, openWorkspace, readAttachments, respondPermission, respondUserQuestion,
   resumeWorkspace, sendPrompt, sessionHistory, setRuntimeSettings, steerPrompt, workspaceStatus,
   type Attachment, type ImageBlock, type PendingUserQuestion, type ProviderStatus, type RuntimeSettings, type Session, type UserQuestionAnswer, type Workspace,
@@ -72,6 +72,7 @@ let stopSidebarDragListeners: (() => void) | undefined;
 let sidebarAnimTimer: number | undefined;
 let windowResizeEndTimer: number | undefined;
 const connected = ref(false);
+const runtimeConnectionError = ref("");
 const loading = ref(true);
 const workspaces = ref<Workspace[]>([]);
 const workspace = ref<Workspace | null>(null);
@@ -1166,7 +1167,12 @@ async function loadSessionHistory(sessionId: string) {
 
 async function refreshIndex(loadHistory = false) {
   connected.value = await connectRuntime();
-  if (!connected.value) { loading.value = false; return; }
+  runtimeConnectionError.value = getRuntimeConnectionError();
+  if (!connected.value) { loading.value = false;
+    if ("__TAURI_INTERNALS__" in window) {
+      // splash 已改为轮询探测 daemon 就绪，不再依赖 app:ready 事件
+    }
+ return; }
   const questionVersion = questionEventVersion;
   const [nextWorkspaces, nextSessions, nextSettings, nextProvider, questionSnapshot] = await Promise.all([
     listWorkspaces(), listSessions(), getRuntimeSettings(), getProviderStatus(), listPendingUserQuestions(),
@@ -1200,6 +1206,10 @@ async function refreshIndex(loadHistory = false) {
   activeId.value ??= nextSessions.find((item) => !item.archived)?.session_id ?? null;
   if (loadHistory && activeId.value) await loadSessionHistory(activeId.value);
   loading.value = false;
+    if ("__TAURI_INTERNALS__" in window) {
+      // splash 已改为轮询探测 daemon 就绪，不再依赖 app:ready 事件
+    }
+
 }
 
 // 提交当前问题的完整回答批次；后端成功后 question.resolved 会释放 composer
@@ -2121,7 +2131,7 @@ watch(activeId, () => { streamScrolledUp.value = false; });
       </div>
 
       <footer class="sidebar-footer">
-        <div class="service-status"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : '未连接' }}</small></span></div>
+        <div class="service-status" :title="runtimeConnectionError"><i :class="{ online: connected }" /><span><b>本地服务</b><small>{{ connected ? '已连接' : runtimeConnectionError || '未连接' }}</small></span></div>
         <button ref="settingsButton" class="settings-link" title="设置" aria-label="设置" :aria-expanded="settingsOpen" @click="openSettings"><Settings :size="16" :stroke-width="1.8" /></button>
       </footer>
       </aside>
