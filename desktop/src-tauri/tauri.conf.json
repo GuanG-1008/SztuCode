@@ -59,6 +59,9 @@
         "windows": {
             "wix": {
                 "language": "zh-CN"
+            },
+            "nsis": {
+                "installerIcon": "icons/icon.ico"
             }
         }
     }
