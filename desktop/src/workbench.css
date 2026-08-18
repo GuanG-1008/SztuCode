@@ -972,7 +972,7 @@
 .service-status > i.online { background: #38a169; box-shadow: 0 0 0 3px #38a16917; }
 .service-status span { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 .service-status b { font-size: 11px; font-weight: 500; }
-.service-status small { color: #8b96a7; font-size: 10px; }
+.service-status small { max-width: 150px; overflow: hidden; color: #8b96a7; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-sidebar .settings-link { flex: 0 0 auto; }
 @media (max-width: 760px) {
   .agent-sidebar { padding-inline: 7px; }
