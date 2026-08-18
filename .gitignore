@@ -43,3 +43,7 @@ desktop/src-tauri/resources/runtime/
 
 # 本地诊断命令输出快照
 _*.txt
+
+# GitHub 单文件上限 100MB：超限的发布产物不纳入版本库（本地保留）
+release-artifacts/**/*.AppImage
+release-artifacts/v0.1.1/appimage-final.zip
