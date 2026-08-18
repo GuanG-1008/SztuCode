@@ -164,3 +164,34 @@ test("session lifecycle and model profiles preserve desktop invariants", async (
     await assert.rejects(() => rpc(socket, "provider.model_delete", { model_id: secondId }), /current model profile cannot be deleted/); const deleted = await rpc(socket, "provider.model_delete", { model_id: firstId }); assert.ok(!deleted.models.some((item: any) => item.id === firstId));
   } finally { socket.destroy(); await server.close(); restoreEnv("SZTU_DATA_DIR", previous); await rm(root, { recursive: true, force: true }); }
 });
+
+test("workspace.tree lists direct children for max_depth=0 and skips hidden dirs", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sztu-tree-test-"));
+  const data = path.join(root, "data");
+  const previous = process.env.SZTU_DATA_DIR; process.env.SZTU_DATA_DIR = data;
+  try {
+    const project = path.join(root, "project");
+    await mkdir(path.join(project, "src"), { recursive: true });
+    await mkdir(path.join(project, "node_modules", "pkg"), { recursive: true });
+    await writeFile(path.join(project, "a.txt"), "a");
+    await writeFile(path.join(project, ".hidden"), "h");
+    await writeFile(path.join(project, "src", "index.ts"), "export {};");
+
+    const server = new RuntimeServer("127.0.0.1", 0); const address = await server.listen(); const port = Number(address.split(":").at(-1));
+    const socket = net.createConnection({ host: "127.0.0.1", port }); await new Promise<void>((resolve, reject) => { socket.once("connect", () => resolve()); socket.once("error", reject); });
+    try {
+      const opened = await rpc(socket, "workspace.open", { path: project });
+      const workspaceId = opened.workspace.workspace_id;
+
+      // max_depth=0：只列直接子项，目录不预取 children（由前端懒加载）
+      const shallow = await rpc(socket, "workspace.tree", { workspace_id: workspaceId, path: "", max_depth: 0 });
+      assert.deepEqual(shallow.nodes.map((node: any) => [node.name, node.kind]), [["src", "directory"], ["a.txt", "file"]]);
+      assert.equal(shallow.nodes.find((node: any) => node.name === "src").children, undefined);
+
+      // max_depth=2：目录 children 递归展开
+      const deep = await rpc(socket, "workspace.tree", { workspace_id: workspaceId, path: "", max_depth: 2 });
+      const srcDeep = deep.nodes.find((node: any) => node.name === "src");
+      assert.deepEqual(srcDeep.children.map((node: any) => [node.name, node.kind]), [["index.ts", "file"]]);
+    } finally { socket.destroy(); await server.close(); }
+  } finally { restoreEnv("SZTU_DATA_DIR", previous); await rm(root, { recursive: true, force: true }); }
+});
