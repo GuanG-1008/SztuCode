@@ -6,7 +6,7 @@
 
 - Node.js 20+
 - Rust stable（`rustup`）
-- Node.js 20+ 用于运行随桌面应用打包的 TypeScript daemon resource
+- 构建机需要 Node.js 20+；发布安装包会将对应平台的 Node 运行时与 TypeScript daemon 一起打包
 - 按 [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) 安装平台依赖：
   - **macOS**：Xcode Command Line Tools（`xcode-select --install`）
   - **Windows**：WebView2、Visual Studio C++ 构建工具
@@ -72,7 +72,7 @@ cd desktop
 npm run tauri build
 ```
 
-构建脚本会把单文件 TypeScript daemon 以及内置 Skills、Prompts、Agent profiles 放入 Tauri resources。当前安装包不内置 Node 可执行文件，因此目标机器仍需安装 Node.js 20+。
+构建脚本会把单文件 TypeScript daemon、对应平台的 Node 可执行文件以及内置 Skills、Prompts、Agent profiles 放入 Tauri resources。安装后的目标机器不需要另行安装 Node.js。
 
 产物位置大致为：
 

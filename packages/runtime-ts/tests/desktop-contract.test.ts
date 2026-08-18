@@ -20,6 +20,6 @@ test("Tauri production bundles and starts the TypeScript runtime resource", asyn
   const rust = await readFile(path.join(repositoryRoot, "desktop/src-tauri/src/main.rs"), "utf8");
   const prepare = await readFile(path.join(repositoryRoot, "desktop/scripts/prepare-runtime.js"), "utf8");
   assert.ok(config.bundle?.resources?.some((resource) => resource.startsWith("resources/runtime/")));
-  assert.match(rust, /BaseDirectory::Resource/); assert.match(rust, /resources\/runtime\/main\.js/);
-  assert.match(prepare, /runtime-ts/); assert.match(prepare, /resources["']?,\s*["']runtime/); assert.match(prepare, /prepareSkillAssets/); assert.match(prepare, /\["prompts",\s*"agents"\]/);
+  assert.match(rust, /BaseDirectory::Resource/); assert.match(rust, /resources\/runtime\/main\.js/); assert.match(rust, /node\.exe/);
+  assert.match(prepare, /runtime-ts/); assert.match(prepare, /process\.execPath/); assert.match(prepare, /resources["']?,\s*["']runtime/); assert.match(prepare, /prepareSkillAssets/); assert.match(prepare, /\["prompts",\s*"agents"\]/);
 });

@@ -491,6 +491,16 @@ fn daemon_candidates(app: &tauri::AppHandle) -> Vec<(PathBuf, Vec<String>, Optio
     }
     if let Ok(runtime) = app.path().resolve("resources/runtime/main.js", BaseDirectory::Resource) {
         if runtime.exists() {
+            let bundled_node = runtime
+                .parent()
+                .map(|directory| directory.join(if cfg!(windows) { "node.exe" } else { "node" }));
+            if let Some(node) = bundled_node.filter(|path| path.exists()) {
+                candidates.push((
+                    node,
+                    vec![runtime.to_string_lossy().into_owned()],
+                    runtime.parent().map(PathBuf::from),
+                ));
+            }
             candidates.push((
                 PathBuf::from("node"),
                 vec![runtime.to_string_lossy().into_owned()],
