@@ -1166,7 +1166,11 @@ async function loadSessionHistory(sessionId: string) {
 
 async function refreshIndex(loadHistory = false) {
   connected.value = await connectRuntime();
-  if (!connected.value) { loading.value = false; return; }
+  if (!connected.value) { loading.value = false;
+    if ("__TAURI_INTERNALS__" in window) {
+      // splash 已改为轮询探测 daemon 就绪，不再依赖 app:ready 事件
+    }
+ return; }
   const questionVersion = questionEventVersion;
   const [nextWorkspaces, nextSessions, nextSettings, nextProvider, questionSnapshot] = await Promise.all([
     listWorkspaces(), listSessions(), getRuntimeSettings(), getProviderStatus(), listPendingUserQuestions(),
@@ -1200,6 +1204,10 @@ async function refreshIndex(loadHistory = false) {
   activeId.value ??= nextSessions.find((item) => !item.archived)?.session_id ?? null;
   if (loadHistory && activeId.value) await loadSessionHistory(activeId.value);
   loading.value = false;
+    if ("__TAURI_INTERNALS__" in window) {
+      // splash 已改为轮询探测 daemon 就绪，不再依赖 app:ready 事件
+    }
+
 }
 
 // 提交当前问题的完整回答批次；后端成功后 question.resolved 会释放 composer
