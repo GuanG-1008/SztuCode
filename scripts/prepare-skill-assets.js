@@ -23,11 +23,15 @@ export async function prepareSkillAssets(source, target, repositoryRoot) {
   const files = await walk(target);
   const scripts = files.filter((file) => file.endsWith(".ts") && path.basename(path.dirname(file)) === "scripts");
   const esbuild = path.join(repositoryRoot, "node_modules", "esbuild", "bin", "esbuild");
-  const esbuildIsScript = readFileSync(esbuild).subarray(0, 2).toString() === "#!/";
+  const nativeEsbuild = process.platform === "win32"
+    ? path.join(repositoryRoot, "node_modules", "@esbuild", `win32-${process.arch === "ia32" ? "ia32" : process.arch === "arm64" ? "arm64" : "x64"}`, "esbuild.exe")
+    : esbuild;
+  const esbuildCommand = (await import("node:fs")).existsSync(nativeEsbuild) ? nativeEsbuild : esbuild;
+  const esbuildIsScript = esbuildCommand === esbuild && readFileSync(esbuild).subarray(0, 2).toString() === "#!/";
   for (const script of scripts) {
     const output = script.slice(0, -3) + ".mjs";
     const args = [script, "--bundle", "--platform=node", "--format=esm", `--outfile=${output}`];
-    const result = spawnSync(esbuildIsScript ? process.execPath : esbuild, esbuildIsScript ? [esbuild, ...args] : args, {
+    const result = spawnSync(esbuildIsScript ? process.execPath : esbuildCommand, esbuildIsScript ? [esbuildCommand, ...args] : args, {
       cwd: repositoryRoot,
       stdio: "inherit",
       windowsHide: true,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,7 +6,11 @@ import type { PermissionMode } from "@sztucode/protocol";
 
 export type PromptRuntimeContext = { permissionMode?: PermissionMode; memoryEnabled?: boolean; toolNames?: Iterable<string>; taskText?: string };
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../prompts/content");
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+// Bundled desktop assets live beside the generated main.js; source builds use
+// the package directory above dist/.
+const runtimeRoot = existsSync(path.join(moduleDirectory, "prompts")) ? moduleDirectory : path.resolve(moduleDirectory, "..");
+const root = path.join(runtimeRoot, "prompts", "content");
 const toolRules: Array<[string[], string[]]> = [
   [["read_file"], ["read-files"]], [["edit_file"], ["edit-files"]], [["write_file"], ["create-files"]],
   [["glob_search", "list_dir"], ["search-files"]], [["grep_search"], ["search-content"]],

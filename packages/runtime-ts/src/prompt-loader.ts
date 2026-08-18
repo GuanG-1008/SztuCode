@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,8 +9,9 @@ import { composeRuntimePrompt, type PromptRuntimeContext } from "./prompt-harnes
 
 const execFileAsync = promisify(execFile);
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
-const promptRoot = path.resolve(moduleDirectory, "../prompts/content");
-const agentRoot = path.resolve(moduleDirectory, "../agents/builtin");
+const runtimeRoot = existsSync(path.join(moduleDirectory, "prompts")) ? moduleDirectory : path.resolve(moduleDirectory, "..");
+const promptRoot = path.join(runtimeRoot, "prompts", "content");
+const agentRoot = path.join(runtimeRoot, "agents", "builtin");
 const instructionNames = ["AGENT.md", "AGENTS.md", "CLAUDE.md", "SZTUCODE.md", "CLAW.md"];
 
 export type AgentProfile = { name: string; description: string; systemPrompt: string; allowedTools: string[] | null; permissionMode: PermissionMode | null; maxSteps: number };
