@@ -180,6 +180,8 @@ class AgentLoop:
         wrap_up_on_max_steps: bool = True,
         grace_step_on_max_steps: bool = True,
         stuck_tracker: StuckLoopTracker | None = None,
+        # steer 消息队列：运行期间允许外部注入跟进消息；None 表示不启用
+        steering_queue: asyncio.Queue[dict[str, object]] | None = None,
         # 滑动窗口压缩参数
         sliding_window_size: int = 5,
         compact_cooldown_steps: int = 3,
@@ -218,6 +220,7 @@ class AgentLoop:
         self._pricing_model = pricing_model or _infer_pricing_model(provider)
         self._pricing_catalog = pricing_catalog
         self._unknown_pricing_policy = unknown_pricing_policy
+        self._steering_queue = steering_queue
         # 压缩冷却期：两次压缩之间至少间隔 N 步；冷启动即可触发
         self._last_compact_step: int = -15
         # 熔断器日志去重：避免每步都刷屏
